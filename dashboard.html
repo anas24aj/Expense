@@ -222,6 +222,7 @@
   @keyframes march { to { background-position: 8.49px 0; } }
   @keyframes glow { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
   @keyframes sweep { 0%, 60% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
   @keyframes ring { 0% { box-shadow: 0 0 0 0 var(--accent); } 100% { box-shadow: 0 0 0 7px transparent; } }
   @keyframes blink { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
@@ -234,7 +235,8 @@
   html.motion .view.anim > :nth-child(n+6) { animation-delay: .25s; }
   html.motion .view.anim .bars .col { transform-origin: bottom; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.15s + var(--k, 0) * 15ms); }
   html.motion .view.anim .rk .tr i { transform-origin: left; animation: fill .8s .2s cubic-bezier(.2, .8, .2, 1) both; }
-  html.motion .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both; }
+  html.motion .donut svg { animation: spin 24s linear infinite; }  /* the ring turns; the total in the middle stays upright */
+  html.motion .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both, spin 24s 1s linear infinite; }
   html.motion .view.anim .donut li { animation: rise .4s both; animation-delay: .35s; }
   html.motion .view.anim .cal a { animation: pop .4s both; animation-delay: calc(.1s + var(--k, 0) * 12ms); }
   html.motion .toast:not([hidden]) { animation: toast-in .3s cubic-bezier(.2, .8, .2, 1); }
