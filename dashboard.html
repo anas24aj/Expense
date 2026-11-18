@@ -17,6 +17,7 @@
     --accent: #2a78d6; --accent-soft: #dbe8f8; --bar: #2a78d6; --bar-dim: #b7d3f6; --bar-2: #12a37a;
     --good: #0f7b3e; --bad: #b42318; --warn: #a15c00; --warn-soft: #fdf1dc;
     --hero-from: #1c5cab; --hero-to: #2a78d6; --hero-text: #ffffff; --hero-muted: #cde2fb;
+    --clock: 0s; --sheen: rgb(255 255 255 / .25);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -26,6 +27,7 @@
       --accent: #5598e7; --accent-soft: #1d3150; --bar: #3987e5; --bar-dim: #24456f; --bar-2: #34c392;
       --good: #4ade80; --bad: #f87171; --warn: #f5b84a; --warn-soft: #3a2a0c;
       --hero-from: #104281; --hero-to: #1c5cab; --hero-text: #ffffff; --hero-muted: #b7d3f6;
+      --sheen: rgb(255 255 255 / .12); --card-line: color-mix(in srgb, var(--accent) 25%, var(--line));
     }
   }
   * { box-sizing: border-box; }
@@ -212,7 +214,7 @@
   @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
   @keyframes grow { from { transform: scaleY(0); } }
   @keyframes fill { from { transform: scaleX(0); } }
-  @keyframes spin-in { from { opacity: 0; transform: rotate(-120deg) scale(.8); } }
+  @keyframes spin-in { from { opacity: 0; rotate: -120deg; scale: .8; } }  /* not transform: the endless spin owns that */
   @keyframes pop { from { opacity: 0; transform: scale(.85); } }
   @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px); } }
   /* Always-on (ambient) motion */
@@ -226,17 +228,24 @@
   @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
   @keyframes ring { 0% { box-shadow: 0 0 0 0 var(--accent); } 100% { box-shadow: 0 0 0 7px transparent; } }
   @keyframes blink { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  /* Pulse HUD */
+  @property --a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+  @keyframes orbit { to { --a: 360deg; } }
+  @keyframes materialize { from { opacity: 0; transform: translateY(14px); filter: blur(6px) brightness(1.4); } to { opacity: 1; transform: none; filter: none; } }
+  @keyframes scan { 0%, 30% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
+  @keyframes ignite { from { box-shadow: 0 0 0 0 var(--bar-2); } to { box-shadow: 0 0 0 6px transparent; } }
+  @keyframes sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
   html.still .view.anim > * { animation: fade .35s ease-out both; }
   html.still .view.anim > :nth-child(2) { animation-delay: .05s; } html.still .view.anim > :nth-child(n+3) { animation-delay: .1s; }
   html.motion .txn.leaving { transition: opacity .25s; }
-  html.motion .view.anim > * { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both; }
+  html.motion .view.anim > * { animation: materialize .5s cubic-bezier(.2, .8, .2, 1) both; }
   html.motion .view.anim > :nth-child(2) { animation-delay: .05s; } html.motion .view.anim > :nth-child(3) { animation-delay: .1s; }
   html.motion .view.anim > :nth-child(4) { animation-delay: .15s; } html.motion .view.anim > :nth-child(5) { animation-delay: .2s; }
   html.motion .view.anim > :nth-child(n+6) { animation-delay: .25s; }
   html.motion .view.anim .bars .col { transform-origin: bottom; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.15s + var(--k, 0) * 15ms); }
   html.motion .view.anim .rk .tr i { transform-origin: left; animation: fill .8s .2s cubic-bezier(.2, .8, .2, 1) both; }
-  html.motion .donut svg { animation: spin 24s linear infinite; }  /* the ring turns; the total in the middle stays upright */
-  html.motion .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both, spin 24s 1s linear infinite; }
+  html.motion .donut svg { animation: spin 24s var(--clock) linear infinite; }  /* the ring turns; the total in the middle stays upright */
+  html.motion .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both, spin 24s var(--clock) linear infinite; }
   html.motion .view.anim .donut li { animation: rise .4s both; animation-delay: .35s; }
   html.motion .view.anim .cal a { animation: pop .4s both; animation-delay: calc(.1s + var(--k, 0) * 12ms); }
   html.motion .toast:not([hidden]) { animation: toast-in .3s cubic-bezier(.2, .8, .2, 1); }
@@ -245,20 +254,48 @@
   html.motion :is(.rk, .ln, .banner, .btn, .chips a, .cal a, .fix button):active { transform: scale(.97); }
   /* Ambient, running all the time: the summary box's colors flow and its light spots drift; expected bars' stripes
      march (it's a prediction); regular payments glow; a light sweeps along the bars; the donut breathes; today pulses. */
-  html.motion .hero { background-size: 220% 220%; background-image: linear-gradient(135deg, var(--hero-from), var(--hero-to), #5b4fd6, var(--hero-from)); animation: flow 14s ease-in-out infinite; }
-  html.motion .view.anim > .hero { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both, flow 14s ease-in-out infinite; }
-  html.motion .hero::before { animation: drift 9s ease-in-out infinite alternate; }
-  html.motion .hero::after { animation: drift2 11s ease-in-out infinite alternate; }
-  html.motion .bars .col.f { background-size: 8.49px 8.49px; animation: march 1.4s linear infinite; }
-  html.motion .view.anim .bars .col.f { animation: grow .7s cubic-bezier(.2, .8, .2, 1) both, march 1.4s linear infinite; animation-delay: calc(.15s + var(--k, 0) * 15ms), 0s; }
-  html.motion .bars .col.f i { animation: glow 2.2s ease-in-out infinite; }
+  /* Delays come from --clock (set on every render) so a 30-second refresh redraw continues the loops in phase. */
+  html.motion .hero { border: 1.5px solid transparent; transition: rotate .3s ease-out;  /* + a neon light orbiting the edge */
+    background: linear-gradient(135deg, var(--hero-from), var(--hero-to), #5b4fd6, var(--hero-from)) padding-box,
+      conic-gradient(from var(--a), transparent 0 70%, var(--bar-2), #fff, var(--accent), transparent) border-box;
+    background-size: 220% 220%, 100% 100%; animation: flow 14s ease-in-out infinite, orbit 6s linear infinite; animation-delay: var(--clock), var(--clock); }
+  html.motion .view.anim > .hero { animation: materialize .5s cubic-bezier(.2, .8, .2, 1) both, flow 14s ease-in-out infinite, orbit 6s linear infinite; animation-delay: 0s, var(--clock), var(--clock); }
+  html.motion .hero::before { animation: drift 9s var(--clock) ease-in-out infinite alternate; }
+  html.motion .hero::after { animation: drift2 11s var(--clock) ease-in-out infinite alternate; }
+  .hero > canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+  html.motion :is(.hero .total, .kpis b, .proj) { text-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+  html.motion .view { perspective: 1000px; }  /* for the summary box's tilt */
+  html.motion .bars .col.f { background-size: 8.49px 8.49px; animation: march 1.4s var(--clock) linear infinite; }
+  html.motion .view.anim .bars .col.f { animation: grow .7s cubic-bezier(.2, .8, .2, 1) both, march 1.4s linear infinite; animation-delay: calc(.15s + var(--k, 0) * 15ms), var(--clock); }
+  html.motion .bars .col.f i { animation: glow 2.2s var(--clock) ease-in-out infinite; }
+  /* Today's bar in the forecast is a beacon; a scan beam passes over the charts. */
+  html.motion .bars.forecast > a:has(+ .first) .col { box-shadow: 0 0 0 1px var(--accent), 0 0 12px var(--accent); animation: glow 2.4s var(--clock) ease-in-out infinite; }
+  html.motion .view.anim .bars.forecast > a:has(+ .first) .col { animation: grow .7s cubic-bezier(.2, .8, .2, 1) both, glow 2.4s ease-in-out infinite; animation-delay: calc(.15s + var(--k, 0) * 15ms), var(--clock); }
+  html.motion .bars.forecast .first { border-left-color: var(--accent); }
+  html.motion .bars:not(.mini) { position: relative; }  /* no overflow: hidden, the "Today" label sticks out */
+  html.motion .bars:not(.mini)::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, transparent 46%, color-mix(in srgb, var(--accent) 35%, transparent) 50%, transparent 54%) no-repeat;
+    background-size: 200% 100%; animation: scan 5s var(--clock) linear infinite; }
   html.motion .rk .tr i { position: relative; overflow: hidden; }
-  html.motion .rk .tr i::after { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(255 255 255 / .65), transparent); animation: sweep 3.2s ease-in-out infinite; }
-  html.motion .rk:nth-of-type(2n) .tr i::after { animation-delay: .8s; }
-  html.motion .donut .ring { animation: breathe 4s ease-in-out infinite; }
-  html.motion .cal a.today { animation: ring 1.6s ease-out infinite; }
-  html.motion .view.anim .cal a.today { animation: pop .4s both, ring 1.6s ease-out infinite; animation-delay: calc(.1s + var(--k, 0) * 12ms), 1s; }
-  html.motion .live { animation: blink 2s ease-in-out infinite; }
+  html.motion .rk .tr i::after { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(255 255 255 / .65), transparent); animation: sweep 3.2s var(--clock) ease-in-out infinite; }
+  html.motion .rk:nth-of-type(2n) .tr i::after { animation-delay: calc(var(--clock) + .8s); }
+  html.motion .donut .ring { animation: breathe 4s var(--clock) ease-in-out infinite; }
+  html.motion .donut .mid { z-index: 1; }
+  /* A radar sweep around the donut's ring band only (the mask's band matches the stroke: r 15.9 ± 2.2 of 18). */
+  html.motion .donut .ring::after { content: ''; position: absolute; inset: 0; border-radius: 50%; pointer-events: none; animation: spin 3.5s var(--clock) linear infinite;
+    background: conic-gradient(color-mix(in srgb, var(--accent) 55%, transparent), transparent 25%);
+    -webkit-mask: radial-gradient(closest-side, transparent 75.5%, #000 76.5% 100%, transparent 101%); mask: radial-gradient(closest-side, transparent 75.5%, #000 76.5% 100%, transparent 101%); }
+  html.motion .cal a.today { animation: ring 1.6s var(--clock) ease-out infinite; }
+  html.motion .view.anim .cal a.today { animation: pop .4s both, ring 1.6s ease-out infinite; animation-delay: calc(.1s + var(--k, 0) * 12ms), var(--clock); }
+  html.motion .live { animation: blink 2s ease-in-out infinite, ignite 2s ease-out infinite; animation-delay: var(--clock), var(--clock); }
+  /* Cards: a holo sheen passes once as a page opens. Moving the background, not the layer, so no overflow: hidden is needed. */
+  html.motion .card { position: relative; border-color: var(--card-line, var(--line)); }
+  html.motion .view.anim .card::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(105deg, transparent 40%, var(--sheen) 50%, transparent 60%) no-repeat; background-size: 250% 100%; animation: sheen .9s .6s ease-in-out both; }
+  /* Tab bar: a light glides to the open tab (it jumps with reduce motion) */
+  html:is(.motion, .still) #tabs::before { content: ''; position: absolute; top: -1px; left: 0; width: 20%; height: 3px; border-radius: 0 0 3px 3px;
+    background: var(--accent); box-shadow: 0 0 8px var(--accent); translate: calc(var(--t, 0) * 100%) 0; }
+  html.motion #tabs::before { transition: translate .45s cubic-bezier(.3, 1.4, .4, 1); }
+  #tabs.notab::before { opacity: 0; }
   .live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bar-2); margin-left: 8px; vertical-align: middle; }
   .fix button, .btn { font-weight: 600; border: 0; border-radius: 10px; min-height: 44px; padding: 8px 16px; background: var(--accent); color: #fff; cursor: pointer; }
   a.btn { display: inline-flex; align-items: center; text-decoration: none; }
@@ -355,13 +392,102 @@ const LARGE_MIN = { SAR: 200, INR: 5000 }, LARGE_SKIP = new Set(['Rent & EMI', '
 // Animations: 'on' (default), 'auto' (follow the phone's reduce-motion setting: a fade only when it's on) or 'off'.
 const motionMode = () => { try { return localStorage.getItem('motion') || 'on'; } catch { return 'on'; } };
 let smooth = 'auto';
+// Full motion only: a drifting data field (and the tilt's glare) drawn behind the summary box. One canvas, made once
+// and moved into each new box, so the 30-second refresh doesn't restart it.
+const hud = { cv: null, raf: 0, seen: false, w: 0, h: 0, dots: [], glare: { x: .5, y: .5, a: 0, to: 0 } };
+const tilt = { hero: null, r: null, x: 0, y: 0, raf: 0, touch: false, b0: null };
 function applyMotion() {
   const m = motionMode(), on = m === 'on' || (m === 'auto' && matchMedia('(prefers-reduced-motion: no-preference)').matches);
   document.documentElement.classList.toggle('motion', on);
   document.documentElement.classList.toggle('still', !on && m === 'auto');
   smooth = on ? 'smooth' : 'auto';
+  hudStop(); hud.cv?.remove(); document.querySelector('.hero')?.style.removeProperty('rotate');
 }
 applyMotion();
+function hudAttach() {
+  const hero = $('view').querySelector('.hero');
+  if (!hero || smooth !== 'smooth') { hudStop(); hud.cv?.remove(); return; }
+  if (!hud.cv) {
+    hud.cv = document.createElement('canvas'); hud.cv.setAttribute('aria-hidden', 'true');
+    hud.ctx = hud.cv.getContext('2d');
+    new ResizeObserver(([e]) => {  // size here, never in the loop
+      const dpr = Math.min(2, devicePixelRatio || 1), w = hud.w = e.contentRect.width, h = hud.h = e.contentRect.height;
+      hud.cv.width = Math.round(w * dpr); hud.cv.height = Math.round(h * dpr); hud.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const n = Math.min(60, Math.round(w * h / 3000));
+      hud.dots = hud.dots.slice(0, n);
+      while (hud.dots.length < n) hud.dots.push({ x: Math.random() * w, y: Math.random() * h, r: 1 + Math.random(), a: .15 + Math.random() * .2, v: 6 + Math.random() * 8 });
+    }).observe(hud.cv);
+    new IntersectionObserver(([e]) => { hud.seen = e.isIntersecting; hudRun(); }).observe(hud.cv);
+  }
+  hero.prepend(hud.cv); hudRun();
+}
+function hudRun() {
+  if (hud.cv?.isConnected && hud.seen && !document.hidden && smooth === 'smooth') { if (!hud.raf) { hud.t = 0; hud.raf = requestAnimationFrame(hudFrame); } }
+  else hudStop();
+}
+function hudStop() { cancelAnimationFrame(hud.raf); hud.raf = 0; }
+document.addEventListener('visibilitychange', hudRun);
+function hudFrame(now) {
+  hud.raf = requestAnimationFrame(hudFrame);
+  const c = hud.ctx, { w, h, dots, glare: g } = hud, dt = Math.min(.05, (now - (hud.t || now)) / 1000);
+  hud.t = now;
+  c.clearRect(0, 0, w, h);
+  g.a += (g.to - g.a) * .08;
+  if (g.a > .01) {
+    const x = g.x * w, y = g.y * h, grad = c.createRadialGradient(x, y, 0, x, y, Math.max(w, h) * .6);
+    grad.addColorStop(0, `rgb(255 255 255 / ${(.2 * g.a).toFixed(3)})`); grad.addColorStop(1, 'rgb(255 255 255 / 0)');
+    c.fillStyle = grad; c.fillRect(0, 0, w, h);
+  }
+  c.fillStyle = '#fff'; c.strokeStyle = 'rgb(255 255 255 / .08)'; c.beginPath();
+  for (let i = 0; i < dots.length; i++) {
+    const p = dots[i];
+    if ((p.y -= p.v * dt) < -2) { p.y = h + 2; p.x = Math.random() * w; }
+    for (let j = i + 1; j < dots.length; j++) {
+      const q = dots[j];
+      if ((p.x - q.x) ** 2 + (p.y - q.y) ** 2 < 3600) { c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); }
+    }
+  }
+  c.stroke();
+  for (const p of dots) { c.globalAlpha = p.a; c.fillRect(p.x - p.r / 2, p.y - p.r / 2, p.r, p.r); }
+  c.globalAlpha = 1;
+}
+// The summary box leans (up to 5°) toward a mouse, a finger, or the way the phone is tilted. Listeners sit on the
+// document, so the box redrawn every refresh needs no rebinding; its position is read once per new box or touch.
+function aim(hero) {
+  const r = hero.getBoundingClientRect(), v = $('view').getBoundingClientRect();
+  tilt.hero = hero; tilt.r = { left: r.left + scrollX, top: r.top + scrollY, width: r.width, height: r.height };  // page coordinates survive scrolling
+  $('view').style.perspectiveOrigin = `${r.left - v.left + r.width / 2}px ${r.top - v.top + r.height / 2}px`;
+}
+function lean(x, y, on) {  // x, y: -1…1 from the centre
+  tilt.x = x; tilt.y = y; Object.assign(hud.glare, { x: (x + 1) / 2, y: (y + 1) / 2, to: on ? 1 : 0 });
+  tilt.raf ||= requestAnimationFrame(() => {
+    tilt.raf = 0;
+    const ax = -tilt.y * 5, ay = tilt.x * 5, deg = Math.hypot(ax, ay);
+    if (tilt.hero?.isConnected && smooth === 'smooth') tilt.hero.style.rotate = deg < .05 ? '' : `${ax.toFixed(3)} ${ay.toFixed(3)} 0 ${Math.min(5, deg).toFixed(2)}deg`;
+  });
+}
+const toward = e => {  // the pointer's spot on the box, -1…1
+  const h = e.target.closest?.('.hero');
+  if (!h || smooth !== 'smooth') return null;
+  if (h !== tilt.hero || e.type === 'pointerdown') aim(h);
+  const r = tilt.r, k = v => Math.max(-1, Math.min(1, v));
+  return [k((e.pageX - r.left) / r.width * 2 - 1), k((e.pageY - r.top) / r.height * 2 - 1)];
+};
+document.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') { const p = toward(e); if (p) lean(...p, true); } }, { passive: true });
+document.addEventListener('pointerout', e => { if (e.pointerType === 'mouse' && tilt.hero && tilt.hero.contains(e.target) && !tilt.hero.contains(e.relatedTarget)) lean(0, 0, false); }, { passive: true });
+document.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') { const p = toward(e); if (p) { tilt.touch = true; lean(...p, true); } } }, { passive: true });
+const relax = e => { if (e.pointerType !== 'mouse' && tilt.touch) { tilt.touch = false; lean(0, 0, false); } };
+document.addEventListener('pointerup', relax, { passive: true });
+document.addEventListener('pointercancel', relax, { passive: true });  // a scroll took over: let go
+addEventListener('deviceorientation', e => {
+  if (smooth !== 'smooth' || e.gamma == null || tilt.touch) return;
+  const h = $('view').querySelector('.hero');
+  if (!h) return;
+  if (h !== tilt.hero) aim(h);
+  tilt.b0 = tilt.b0 == null ? e.beta : tilt.b0 + (e.beta - tilt.b0) * .01;  // "level" follows how the phone is held
+  const k = v => Math.max(-20, Math.min(20, v)) / 20;
+  lean(tilt.x + (k(e.gamma) - tilt.x) * .2, tilt.y + (k(e.beta - tilt.b0) - tilt.y) * .2, true);
+}, { passive: true });
 const state = { currency: cache.get('currency') || '', sum: null, all: [], showIgnored: false, merchSort: 'spent', search: '', results: null };
 // What a saved rule applies to, worked out the same way as the server: the merchant, or for a message
 // with no merchant, its wording without numbers. Used to clear matching rows from the screen at once.
@@ -1161,6 +1287,10 @@ function render() {
   $('sub').hidden = !page.sub; $('sub').textContent = page.sub || '';
   document.title = `${$('title').textContent} · Expenses`;
   $('view').innerHTML = page.html;
+  document.documentElement.style.setProperty('--clock', (-(performance.now() / 1000)).toFixed(2) + 's');
+  const ti = TABS.findIndex(([k]) => k === parent);
+  $('tabs').style.setProperty('--t', ti); $('tabs').classList.toggle('notab', ti < 0);
+  hudAttach();
   const animate = (changed || !render.hadData) && !!state.sum;  // with reduce motion on, CSS keeps it to a fade
   render.hadData = !!state.sum;
   $('view').classList.remove('anim');
@@ -1182,14 +1312,24 @@ function render() {
   render.done = true;
 }
 
-// Totals count up from zero when a page opens.
+// Totals count up from zero when a page opens; the summary box's total decodes instead, digits locking in left to right.
 function countUp() {
-  const els = [...$('view').querySelectorAll('[data-count]')], t0 = performance.now();
+  const els = [...$('view').querySelectorAll('[data-count]')], t0 = performance.now(), hero = $('view').querySelector('.hero');
   if (!els.length) return;
+  const dec = els.filter(el => el.matches('.hero .total [data-count]'));
+  if (dec.length) hero.setAttribute('aria-busy', 'true');  // don't read out the scrambled digits
+  let rolled = -1;
   const step = now => {
-    const k = Math.min(1, (now - t0) / 700), e = 1 - (1 - k) ** 3;
-    for (const el of els) el.textContent = fmt(Math.round(+el.dataset.count * e));
-    if (k < 1) requestAnimationFrame(step);
+    const k = Math.min(1, (now - t0) / 700), e = 1 - (1 - k) ** 3, d = Math.min(1, (now - t0) / 900), roll = Math.floor((now - t0) / 60);
+    for (const el of els) {
+      if (!dec.includes(el)) { el.textContent = fmt(Math.round(+el.dataset.count * e)); continue; }
+      if (roll === rolled && d < 1) continue;  // new random digits every 60 ms
+      const s = fmt(+el.dataset.count), done = Math.floor(d * s.replace(/\D/g, '').length);
+      let i = 0;
+      el.textContent = s.replace(/\d/g, c => i++ < done ? c : Math.floor(Math.random() * 10));
+    }
+    rolled = roll;
+    if (k < 1 || (dec.length && d < 1)) requestAnimationFrame(step); else hero?.removeAttribute('aria-busy');
   };
   requestAnimationFrame(step);
 }
