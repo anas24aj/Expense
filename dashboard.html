@@ -67,7 +67,12 @@
   .chips a[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* Hero */
-  .hero { background: linear-gradient(135deg, var(--hero-from), var(--hero-to)); color: var(--hero-text); border-radius: 16px; padding: 12px 16px 16px; }
+  .hero { position: relative; overflow: hidden; background: linear-gradient(135deg, var(--hero-from), var(--hero-to)); color: var(--hero-text); border-radius: 16px; padding: 12px 16px 16px;
+    box-shadow: 0 10px 28px -14px var(--hero-from); }
+  .hero::before, .hero::after { content: ''; position: absolute; border-radius: 50%; pointer-events: none; background: radial-gradient(rgb(255 255 255 / .16), transparent 70%); }
+  .hero::before { width: 260px; height: 260px; right: -90px; top: -110px; }
+  .hero::after { width: 180px; height: 180px; left: -70px; bottom: -100px; }
+  .hero > * { position: relative; }
   .month-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
   .month-nav button { flex: none; border: 0; background: rgb(255 255 255 / .16); color: inherit; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; font-size: 20px; line-height: 1; }
   .month-nav button:disabled { opacity: .35; cursor: default; }
@@ -86,7 +91,19 @@
   .proj b { font-variant-numeric: tabular-nums; }
 
   /* Cards */
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; min-width: 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px; min-width: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 4px 14px -8px rgb(0 0 0 / .08); }
+  .donut { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 16px; align-items: center; margin: 4px 0 12px; }
+  .donut .ring { position: relative; }
+  .donut svg { display: block; width: 100%; }
+  .donut circle { fill: none; stroke-width: 4.4; }
+  .donut .mid { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; line-height: 1.15; }
+  .donut .mid small { font-size: 11px; color: var(--muted); }
+  .donut .mid b { font-size: 18px; }
+  .donut ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; min-width: 0; }
+  .donut li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+  .donut li i { width: 10px; height: 10px; border-radius: 3px; }
+  .donut li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+  .donut li b { font-variant-numeric: tabular-nums; font-weight: 600; }
   .card h2 { font-size: 17px; margin: 0 0 8px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
   .card h2 > span { font-size: 13px; font-weight: 500; color: var(--muted); }
   .card h2 + .card-sub { margin: -4px 0 8px; font-size: 13px; color: var(--muted); }
@@ -189,7 +206,28 @@
   .todo p { font-size: 13px; color: var(--text-2); margin: 2px 0 4px; }
   .todo details.txn { border-color: rgb(0 0 0 / .08); }
   .txn.leaving { opacity: 0; }
-  @media (prefers-reduced-motion: no-preference) { .txn.leaving { transition: opacity .25s; } }
+  @media (prefers-reduced-motion: no-preference) {
+    .txn.leaving { transition: opacity .25s; }
+    @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    @keyframes grow { from { transform: scaleY(0); } }
+    @keyframes fill { from { transform: scaleX(0); } }
+    @keyframes spin-in { from { opacity: 0; transform: rotate(-120deg) scale(.8); } }
+    @keyframes pop { from { opacity: 0; transform: scale(.85); } }
+    @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px); } }
+    .view.anim > * { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both; }
+    .view.anim > :nth-child(2) { animation-delay: .05s; } .view.anim > :nth-child(3) { animation-delay: .1s; }
+    .view.anim > :nth-child(4) { animation-delay: .15s; } .view.anim > :nth-child(5) { animation-delay: .2s; }
+    .view.anim > :nth-child(n+6) { animation-delay: .25s; }
+    .view.anim .bars .col { transform-origin: bottom; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.15s + var(--k, 0) * 15ms); }
+    .view.anim .rk .tr i { transform-origin: left; animation: fill .8s .2s cubic-bezier(.2, .8, .2, 1) both; }
+    .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both; }
+    .view.anim .donut li { animation: rise .4s both; animation-delay: .35s; }
+    .view.anim .cal a { animation: pop .4s both; animation-delay: calc(.1s + var(--k, 0) * 12ms); }
+    .toast:not([hidden]) { animation: toast-in .3s cubic-bezier(.2, .8, .2, 1); }
+    .txn[open] > :not(summary) { animation: rise .3s both; }
+    .rk, .ln, .banner, .btn, .chips a, .cal a, .fix button { transition: transform .15s, background-color .2s; }
+    .rk:active, .ln:active, .banner:active, .btn:active, .chips a:active, .cal a:active, .fix button:active { transform: scale(.97); }
+  }
   .fix button, .btn { font-weight: 600; border: 0; border-radius: 10px; min-height: 44px; padding: 8px 16px; background: var(--accent); color: #fff; cursor: pointer; }
   a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   .fix { margin: 0 0 16px 50px; display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }  /* a one-word 40-letter merchant must wrap, not widen the page */
@@ -654,11 +692,31 @@ document.addEventListener('toggle', e => {
 const go1 = '<span class="go" aria-hidden="true">›</span>';
 const splitAcct = a => { const i = a.lastIndexOf('•'); return i > 0 ? `<b class="acct" title="${esc(a)}"><span>${esc(a.slice(0, i))}</span><span>${esc(a.slice(i))}</span></b>` : `<b title="${esc(a)}">${esc(a)}</b>`; };
 // Ranked bar row: icon | name + detail | amount (+ change) | share, with the share as a bar below.
-const rk = r => `<${r.href ? `a href="${r.href}"` : 'div'} class="rk"><span class="ic" aria-hidden="true">${r.icon}</span>` +
+const rk = r => `<${r.href ? `a href="${r.href}"` : 'div'} class="rk"><span class="ic" aria-hidden="true"${r.color ? ` style="background:color-mix(in srgb, ${r.color} 18%, var(--surface-2))"` : ''}>${r.icon}</span>` +
   `<span class="nm">${r.nameHtml || `<b title="${esc(r.name)}">${esc(r.name)}</b>`}${r.sub ? `<small>${r.sub}</small>` : ''}</span>` +
   `<span class="v">${fmt(r.value)}${r.vsub ? `<small>${r.vsub}</small>` : ''}</span>` +
   `<span class="pc">${r.pct == null ? '' : Math.round(r.pct * 100) + '%'}</span>` +
-  `<span class="tr" aria-hidden="true"><i style="width:${(Math.max(0, Math.min(1, r.bar ?? r.pct ?? 0)) * 100).toFixed(1)}%"></i></span></${r.href ? 'a' : 'div'}>`;
+  `<span class="tr" aria-hidden="true"><i style="width:${(Math.max(0, Math.min(1, r.bar ?? r.pct ?? 0)) * 100).toFixed(1)}%${r.color ? `;background:${r.color}` : ''}"></i></span></${r.href ? 'a' : 'div'}>`;
+// Category colors by rank in the view (biggest first), shared by the donut and the bars under it.
+const CAT_COLORS = ['#2a78d6', '#12a37a', '#e8833a', '#8b5cf6', '#e0518b'], OTHER_COLOR = '#9aa4b2';
+const catColor = i => i < CAT_COLORS.length ? CAT_COLORS[i] : OTHER_COLOR;
+// Spending by category as a ring: the top five and the rest as Other, with the total in the middle.
+function donut(groups, total) {
+  if (total <= 0) return '';
+  const top = groups.filter(e => e.spent > 0).slice(0, CAT_COLORS.length), rest = total - top.reduce((a, e) => a + e.spent, 0);
+  const parts = [...top.map((e, i) => ({ name: e.key, v: e.spent, c: catColor(i) })), ...(rest > total * .005 ? [{ name: 'Other', v: rest, c: OTHER_COLOR }] : [])];
+  const pc = v => Math.round(v / total * 100);
+  let at = 0;
+  const segs = parts.map(p => {
+    const len = Math.max(0, p.v / total * 100 - (parts.length > 1 ? .8 : 0)), seg = `<circle r="15.9155" cx="18" cy="18" stroke="${p.c}" ` +
+      `stroke-dasharray="${len.toFixed(2)} ${(100 - len).toFixed(2)}" stroke-dashoffset="${(25 - at).toFixed(2)}"/>`;
+    at += p.v / total * 100;
+    return seg;
+  }).join('');
+  return `<div class="donut"><div class="ring"><svg viewBox="0 0 36 36" role="img" aria-label="${esc(parts.map(p => `${p.name} ${pc(p.v)}%`).join(', '))}">` +
+    `<circle r="15.9155" cx="18" cy="18" stroke="var(--surface-2)"/>${segs}</svg><div class="mid"><small>${esc(state.currency)}</small><b>${short(total)}</b></div></div>` +
+    `<ul aria-hidden="true">${parts.map(p => `<li><i style="background:${p.c}"></i><span>${esc(p.name)}</span><b>${pc(p.v)}%</b></li>`).join('')}</ul></div>`;
+}
 const card = (title, aside, body, more) => `<section class="card"><h2>${title}${aside ? `<span>${aside}</span>` : ''}</h2>${body}${more ? `<a class="more" href="${more}">See all</a>` : ''}</section>`;
 const empty = (b, text = '') => `<div class="empty"><b>${b}</b>${text}</div>`;
 const lastMonths = (endMonth, n) => Array.from({ length: n }, (_, i) => addM(endMonth, i - n + 1));
@@ -775,7 +833,7 @@ function overview(rt, P, X) {
     `<button type="button" aria-label="Previous period" ${canPrev ? `data-go="#/overview?${prevQs}"` : 'disabled'}>‹</button>` +
     `<span>${esc(P.label)}${P.sofar ? `<small>${esc(P.sofar)}</small>` : ''}</span>` +
     `<button type="button" aria-label="Next period" ${nextQs ? `data-go="#/overview?${nextQs}"` : 'disabled'}>›</button></div>` +
-    `<div class="label">Spent</div><div class="total"><small>${esc(state.currency)}</small>${fmt(T.spent)}</div>` +
+    `<div class="label">Spent</div><div class="total"><small>${esc(state.currency)}</small><span data-count="${T.spent}">${fmt(T.spent)}</span></div>` +
     `<span class="delta">${d === null ? 'new' : Number.isNaN(d) ? `too little in ${esc(P.prevLabel)} to compare` : `${d > 0 ? '▲' : d < 0 ? '▼' : '='} ${Math.abs(d)}% vs ${esc(P.prevLabel)}`}</span>` +
     (T.refunds ? `<div class="refunds">incl. −${fmt(T.refunds)} refunds</div>` : '') +
     `<div class="kpis"><div><span>Received</span><b>${fmt(T.received)}</b></div><div><span>Net</span><b>${fmt(net)}</b></div>` +
@@ -797,7 +855,7 @@ function overview(rt, P, X) {
     (soon.length ? upcomingRows(soon.slice(0, 3)) : ''), '#/forecast') : '';
   return { html: chips(P) + hero + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
-    card('Where it went', esc(state.currency), catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
+    card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
     card('Top merchants', '', merch.slice(0, 3).map(e => rk({ href: link('merchant', e.key, {}, P), icon: '🏪', name: merName(e.key), sub: plural(e.n, 'visit'), value: e.spent, pct: share(e.spent) })).join('') || empty('No merchants yet'), merch.length ? `#/merchants?${q}` : '') +
     card('Cards &amp; accounts', '', accts.slice(0, 3).map(e => rk({ href: link('account', e.key, {}, P), icon: '💳', nameHtml: splitAcct(e.key), sub: plural(e.count, 'transaction'), value: e.spent, pct: share(e.spent) })).join('') || empty('No card spending yet'), accts.length ? `#/cards?${q}` : '') +
@@ -811,13 +869,13 @@ function overview(rt, P, X) {
 }
 function catRows(groups, total, X, P, f = {}) {
   const prev = new Map(spendGroups(X.prev.filter(matches(f)), t => t.category).map(e => [e.key, e]));
-  return groups.map(e => rk({ href: link('category', e.key, f, P), icon: icon(e.key), name: e.key, sub: plural(e.n || e.count, 'transaction'),
+  return groups.map((e, i) => rk({ href: link('category', e.key, f, P), icon: icon(e.key), name: e.key, sub: plural(e.n || e.count, 'transaction'), color: catColor(i),
     value: e.spent, vsub: deltaHtml(deltaPct(e.spent, prev.get(e.key))), pct: total > 0 ? e.spent / total : 0 }) +
     (e.key === 'Uncategorized' ? `<a class="sublink" href="#/activity?${P.qs}">Needs a category ›</a>` : '')).join('');
 }
 function categories(rt, P, X) {
   const T = totals(X.cur), cats = spendGroups(X.cur, t => t.category);
-  return { html: chips(P) + card('By category', `${esc(state.currency)} ${fmt(T.spent)}`, catRows(cats, T.spent, X, P) || empty('No spending in this period')) };
+  return { html: chips(P) + card('By category', `${esc(state.currency)} ${fmt(T.spent)}`, donut(cats, T.spent) + catRows(cats, T.spent, X, P) || empty('No spending in this period')) };
 }
 function merchants(rt, P, X) {
   const T = totals(X.cur), list = spendGroups(X.cur, t => t.merchant);
@@ -903,7 +961,7 @@ function daily(rt, P) {
     `<section class="hero"><div class="month-nav"><button type="button" aria-label="Previous month" data-go="#/daily?m=${addM(M, -1)}">‹</button>` +
     `<span>${esc(monthName(M))}${M === cur ? `<small>so far (${last} of ${N} days)</small>` : ''}</span>` +
     `<button type="button" aria-label="Next month" ${M < cur ? `data-go="#/daily?m=${addM(M, 1)}"` : 'disabled'}>›</button></div>` +
-    `<div class="label">Spent</div><div class="total"><small>${esc(state.currency)}</small>${fmt(spent)}</div></section>` +
+    `<div class="label">Spent</div><div class="total"><small>${esc(state.currency)}</small><span data-count="${spent}">${fmt(spent)}</span></div></section>` +
     `<section class="card"><div class="cal">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(w => `<span class="wd" aria-hidden="true">${w}</span>`).join('')}` +
     '<span class="blank"></span>'.repeat(lead) + cells.join('') + '</div>' +
     `<dl class="stats">${stat('Daily average', fmt(Math.round(spent / Math.max(1, last))))}` +
@@ -1059,6 +1117,15 @@ function render() {
   $('sub').hidden = !page.sub; $('sub').textContent = page.sub || '';
   document.title = `${$('title').textContent} · Expenses`;
   $('view').innerHTML = page.html;
+  const animate = (changed || !render.hadData) && !!state.sum && smooth === 'smooth';
+  render.hadData = !!state.sum;
+  $('view').classList.remove('anim');
+  if (animate) {
+    void $('view').offsetWidth;  // restart the CSS animations
+    $('view').classList.add('anim');
+    for (const box of $('view').querySelectorAll('.bars, .cal')) [...box.children].forEach((el, i) => el.style.setProperty('--k', i));
+    countUp();
+  }
   if (rt.name === 'search' && $('search')) {
     renderResults();
     const q = rt.q.get('q') || state.search;
@@ -1069,6 +1136,18 @@ function render() {
     if (rt.name === 'search') $('search')?.focus(); else if (render.done) $('title').focus({ preventScroll: true });
   }
   render.done = true;
+}
+
+// Totals count up from zero when a page opens.
+function countUp() {
+  const els = [...$('view').querySelectorAll('[data-count]')], t0 = performance.now();
+  if (!els.length) return;
+  const step = now => {
+    const k = Math.min(1, (now - t0) / 700), e = 1 - (1 - k) ** 3;
+    for (const el of els) el.textContent = fmt(Math.round(+el.dataset.count * e));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 /* ---------- Search ---------- */
