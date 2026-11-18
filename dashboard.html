@@ -218,7 +218,6 @@
   @keyframes pop { from { opacity: 0; transform: scale(.85); } }
   @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px); } }
   /* Always-on (ambient) motion */
-  @keyframes flow { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
   @keyframes drift { from { transform: translate(0, 0) scale(1); } to { transform: translate(-60px, 40px) scale(1.25); } }
   @keyframes drift2 { from { transform: translate(0, 0) scale(1); } to { transform: translate(70px, -30px) scale(.85); } }
   @keyframes march { to { background-position: 8.49px 0; } }
@@ -232,7 +231,7 @@
   @property --a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
   @keyframes orbit { to { --a: 360deg; } }
   @keyframes materialize { from { opacity: 0; transform: translateY(14px); filter: blur(6px) brightness(1.4); } to { opacity: 1; transform: none; filter: none; } }
-  @keyframes scan { 0%, 30% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
+  @keyframes scan { 0%, 30% { transform: translateX(0); opacity: 0; } 40%, 90% { opacity: 1; } 100% { transform: translateX(900%); opacity: 0; } }
   @keyframes ignite { from { box-shadow: 0 0 0 0 var(--bar-2); } to { box-shadow: 0 0 0 6px transparent; } }
   @keyframes sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
   html.still .view.anim > * { animation: fade .35s ease-out both; }
@@ -252,14 +251,14 @@
   html.motion .txn[open] > :not(summary) { animation: rise .3s both; }
   html.motion :is(.rk, .ln, .banner, .btn, .chips a, .cal a, .fix button) { transition: transform .15s, background-color .2s; }
   html.motion :is(.rk, .ln, .banner, .btn, .chips a, .cal a, .fix button):active { transform: scale(.97); }
-  /* Ambient, running all the time: the summary box's colors flow and its light spots drift; expected bars' stripes
+  /* Ambient, running all the time: the summary box's light spots drift; expected bars' stripes
      march (it's a prediction); regular payments glow; a light sweeps along the bars; the donut breathes; today pulses. */
   /* Delays come from --clock (set on every render) so a 30-second refresh redraw continues the loops in phase. */
   html.motion .hero { border: 1.5px solid transparent; transition: rotate .3s ease-out;  /* + a neon light orbiting the edge */
     background: linear-gradient(135deg, var(--hero-from), var(--hero-to), #5b4fd6, var(--hero-from)) padding-box,
       conic-gradient(from var(--a), transparent 0 70%, var(--bar-2), #fff, var(--accent), transparent) border-box;
-    background-size: 220% 220%, 100% 100%; animation: flow 14s ease-in-out infinite, orbit 6s linear infinite; animation-delay: var(--clock), var(--clock); }
-  html.motion .view.anim > .hero { animation: materialize .5s cubic-bezier(.2, .8, .2, 1) both, flow 14s ease-in-out infinite, orbit 6s linear infinite; animation-delay: 0s, var(--clock), var(--clock); }
+    background-size: 140% 140%, 100% 100%; background-position: 30% 30%, 0 0; animation: orbit 6s linear infinite; animation-delay: var(--clock); }
+  html.motion .view.anim > .hero { animation: materialize .5s cubic-bezier(.2, .8, .2, 1) both, orbit 6s linear infinite; animation-delay: 0s, var(--clock); }
   html.motion .hero::before { animation: drift 9s var(--clock) ease-in-out infinite alternate; }
   html.motion .hero::after { animation: drift2 11s var(--clock) ease-in-out infinite alternate; }
   .hero > canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
@@ -273,8 +272,8 @@
   html.motion .view.anim .bars.forecast > a:has(+ .first) .col { animation: grow .7s cubic-bezier(.2, .8, .2, 1) both, glow 2.4s ease-in-out infinite; animation-delay: calc(.15s + var(--k, 0) * 15ms), var(--clock); }
   html.motion .bars.forecast .first { border-left-color: var(--accent); }
   html.motion .bars:not(.mini) { position: relative; }  /* no overflow: hidden, the "Today" label sticks out */
-  html.motion .bars:not(.mini)::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, transparent 46%, color-mix(in srgb, var(--accent) 35%, transparent) 50%, transparent 54%) no-repeat;
-    background-size: 200% 100%; animation: scan 5s var(--clock) linear infinite; }
+  html.motion .bars:not(.mini)::after { content: ''; position: absolute; top: 0; bottom: 18px; left: 0; width: 10%; pointer-events: none; will-change: transform;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 35%, transparent), transparent); animation: scan 5s var(--clock) linear infinite; }
   html.motion .rk .tr i { position: relative; overflow: hidden; }
   html.motion .rk .tr i::after { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(255 255 255 / .65), transparent); animation: sweep 3.2s var(--clock) ease-in-out infinite; }
   html.motion .rk:nth-of-type(2n) .tr i::after { animation-delay: calc(var(--clock) + .8s); }
@@ -417,7 +416,8 @@ function hudAttach() {
       hud.dots = hud.dots.slice(0, n);
       while (hud.dots.length < n) hud.dots.push({ x: Math.random() * w, y: Math.random() * h, r: 1 + Math.random(), a: .15 + Math.random() * .2, v: 6 + Math.random() * 8 });
     }).observe(hud.cv);
-    new IntersectionObserver(([e]) => { hud.seen = e.isIntersecting; hudRun(); }).observe(hud.cv);
+    // Moving the canvas into a new hero reports [stale, current] in one batch: the last entry is the real state.
+    new IntersectionObserver(es => { hud.seen = es.at(-1).isIntersecting; hudRun(); }).observe(hud.cv);
   }
   hero.prepend(hud.cv); hudRun();
 }
@@ -429,6 +429,7 @@ function hudStop() { cancelAnimationFrame(hud.raf); hud.raf = 0; }
 document.addEventListener('visibilitychange', hudRun);
 function hudFrame(now) {
   hud.raf = requestAnimationFrame(hudFrame);
+  if (now - (hud.t || 0) < 30) return;  // 30 fps is plenty for slow drifting dots, and halves the cost on a phone
   const c = hud.ctx, { w, h, dots, glare: g } = hud, dt = Math.min(.05, (now - (hud.t || now)) / 1000);
   hud.t = now;
   c.clearRect(0, 0, w, h);
