@@ -206,34 +206,58 @@
   .todo p { font-size: 13px; color: var(--text-2); margin: 2px 0 4px; }
   .todo details.txn { border-color: rgb(0 0 0 / .08); }
   .txn.leaving { opacity: 0; }
-  /* Reduce motion (Samsung: Remove animations) still gets a gentle fade: no movement, so nothing to feel queasy about. */
+  /* Motion, chosen in Settings → Animations: html.motion = full animations, html.still = a gentle fade only
+     (Follow phone with the phone set to reduce motion), neither = Off. */
   @keyframes fade { from { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) {
-    .view.anim > * { animation: fade .35s ease-out both; }
-    .view.anim > :nth-child(2) { animation-delay: .05s; } .view.anim > :nth-child(n+3) { animation-delay: .1s; }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .txn.leaving { transition: opacity .25s; }
-    @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-    @keyframes grow { from { transform: scaleY(0); } }
-    @keyframes fill { from { transform: scaleX(0); } }
-    @keyframes spin-in { from { opacity: 0; transform: rotate(-120deg) scale(.8); } }
-    @keyframes pop { from { opacity: 0; transform: scale(.85); } }
-    @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px); } }
-    .view.anim > * { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both; }
-    .view.anim > :nth-child(2) { animation-delay: .05s; } .view.anim > :nth-child(3) { animation-delay: .1s; }
-    .view.anim > :nth-child(4) { animation-delay: .15s; } .view.anim > :nth-child(5) { animation-delay: .2s; }
-    .view.anim > :nth-child(n+6) { animation-delay: .25s; }
-    .view.anim .bars .col { transform-origin: bottom; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.15s + var(--k, 0) * 15ms); }
-    .view.anim .rk .tr i { transform-origin: left; animation: fill .8s .2s cubic-bezier(.2, .8, .2, 1) both; }
-    .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both; }
-    .view.anim .donut li { animation: rise .4s both; animation-delay: .35s; }
-    .view.anim .cal a { animation: pop .4s both; animation-delay: calc(.1s + var(--k, 0) * 12ms); }
-    .toast:not([hidden]) { animation: toast-in .3s cubic-bezier(.2, .8, .2, 1); }
-    .txn[open] > :not(summary) { animation: rise .3s both; }
-    .rk, .ln, .banner, .btn, .chips a, .cal a, .fix button { transition: transform .15s, background-color .2s; }
-    .rk:active, .ln:active, .banner:active, .btn:active, .chips a:active, .cal a:active, .fix button:active { transform: scale(.97); }
-  }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes grow { from { transform: scaleY(0); } }
+  @keyframes fill { from { transform: scaleX(0); } }
+  @keyframes spin-in { from { opacity: 0; transform: rotate(-120deg) scale(.8); } }
+  @keyframes pop { from { opacity: 0; transform: scale(.85); } }
+  @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px); } }
+  /* Always-on (ambient) motion */
+  @keyframes flow { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+  @keyframes drift { from { transform: translate(0, 0) scale(1); } to { transform: translate(-60px, 40px) scale(1.25); } }
+  @keyframes drift2 { from { transform: translate(0, 0) scale(1); } to { transform: translate(70px, -30px) scale(.85); } }
+  @keyframes march { to { background-position: 8.49px 0; } }
+  @keyframes glow { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
+  @keyframes sweep { 0%, 60% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+  @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+  @keyframes ring { 0% { box-shadow: 0 0 0 0 var(--accent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+  @keyframes blink { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  html.still .view.anim > * { animation: fade .35s ease-out both; }
+  html.still .view.anim > :nth-child(2) { animation-delay: .05s; } html.still .view.anim > :nth-child(n+3) { animation-delay: .1s; }
+  html.motion .txn.leaving { transition: opacity .25s; }
+  html.motion .view.anim > * { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both; }
+  html.motion .view.anim > :nth-child(2) { animation-delay: .05s; } html.motion .view.anim > :nth-child(3) { animation-delay: .1s; }
+  html.motion .view.anim > :nth-child(4) { animation-delay: .15s; } html.motion .view.anim > :nth-child(5) { animation-delay: .2s; }
+  html.motion .view.anim > :nth-child(n+6) { animation-delay: .25s; }
+  html.motion .view.anim .bars .col { transform-origin: bottom; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(.15s + var(--k, 0) * 15ms); }
+  html.motion .view.anim .rk .tr i { transform-origin: left; animation: fill .8s .2s cubic-bezier(.2, .8, .2, 1) both; }
+  html.motion .view.anim .donut svg { animation: spin-in .9s .1s cubic-bezier(.2, .8, .2, 1) both; }
+  html.motion .view.anim .donut li { animation: rise .4s both; animation-delay: .35s; }
+  html.motion .view.anim .cal a { animation: pop .4s both; animation-delay: calc(.1s + var(--k, 0) * 12ms); }
+  html.motion .toast:not([hidden]) { animation: toast-in .3s cubic-bezier(.2, .8, .2, 1); }
+  html.motion .txn[open] > :not(summary) { animation: rise .3s both; }
+  html.motion :is(.rk, .ln, .banner, .btn, .chips a, .cal a, .fix button) { transition: transform .15s, background-color .2s; }
+  html.motion :is(.rk, .ln, .banner, .btn, .chips a, .cal a, .fix button):active { transform: scale(.97); }
+  /* Ambient, running all the time: the summary box's colors flow and its light spots drift; expected bars' stripes
+     march (it's a prediction); regular payments glow; a light sweeps along the bars; the donut breathes; today pulses. */
+  html.motion .hero { background-size: 220% 220%; background-image: linear-gradient(135deg, var(--hero-from), var(--hero-to), #5b4fd6, var(--hero-from)); animation: flow 14s ease-in-out infinite; }
+  html.motion .view.anim > .hero { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both, flow 14s ease-in-out infinite; }
+  html.motion .hero::before { animation: drift 9s ease-in-out infinite alternate; }
+  html.motion .hero::after { animation: drift2 11s ease-in-out infinite alternate; }
+  html.motion .bars .col.f { background-size: 8.49px 8.49px; animation: march 1.4s linear infinite; }
+  html.motion .view.anim .bars .col.f { animation: grow .7s cubic-bezier(.2, .8, .2, 1) both, march 1.4s linear infinite; animation-delay: calc(.15s + var(--k, 0) * 15ms), 0s; }
+  html.motion .bars .col.f i { animation: glow 2.2s ease-in-out infinite; }
+  html.motion .rk .tr i { position: relative; overflow: hidden; }
+  html.motion .rk .tr i::after { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(255 255 255 / .65), transparent); animation: sweep 3.2s ease-in-out infinite; }
+  html.motion .rk:nth-of-type(2n) .tr i::after { animation-delay: .8s; }
+  html.motion .donut .ring { animation: breathe 4s ease-in-out infinite; }
+  html.motion .cal a.today { animation: ring 1.6s ease-out infinite; }
+  html.motion .view.anim .cal a.today { animation: pop .4s both, ring 1.6s ease-out infinite; animation-delay: calc(.1s + var(--k, 0) * 12ms), 1s; }
+  html.motion .live { animation: blink 2s ease-in-out infinite; }
+  .live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bar-2); margin-left: 8px; vertical-align: middle; }
   .fix button, .btn { font-weight: 600; border: 0; border-radius: 10px; min-height: 44px; padding: 8px 16px; background: var(--accent); color: #fff; cursor: pointer; }
   a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   .fix { margin: 0 0 16px 50px; display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }  /* a one-word 40-letter merchant must wrap, not widen the page */
@@ -326,7 +350,16 @@ const IGNORED = 'Ignored', OWN_TRANSFER = 'Own transfer', NOT_COUNTED = new Set(
 const INCOME = new Set(['Salary', 'Income']);
 const FIXED = new Set(['Rent & EMI', 'Bills & Utilities', 'Subscriptions', 'Insurance', 'Investments']);
 const LARGE_MIN = { SAR: 200, INR: 5000 }, LARGE_SKIP = new Set(['Rent & EMI', 'Investments']);
-const smooth = matchMedia('(prefers-reduced-motion: no-preference)').matches ? 'smooth' : 'auto';
+// Animations: 'on' (default), 'auto' (follow the phone's reduce-motion setting: a fade only when it's on) or 'off'.
+const motionMode = () => { try { return localStorage.getItem('motion') || 'on'; } catch { return 'on'; } };
+let smooth = 'auto';
+function applyMotion() {
+  const m = motionMode(), on = m === 'on' || (m === 'auto' && matchMedia('(prefers-reduced-motion: no-preference)').matches);
+  document.documentElement.classList.toggle('motion', on);
+  document.documentElement.classList.toggle('still', !on && m === 'auto');
+  smooth = on ? 'smooth' : 'auto';
+}
+applyMotion();
 const state = { currency: cache.get('currency') || '', sum: null, all: [], showIgnored: false, merchSort: 'spent', search: '', results: null };
 // What a saved rule applies to, worked out the same way as the server: the merchant, or for a message
 // with no merchant, its wording without numbers. Used to clear matching rows from the screen at once.
@@ -837,7 +870,7 @@ function overview(rt, P, X) {
   }
   const hero = `<section class="hero" aria-live="polite"><div class="month-nav">` +
     `<button type="button" aria-label="Previous period" ${canPrev ? `data-go="#/overview?${prevQs}"` : 'disabled'}>‹</button>` +
-    `<span>${esc(P.label)}${P.sofar ? `<small>${esc(P.sofar)}</small>` : ''}</span>` +
+    `<span>${esc(P.label)}${P.partial ? '<i class="live" title="Updates by itself"></i>' : ''}${P.sofar ? `<small>${esc(P.sofar)}</small>` : ''}</span>` +
     `<button type="button" aria-label="Next period" ${nextQs ? `data-go="#/overview?${nextQs}"` : 'disabled'}>›</button></div>` +
     `<div class="label">Spent</div><div class="total"><small>${esc(state.currency)}</small><span data-count="${T.spent}">${fmt(T.spent)}</span></div>` +
     `<span class="delta">${d === null ? 'new' : Number.isNaN(d) ? `too little in ${esc(P.prevLabel)} to compare` : `${d > 0 ? '▲' : d < 0 ? '▼' : '='} ${Math.abs(d)}% vs ${esc(P.prevLabel)}`}</span>` +
@@ -1080,6 +1113,9 @@ function settings() {
       : '<span class="bad">No SMS from your phone in the last 7 days.</span> Check the forwarder app: the address, the password after "Bearer", and that Samsung isn\'t putting it to sleep.'}</p>` +
       `<ul class="rows">${deliveries.map(d => d.body ? skippedRow(d)
         : `<li class="delivery"><span>${ago(d.at)} · ${esc(d.sender)}</span><span class="${d.outcome.startsWith('refused') ? 'bad' : ''}">${esc(d.outcome)}</span></li>`).join('')}</ul>`) +
+    card('Animations', '', '<p class="muted">Moving charts and effects. Follow phone turns them down to a fade when the phone is set to reduce or remove animations.</p>' +
+      `<div class="seg" role="group" aria-label="Animations">${[['on', 'On'], ['auto', 'Follow phone'], ['off', 'Off']].map(([k, label]) =>
+        `<button type="button" data-motion="${k}" aria-pressed="${motionMode() === k}">${label}</button>`).join('')}</div>`) +
     `<section class="card"><form method="post" action="/logout" onsubmit="cache.clear()"><button class="btn">Sign out</button></form></section>` +
     `<p class="version">Version ${esc(state.sum.version || 'unknown')}</p>` };
 }
@@ -1299,6 +1335,8 @@ document.addEventListener('submit', e => {
   saveFriend(e.target, false);
 });
 document.addEventListener('click', async e => {
+  const mo = e.target.closest('[data-motion]')?.dataset.motion;
+  if (mo) { try { localStorage.setItem('motion', mo); } catch {} applyMotion(); render(); return; }
   if (e.target.closest('[data-unfriend]')) { saveFriend(e.target.closest('form'), true); return; }
   const del = e.target.closest('[data-delete]');
   if (del) {
