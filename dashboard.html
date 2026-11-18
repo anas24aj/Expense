@@ -206,6 +206,12 @@
   .todo p { font-size: 13px; color: var(--text-2); margin: 2px 0 4px; }
   .todo details.txn { border-color: rgb(0 0 0 / .08); }
   .txn.leaving { opacity: 0; }
+  /* Reduce motion (Samsung: Remove animations) still gets a gentle fade: no movement, so nothing to feel queasy about. */
+  @keyframes fade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .view.anim > * { animation: fade .35s ease-out both; }
+    .view.anim > :nth-child(2) { animation-delay: .05s; } .view.anim > :nth-child(n+3) { animation-delay: .1s; }
+  }
   @media (prefers-reduced-motion: no-preference) {
     .txn.leaving { transition: opacity .25s; }
     @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
@@ -1117,14 +1123,14 @@ function render() {
   $('sub').hidden = !page.sub; $('sub').textContent = page.sub || '';
   document.title = `${$('title').textContent} · Expenses`;
   $('view').innerHTML = page.html;
-  const animate = (changed || !render.hadData) && !!state.sum && smooth === 'smooth';
+  const animate = (changed || !render.hadData) && !!state.sum;  // with reduce motion on, CSS keeps it to a fade
   render.hadData = !!state.sum;
   $('view').classList.remove('anim');
   if (animate) {
     void $('view').offsetWidth;  // restart the CSS animations
     $('view').classList.add('anim');
     for (const box of $('view').querySelectorAll('.bars, .cal')) [...box.children].forEach((el, i) => el.style.setProperty('--k', i));
-    countUp();
+    if (smooth === 'smooth') countUp();
   }
   if (rt.name === 'search' && $('search')) {
     renderResults();
