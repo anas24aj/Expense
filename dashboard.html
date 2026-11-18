@@ -158,6 +158,7 @@
   .legend i.hatch { background: repeating-linear-gradient(135deg, var(--bar-dim) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px var(--bar-dim); }
   .bars.forecast .m { overflow: visible; white-space: nowrap; }
   .proj .muted-h { color: var(--hero-muted); font-weight: 400; }
+  .how code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 13px; overflow-wrap: anywhere; }
   .how { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 14px; display: grid; gap: 6px; }
   .day-nav { display: flex; align-items: center; gap: 8px; }
   .day-nav input { flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
@@ -1180,7 +1181,8 @@ const ago = iso => {
 };
 // Android: Chrome offers installing the site as an app; keep its prompt so Settings can show an Install button.
 let installPrompt = null;
-const installed = () => matchMedia('(display-mode: standalone)').matches;
+const installed = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const iPhone = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);  // iPadOS says Mac
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (location.hash.startsWith('#/settings')) render(); });
 addEventListener('appinstalled', () => { installPrompt = null; toast('Installed. Open Expenses from your home screen.'); });
 document.addEventListener('click', async e => {
@@ -1190,9 +1192,21 @@ document.addEventListener('click', async e => {
   installPrompt = null;
   render();
 });
+// iPhones don't let apps read SMS; a Shortcuts automation that runs on each new message posts it to /sms instead.
+function iPhoneSmsCard() {
+  return card('Send bank SMS from this iPhone', 'Shortcuts', '<ol class="how">' +
+    '<li>Open <b>Shortcuts</b> → <b>Automation</b> → <b>+</b> → <b>Message</b>.</li>' +
+    '<li><b>Message Contains</b>: <code>SAR</code>. Leave Sender empty. Choose <b>Run Immediately</b>, turn off <b>Notify When Run</b>, tap <b>Next</b> → <b>New Blank Automation</b>.</li>' +
+    '<li>Add the action <b>Get Contents of URL</b>. URL:<br><code class="copy">' + esc(location.origin) + '/sms</code></li>' +
+    '<li>Tap <b>Show More</b>. Method <b>POST</b>. Add a header: key <code>Authorization</code>, value <code>Bearer</code> + a space + your sign-in password.</li>' +
+    '<li>Request Body <b>JSON</b>, two Text fields: <code>sender</code> = <b>Shortcut Input → Sender</b> (or type <code>iPhone</code>), and <code>body</code> = <b>Shortcut Input → Content</b>. Tap <b>Done</b>.</li>' +
+    '<li>Duplicate it (long-press) for <code>SR</code> and <code>ريال</code>, and <code>INR</code> for Indian accounts. Each automation matches one word.</li></ol>' +
+    '<p class="muted">After the next card payment, “Phone connection” below should say <b>saved</b>. SMS that arrive while the phone is offline are not resent: add those with “Save as transaction” below.</p>');
+}
 function installCard() {
   const body = installed() ? '<p class="muted">✓ Installed. You are using the app.</p>'
     : installPrompt ? '<p class="muted">Adds Expenses to your home screen. It opens full screen, like any other app.</p><button class="btn" type="button" id="install">Install app</button>'
+    : iPhone ? '<p class="muted">iPhone has no install button: in <b>Safari</b>, tap <b>Share</b> (the square with an arrow), then <b>Add to Home Screen</b>, then <b>Add</b>.</p>'
     : '<p class="muted">In Chrome, tap <b>⋮</b> (top right), then <b>Install app</b> or <b>Add to Home screen</b>.</p>';
   return card('Install on your phone', '', body);
 }
@@ -1234,12 +1248,12 @@ function settings() {
   return { title: 'Settings', html:
     installCard() +
     // The sync app reads the SMS inbox, so SMS that arrived while the phone kept it asleep still come in.
-    card('Phone sync app', 'Android', '<p class="muted">Sends your bank SMS here from the SMS inbox every 15 minutes and on each new SMS, ' +
+    (iPhone ? iPhoneSmsCard() : card('Phone sync app', 'Android', '<p class="muted">Sends your bank SMS here from the SMS inbox every 15 minutes and on each new SMS, ' +
       'so nothing is missed while the phone sleeps. Replaces the SMS forwarder app.</p>' +
-      '<a class="btn" href="https://github.com/silpachandran08-web/Expense/releases/download/android-latest/expense-sync.apk">Download Expense Sync</a>') +
+      '<a class="btn" href="https://github.com/silpachandran08-web/Expense/releases/download/android-latest/expense-sync.apk">Download Expense Sync</a>')) +
     `<section class="card"><a class="ln" href="/import"><span class="nm"><b>Import old SMS</b><small>Add messages from before the phone was connected</small></span>${go1}</a></section>` +
     card('Phone connection', 'last 7 days', `<p class="phone-last">${last ? `Last SMS from your phone: <b>${ago(last.at)}</b> · ${esc(last.outcome)}`
-      : '<span class="bad">No SMS from your phone in the last 7 days.</span> Check the forwarder app: the address, the password after "Bearer", and that Samsung isn\'t putting it to sleep.'}</p>` +
+      : '<span class="bad">No SMS from your phone in the last 7 days.</span> ' + (iPhone ? 'Check the Shortcuts automation: the address and the password after "Bearer".' : 'Check the phone app: the address, the password, and that the phone isn\'t putting it to sleep.')}</p>` +
       `<ul class="rows">${deliveries.map(d => d.body ? skippedRow(d)
         : `<li class="delivery"><span>${ago(d.at)} · ${esc(d.sender)}</span><span class="${d.outcome.startsWith('refused') ? 'bad' : ''}">${esc(d.outcome)}</span></li>`).join('')}</ul>`) +
     card('Animations', '', '<p class="muted">Moving charts and effects. Follow phone turns them down to a fade when the phone is set to reduce or remove animations.</p>' +
