@@ -18,6 +18,12 @@ Everything here runs on free plans: **Vercel Hobby** (hosting), **Neon Free** (P
 
 ## 1. Deploy the server on Vercel (about 10 minutes, free)
 
+**Quickest: one button.** It copies this repository to your GitHub, creates the Vercel project, creates a free Neon database and asks you for your password, all in one flow:
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fsilpachandran08-web%2FExpense&project-name=expense&repository-name=expense&env=EXPENSE_TOKEN&envDescription=Your%20sign-in%20password%20%28at%20least%206%20characters%29.%20The%20phone%20app%20uses%20it%20too.&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22neon%22%2C%22productSlug%22%3A%22neon%22%2C%22protocol%22%3A%22storage%22%7D%5D)
+
+The copy is yours: it doesn't pick up later changes to this repository by itself. Or set it up by hand:
+
 1. Merge this branch into `main` on GitHub. Vercel deploys `main` to your public URL.
 2. Go to [vercel.com](https://vercel.com), sign up with GitHub (Hobby plan) and choose **Add New → Project**. Import `Expense` and keep the defaults. `vercel.json` already tells Vercel it's a Python app. Click **Deploy**. The first deploy will show "unauthorized" until step 4 is done; that's expected.
 3. **Add the database:** open the project, go to **Storage → Create Database → Neon (Serverless Postgres)**, pick the **Free** plan and the region closest to you (Mumbai or Frankfurt both work), and connect it to the project. This adds the `DATABASE_URL` environment variable automatically. The table is created on the first request.
