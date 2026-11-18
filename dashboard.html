@@ -131,6 +131,15 @@
   .bars .m { height: 18px; font-size: 12px; line-height: 18px; text-align: center; color: var(--muted); overflow: hidden; }
   .bars .sel .m { color: var(--text); font-weight: 600; }
   .bars.days { gap: 2px; }
+  .bars.forecast .first { border-left: 1px dashed var(--muted); padding-left: 1px; }
+  .bars .col.f { display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
+    background: repeating-linear-gradient(135deg, var(--bar-dim) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px var(--bar-dim); }
+  .bars .col.f i { display: block; background: var(--bar-2); }
+  .bars .col.cut { border-radius: 0; border-top: 3px double var(--surface); }  /* taller than the chart: cut off */
+  .legend i.hatch { background: repeating-linear-gradient(135deg, var(--bar-dim) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px var(--bar-dim); }
+  .bars.forecast .m { overflow: visible; white-space: nowrap; }
+  .proj .muted-h { color: var(--hero-muted); font-weight: 400; }
+  .how { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 14px; display: grid; gap: 6px; }
   .day-nav { display: flex; align-items: center; gap: 8px; }
   .day-nav input { flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
   .day-nav button { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 20px; cursor: pointer; }
@@ -403,6 +412,13 @@ function period(q, rt) {
 }
 
 // Payments that repeat at a steady interval and amount (see the definitions in the README of this change).
+// The next date after `d` for a payment: monthly and yearly ones keep their date (the 25th stays the 25th).
+function nextDue(cadence, G, d) {
+  const k = cadence === 'Monthly' ? 1 : cadence === 'Yearly' ? 12 : 0;
+  if (!k) return fromNum(dayNum(d) + G);
+  const m = addM(d.slice(0, 7), k);
+  return `${m}-${pad(Math.min(+d.slice(8), daysIn(m)))}`;
+}
 function recurring(all) {
   const groups = new Map(), td = dayNum(today()), out = [];
   for (const t of all) if (t._n && t.direction === 'debit' && t.merchant) {
@@ -417,7 +433,7 @@ function recurring(all) {
     if (!cadence || gaps.filter(g => Math.abs(g - G) <= G * .25).length < gaps.length * .75
         || amounts.filter(a => Math.abs(a - A) <= A * .15).length < amounts.length * .75) continue;
     const last = list[list.length - 1], lastN = dayNum(last._d);
-    out.push({ merchant: last.merchant, category: last.category, cadence, A, G, last: last._d, next: fromNum(lastN + G),
+    out.push({ merchant: last.merchant, category: last.category, cadence, A: Math.round(A), G, last: last._d, next: nextDue(cadence, G, last._d),
       monthly: Math.round(A * 30.4 / G), active: td <= lastN + G + 7, priceUp: list.slice(-2).every(t => t._c > A * 1.1), latest: last._c });  // two in a row: one big purchase isn't a price rise
   }
   return out.sort((a, b) => b.monthly - a.monthly);
@@ -437,6 +453,81 @@ function largeOnes(all) {
     byC.set(t.category, [...ch, t._c]);
   }
   return out.reverse();
+}
+
+// What the coming days will likely cost, from your own patterns. Regular payments (see recurring) land on their
+// expected dates. Everyday spending follows your average for each weekday over the last 8 weeks, leaving out
+// regular payments and one-off large purchases so they aren't counted twice. The likely range comes from how much
+// your everyday spending varied week to week (middle half of your weeks). Starts tomorrow; null with under 2 weeks of data.
+const FORECAST_WEEKS = 8;
+const quantile = (a, q) => { const s = [...a].sort((x, y) => x - y), i = (s.length - 1) * q, lo = Math.floor(i); return s[lo] + (s[Math.ceil(i)] - s[lo]) * (i - lo); };
+function forecast(days) {
+  const tn = dayNum(today()), hist = Math.min(FORECAST_WEEKS * 7, tn - dayNum(state.earliest));
+  if (hist < 14) return null;
+  const rec = recurring(state.all).filter(r => r.active), regular = new Set(rec.map(r => r.merchant.toLowerCase()));
+  const big = new Set(largeOnes(state.all).map(l => l.t.id)), per = new Map();
+  for (const t of state.all) {
+    const n = dayNum(t._d);
+    if (t._n && t._s && n >= tn - hist && n < tn && !big.has(t.id) && !regular.has(t.merchant.toLowerCase())) per.set(n, (per.get(n) || 0) + t._s);
+  }
+  const byWd = Array.from({ length: 7 }, () => []), weeks = [];
+  for (let n = tn - hist; n < tn; n++) byWd[new Date(n * 864e5).getUTCDay()].push(Math.max(0, per.get(n) || 0));
+  for (let k = 0; k < Math.floor(hist / 7); k++) { let w = 0; for (let n = tn - 7 * (k + 1); n < tn - 7 * k; n++) w += per.get(n) || 0; weeks.push(Math.max(0, w)); }
+  const whole = v => Math.round(v / 100) * 100;  // estimates in whole riyals/rupees: cents would be false precision
+  const usual = byWd.map(v => whole(v.reduce((a, x) => a + x, 0) / v.length));
+  const out = [];
+  for (let i = 1; i <= days; i++) {
+    const n = tn + i;
+    out.push({ d: fromNum(n), everyday: usual[new Date(n * 864e5).getUTCDay()], regular: [] });
+  }
+  for (const r of rec) {  // an active payment already due but not seen yet is expected tomorrow
+    for (let d = r.next; dayNum(d) <= tn + days; d = nextDue(r.cadence, r.G, d)) out[Math.max(dayNum(d), tn + 1) - tn - 1].regular.push(r);
+  }
+  for (const e of out) { e.reg = e.regular.reduce((a, r) => a + r.A, 0); e.total = e.everyday + e.reg; }
+  return { days: out, usual, weeks: weeks.length, hist,
+    // Totals for the first h days, with a likely range.
+    sum(h) {
+      const part = out.slice(0, h), exp = part.reduce((a, e) => a + e.total, 0), reg = part.reduce((a, e) => a + e.reg, 0);
+      return { exp, reg, low: Math.min(exp, reg + whole(quantile(weeks, .25) * h / 7)), high: Math.max(exp, reg + whole(quantile(weeks, .75) * h / 7)) };
+    } };
+}
+// Bars: the last `back` days spent (tap a day), then the forecast, regular payments shown at the bottom of a bar.
+function forecastBars(F, back, ahead) {
+  const td = today(), tn = dayNum(td), spent = byDay(state.all.filter(t => dayNum(t._d) > tn - back));
+  const past = Array.from({ length: back }, (_, i) => fromNum(tn - back + 1 + i)), next = F.days.slice(0, ahead);
+  const max = Math.max(1, ...past.map(d => spent.get(d) || 0), ...next.map(e => e.everyday)) * 1.25;  // rent shouldn't flatten everyday days
+  const h = v => (Math.min(1, Math.max(0, v) / max) * 100).toFixed(1);
+  const label = (d, i) => `<span class="m" aria-hidden="true">${d === td ? 'Today' : i % 7 === 0 ? +d.slice(8) : ''}</span>`;
+  return `<p class="legend"><span><i style="background:var(--bar)"></i>Spent</span><span><i class="hatch"></i>Expected</span><span><i style="background:var(--bar-2)"></i>Regular payments</span></p>` +
+    `<div class="bars days forecast">` + past.map((d, i) => `<a href="#/day/${d}" class="sel" aria-label="${esc(longDay(d))}: spent ${money(spent.get(d) || 0)}"><span class="area">` +
+      `<span class="col${(spent.get(d) || 0) > max ? ' cut' : ''}" style="height:${h(spent.get(d) || 0)}%"></span></span>${label(d, back - 1 - i)}</a>`).join('') +
+    next.map((e, i) => `<div role="img" class="${i === 0 ? 'first' : ''}" aria-label="${esc(longDay(e.d))}: about ${money(e.total)}${e.regular.length ? ', including ' + esc(e.regular.map(r => r.merchant).join(', ')) : ''}">` +
+      `<span class="area"><span class="col f${e.total > max ? ' cut' : ''}" style="height:${h(e.total)}%">${e.reg ? `<i style="height:${(e.total > max ? Math.max(0, 1 - e.everyday / max) : e.reg / e.total) * 100}%"></i>` : ''}</span></span>` +
+      `<span class="m" aria-hidden="true">${(i + 1) % 7 === 0 ? +e.d.slice(8) : ''}</span></div>`).join('') + '</div>';
+}
+const upcoming = (F, days) => F.days.slice(0, days).flatMap(e => e.regular.map(r => ({ r, d: e.d })));
+// One row per payment: when it's next due and, when it's due more than once, how many times and the total.
+const upcomingRows = list => {
+  const g = new Map(); for (const x of list) (g.get(x.r) || g.set(x.r, []).get(x.r)).push(x.d);
+  return [...g].map(([r, ds]) => rk({ href: `#/merchant/${enc(merKey(r.merchant))}`, icon: icon(r.category), name: r.merchant,
+    sub: `${r.cadence} · ${ds.length > 1 ? `${ds.length}×, next ${dayLabel(ds[0])}` : dayLabel(ds[0])}`, value: r.A * ds.length })).join('');
+};
+function forecastPage() {
+  const F = forecast(30);
+  if (!F) return { title: 'Forecast', html: `<section class="card">${empty('Not enough history yet', 'The forecast needs at least 2 weeks of transactions.')}</section>` };
+  const w7 = F.sum(7), w30 = F.sum(30), max = Math.max(1, ...F.usual), up = upcoming(F, 30);
+  const range = x => `likely ${fmt(x.low)}–${fmt(x.high)}`;
+  const names = [0, 1, 2, 3, 4, 5, 6].map(i => new Date(Date.UTC(2024, 0, 7 + i)).toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' }));
+  return { title: 'Forecast', sub: 'Next 30 days', html:
+    `<section class="card"><dl class="stats"><div><dt>Next 7 days</dt><dd>${money(w7.exp)}</dd><dt>${range(w7)}</dt></div>` +
+    `<div><dt>Next 30 days</dt><dd>${money(w30.exp)}</dd><dt>${range(w30)}</dt></div></dl></section>` +
+    card('Day by day', 'last 14 days and next 30', forecastBars(F, 14, 30)) +
+    card('Expected regular payments', `${esc(state.currency)} ${fmt(up.reduce((a, x) => a + x.r.A, 0))}`, upcomingRows(up) || empty('None expected', 'A merchant needs 3 or more payments at a steady interval and amount to be treated as regular.')) +
+    card('Your usual everyday spending', 'by weekday', F.usual.map((v, i) => rk({ icon: names[i].slice(0, 2), name: names[i], value: v, bar: v / max })).join('')) +
+    `<section class="card"><h2>How this is worked out</h2><ul class="how">` +
+    `<li>Regular payments (same merchant, steady amount and interval) are placed on the day they're next due.</li>` +
+    `<li>Everyday spending uses your average for each weekday over the last ${Math.round(F.hist / 7)} weeks, without regular payments and one-off large purchases.</li>` +
+    `<li>The likely range is how much your everyday spending varied from week to week. Friend shares, refunds and ignored items count as they do elsewhere.</li></ul></section>` };
 }
 
 /* ---------- Routing ---------- */
@@ -672,7 +763,11 @@ function overview(rt, P, X) {
   const T = totals(X.cur), d = deltaPct(T.spent, totals(X.prev)), net = T.received - T.spent;
   const prevQs = P.step(-1), nextQs = P.step(1), canPrev = prevQs && P.start > state.earliest;
   let proj = '';
-  if (P.kind === 'month' && P.partial && P.d >= 7) {
+  const F = P.end >= today() ? forecast(30) : null;
+  if (P.kind === 'month' && P.partial && F) {
+    const rest = F.sum(P.N - P.d);
+    proj = `<p class="proj">Projected month-end: <b>${money(T.spent + rest.exp)}</b> <span class="muted-h">(likely ${fmt(T.spent + rest.low)}–${fmt(T.spent + rest.high)})</span></p>`;
+  } else if (P.kind === 'month' && P.partial && P.d >= 7) {
     const fixed = X.cur.filter(t => FIXED.has(t.category)).reduce((a, t) => a + t._s, 0);
     proj = `<p class="proj">Projected month-end: <b>${money(Math.round(fixed + (T.spent - fixed) / P.d * P.N))}</b></p>`;
   }
@@ -695,7 +790,12 @@ function overview(rt, P, X) {
   const td = today(), todayList = state.all.filter(t => t._d === td), Td = totals(todayList);
   const todayCard = P.start <= td && td <= P.end ? `<section class="card"><a class="ln" href="#/day/${td}"><span class="nm"><b>Today · ${money(Td.spent)}</b>` +
     `<small>${plural(Td.n || Td.count, 'transaction')}${vsUsual(Td.spent, td) ? ' · ' + vsUsual(Td.spent, td) : ''}</small></span>${go1}</a></section>` : '';
-  return { html: chips(P) + hero + todayCard +
+  const soon = F ? upcoming(F, 14) : [], w7 = F && F.sum(7);
+  const coming = F ? card('Coming up', 'based on your patterns', forecastBars(F, 14, 14) +
+    `<dl class="stats"><div><dt>Next 7 days</dt><dd>${money(w7.exp)}</dd><dt>likely ${fmt(w7.low)}–${fmt(w7.high)}</dt></div>` +
+    `<div><dt>Regular payments, next 14 days</dt><dd>${money(soon.reduce((a, x) => a + x.r.A, 0))}</dd><dt>${plural(soon.length, 'payment')}</dt></div></dl>` +
+    (soon.length ? upcomingRows(soon.slice(0, 3)) : ''), '#/forecast') : '';
+  return { html: chips(P) + hero + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
@@ -931,7 +1031,7 @@ function renderResults() {
 const PAGES = { overview, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage };
 const TITLES = Object.fromEntries(TABS.map(([k, label]) => [k, label]));
 
 function render() {
