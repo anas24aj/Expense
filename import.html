@@ -41,13 +41,31 @@
   .status.ok { color: var(--good); } .status.err { color: var(--bad); }
   .done a { display: inline-block; margin-top: 12px; color: var(--accent); font-weight: 600; }
   [hidden] { display: none !important; }
+  textarea, input[type=date], input[type=time] { width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  textarea { min-height: 120px; resize: vertical; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .row label { font-size: 13px; color: var(--text-2); display: grid; gap: 4px; }
 </style>
 </head>
 <body>
 <main>
   <div class="bar"><a href="/" aria-label="Back to dashboard">‹</a><h1>Import old SMS</h1></div>
 
-  <section class="card">
+  <section class="card" id="paste-card">
+    <h2>Paste a bank SMS</h2>
+    <p class="note" style="margin:0 0 10px">In Messages, press and hold a bank SMS, tap <b>Copy</b>, then paste it here. The date and time are read from the message when it has them; check them before adding.</p>
+    <form id="paste">
+      <textarea id="sms" required placeholder="Paste the SMS here" aria-label="SMS text"></textarea>
+      <div class="row">
+        <label>Date<input type="date" id="day" required></label>
+        <label>Time<input type="time" id="at" value="12:00" required></label>
+      </div>
+      <button class="primary" id="add">Add transaction</button>
+      <p class="status" id="paste-status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <section class="card android">
     <h2>1. Export your messages</h2>
     <ol>
       <li>Install <b>SMS Backup &amp; Restore</b> (by SyncTech) from the Play Store.</li>
@@ -57,7 +75,7 @@
     </ol>
   </section>
 
-  <section class="card">
+  <section class="card android">
     <h2>2. Choose that file</h2>
     <label class="pick">
       <input type="file" id="file" accept=".xml,text/xml,application/xml">
@@ -81,6 +99,56 @@ const MONEY = /(rs\.?|inr|₹|sar|sr|ريال)\s*:?\s*[0-9٠-٩]|[0-9٠-٩]\s*(s
 const BATCH = 200;
 const $ = id => document.getElementById(id);
 let messages = [];
+
+// iPhones can't export SMS: only the paste box applies there.
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+  document.querySelectorAll('.android').forEach(el => { el.hidden = true; });
+else $('paste-card').querySelector('h2').textContent = 'Or paste a bank SMS';
+
+// A copied SMS has no arrival time, so take the date (and time) from its text when the bank wrote them:
+// 2026-10-23, 23/10/2026, 23-10-26, 12-Oct-26 (day first, as Saudi and Indian banks write it).
+const MONTHS = 'jan feb mar apr may jun jul aug sep oct nov dec'.split(' ');
+function dateIn(text) {
+  const t = text.replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c));
+  const y4 = y => y.length === 2 ? '20' + y : y, two = n => String(n).padStart(2, '0');
+  let m, d = null;
+  if ((m = t.match(/\b(20\d\d)-(\d{1,2})-(\d{1,2})\b/))) d = [m[1], m[2], m[3]];
+  else if ((m = t.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4}|\d{2})\b/))) d = [y4(m[3]), m[2], m[1]];
+  else if ((m = t.match(/\b(\d{1,2})[- ]?([a-z]{3})[a-z]*[- ,]*(\d{4}|\d{2})\b/i)) && MONTHS.includes(m[2].toLowerCase())) d = [y4(m[3]), MONTHS.indexOf(m[2].toLowerCase()) + 1, m[1]];
+  const day = d && `${d[0]}-${two(d[1])}-${two(d[2])}`;
+  const dt = d && new Date(Date.UTC(+d[0], +d[1] - 1, +d[2]));  // rejects 31/02 and the like
+  const ok = dt && dt.getUTCMonth() === +d[1] - 1 && dt.getUTCDate() === +d[2] && day <= today();
+  const time = t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  return { day: ok ? day : '', time: time ? `${two(time[1])}:${time[2]}` : '' };
+}
+const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
+$('day').max = today();
+$('sms').addEventListener('input', () => {
+  const found = dateIn($('sms').value);
+  if (found.day) $('day').value = found.day;
+  $('at').value = found.time || '12:00';  // don't carry the last message's time over
+});
+$('paste').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = $('sms').value.trim(), status = $('paste-status');
+  status.className = 'status';
+  if (!MONEY.test(body)) { status.className = 'status err'; status.textContent = 'No SAR or INR amount in this text, so it is not a transaction.'; return; }
+  const off = -new Date(`${$('day').value}T${$('at').value}`).getTimezoneOffset(), sign = off < 0 ? '-' : '+', a = Math.abs(off);
+  const received_at = `${$('day').value}T${$('at').value}:00${sign}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+  $('add').disabled = true;
+  try {
+    const r = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ sender: 'Pasted', body, received_at }] }) });
+    if (r.status === 401) { location.href = '/login'; return; }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `server said ${r.status}`);
+    if ((await r.json()).stored) {
+      status.className = 'status ok'; status.textContent = 'Added. Paste the next one.';
+      $('sms').value = ''; $('sms').focus();
+    } else status.textContent = 'Not added: it is already there, or it is an OTP, offer or other message that is not a transaction.';
+  } catch (err) {
+    status.className = 'status err'; status.textContent = `Could not add it: ${err.message}`;
+  } finally { $('add').disabled = false; }
+});
 
 $('file').addEventListener('change', async () => {
   const file = $('file').files[0];
