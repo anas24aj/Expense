@@ -75,11 +75,19 @@
     </ol>
   </section>
 
-  <section class="card android">
-    <h2>2. Choose that file</h2>
+  <section class="card iphone" hidden>
+    <h2>Many at once: 1. Save them to Files</h2>
+    <ol>
+      <li>In <b>Messages</b>, open one bank's chat. Press and hold a message, tap <b>More…</b>, and tick all its bank messages.</li>
+      <li>Tap <b>Share</b> → <b>Save to Files</b> → <b>On My iPhone</b> → <b>Save</b>. Each message becomes a small file.</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2 id="file-step">2. Choose that file</h2>
     <label class="pick">
-      <input type="file" id="file" accept=".xml,text/xml,application/xml">
-      <strong>Choose backup file</strong>
+      <input type="file" id="file" multiple>
+      <strong>Choose file</strong>
       <span id="file-name">sms-….xml from the SMSBackupRestore folder</span>
     </label>
     <p class="note">The file is read on this phone. Only messages with an amount in SAR or INR are sent to your site; personal chats stay on your phone.</p>
@@ -100,10 +108,13 @@ const BATCH = 200;
 const $ = id => document.getElementById(id);
 let messages = [];
 
-// iPhones can't export SMS: only the paste box applies there.
-if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+// iPhones can't export SMS: there, messages are pasted, or saved one file each with Share → Save to Files.
+if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
   document.querySelectorAll('.android').forEach(el => { el.hidden = true; });
-else $('paste-card').querySelector('h2').textContent = 'Or paste a bank SMS';
+  document.querySelector('.iphone').hidden = false;
+  $('file-step').textContent = '2. Choose those files';
+  $('file-name').textContent = 'In Files, tap Select, pick all the saved messages, then Open';
+} else $('paste-card').querySelector('h2').textContent = 'Or paste a bank SMS';
 
 // A copied SMS has no arrival time, so take the date (and time) from its text when the bank wrote them:
 // 2026-10-23, 23/10/2026, 23-10-26, 12-Oct-26 (day first, as Saudi and Indian banks write it).
@@ -121,6 +132,66 @@ function dateIn(text) {
   const time = t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
   return { day: ok ? day : '', time: time ? `${two(time[1])}:${time[2]}` : '' };
 }
+// '2026-10-05T08:02:00+03:00': this phone's time zone, so the transaction lands on the right day.
+function stamp(day, time) {
+  const off = -new Date(`${day}T${time}`).getTimezoneOffset(), a = Math.abs(off);
+  return `${day}T${time}:00${off < 0 ? '-' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+}
+// Messages' Save to Files writes each message as Apple rich text (RTFD); this pulls the plain text out of its RTF:
+// skips font/colour tables, turns \<newline> and \par into line breaks, \uN and \'hh into characters.
+function rtfText(s) {
+  let out = '', depth = 0, uc = 1, i = 0;
+  const skip = [], cp1252 = new TextDecoder('windows-1252');
+  const fallback = () => { for (let k = 0; k < uc && i < s.length; k++) i += s.startsWith("\\'", i) ? 4 : 1; };
+  while (i < s.length) {
+    const c = s[i], on = !skip.length;
+    if (c === '{') {
+      depth++; i++;
+      if (/^\\(\*|fonttbl|colortbl|stylesheet|info)/.test(s.slice(i, i + 12))) skip.push(depth);
+    } else if (c === '}') {
+      if (skip.at(-1) === depth) skip.pop();
+      i++;
+      if (!--depth) break;
+    } else if (c === '\\') {
+      const n = s[i + 1];
+      if (n === '\n' || n === '\r') { if (on) out += '\n'; i += 2; continue; }
+      if ('\\{}'.includes(n)) { if (on) out += n; i += 2; continue; }
+      if (n === "'") { if (on) out += cp1252.decode(new Uint8Array([parseInt(s.substr(i + 2, 2), 16)])); i += 4; continue; }
+      const m = /^\\([a-z]+)(-?\d+)? ?/i.exec(s.slice(i, i + 40));
+      if (!m) { i += 2; continue; }
+      i += m[0].length;
+      if (m[1] === 'uc') uc = +m[2];
+      else if (m[1] === 'u') { if (on) out += String.fromCharCode((+m[2] + 65536) % 65536); fallback(); }
+      else if (on && (m[1] === 'par' || m[1] === 'line')) out += '\n';
+      else if (on && m[1] === 'tab') out += '\t';
+    } else {
+      if (on && c !== '\n' && c !== '\r') out += c;  // raw newlines in RTF source are not text
+      i++;
+    }
+  }
+  return out;
+}
+async function fromSavedMessages(files) {
+  let undated = 0, notBank = 0;
+  messages = [];
+  for (const f of files) {
+    if (f.size > 1048576) { notBank++; continue; }  // a saved SMS is a few hundred bytes
+    const buf = await f.arrayBuffer(), raw = new TextDecoder('windows-1252').decode(buf), at = raw.indexOf('{\\rtf');
+    const text = (at >= 0 ? rtfText(raw.slice(at)) : new TextDecoder().decode(buf)).trim();
+    if (!MONEY.test(text)) { notBank++; continue; }
+    const d = dateIn(text);
+    if (!d.day) { undated++; continue; }
+    messages.push({ sender: 'iPhone', body: text, received_at: stamp(d.day, d.time || '12:00') });
+  }
+  $('found').hidden = false;
+  $('found-text').textContent = `Found ${messages.length.toLocaleString()} bank messages in ${files.length.toLocaleString()} files.` +
+    (undated ? ` ${undated} skipped because they have no date in the text: paste those above and set the date.` : '') +
+    (notBank ? ` ${notBank} had no SAR or INR amount.` : '');
+  $('go').textContent = `Import ${messages.length.toLocaleString()} messages`;
+  $('go').disabled = !messages.length;
+  $('bar').style.width = '0';
+  $('progress-text').textContent = '';
+}
 const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
 $('day').max = today();
 $('sms').addEventListener('input', () => {
@@ -133,8 +204,7 @@ $('paste').addEventListener('submit', async e => {
   const body = $('sms').value.trim(), status = $('paste-status');
   status.className = 'status';
   if (!MONEY.test(body)) { status.className = 'status err'; status.textContent = 'No SAR or INR amount in this text, so it is not a transaction.'; return; }
-  const off = -new Date(`${$('day').value}T${$('at').value}`).getTimezoneOffset(), sign = off < 0 ? '-' : '+', a = Math.abs(off);
-  const received_at = `${$('day').value}T${$('at').value}:00${sign}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+  const received_at = stamp($('day').value, $('at').value);
   $('add').disabled = true;
   try {
     const r = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -151,9 +221,13 @@ $('paste').addEventListener('submit', async e => {
 });
 
 $('file').addEventListener('change', async () => {
-  const file = $('file').files[0];
+  const files = [...$('file').files], file = files[0];
   $('error').textContent = ''; $('found').hidden = true; $('done').hidden = true;
   if (!file) return;
+  if (files.length > 1 || !/\.xml$/i.test(file.name)) {
+    $('file-name').textContent = `${files.length.toLocaleString()} file${files.length > 1 ? 's' : ''} chosen`;
+    return fromSavedMessages(files);
+  }
   $('file-name').textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)} MB`;
   if (file.size > 300 * 1048576) {
     $('error').textContent = 'This file is very large, probably because it includes MMS photos. Make a new backup with MMS turned off.';
