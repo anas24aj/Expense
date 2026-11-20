@@ -815,7 +815,7 @@ function setData(sum, all) {
   state.sum = sum; state.currency = sum.currency; state.all = prep(all);
   state.earliest = state.all.reduce((a, t) => t._d < a ? t._d : a, today());
   $('friend-names').innerHTML = [...new Set(state.all.map(t => t.friend).filter(Boolean))].map(n => `<option value="${esc(n)}">`).join('');
-  if (!state.moneyAt || Date.now() - state.moneyAt > 60000) loadMoney();  // EMI alerts on Overview need it too
+  if (!state.moneyAt || Date.now() - state.moneyAt > 60000) { loadMoney(); loadRate(); }  // EMI alerts and net worth on Overview need them too
 }
 // Keep the screen current without a manual refresh: ask "anything new?" when the app comes back to the
 // foreground and every 30 s while it's on screen (never in the background), and reload only when there is.
@@ -935,12 +935,12 @@ function row(t, withDate) {
 }
 /* ---------- Money: loans, savings and the payoff plan (loans are planned in INR; SAR converts at state.rate) ---------- */
 // localStorage can throw (private browsing, blocked storage): treat that as empty.
-const ls = { get: k => { try { return ls.get(k); } catch { return null; } },
-  set: (k, v) => { try { ls.set(k, v); } catch {} }, del: k => { try { localStorage.removeItem(k); } catch {} } };
+const ls = { get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: k => { try { localStorage.removeItem(k); } catch {} } };
 const inrFmt = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
 const rupees = c => `₹${c < 0 ? '−' : ''}${inrFmt.format(Math.abs(c) / 100)}`;
 const toInr = (c, cur) => cur === 'INR' ? c : Math.round(c * state.rate);
-state.rate = +(ls.get('inrPerSar') || 0) || 23.4;  // INR per SAR, refreshed from the USD rate below
+state.rate = +(ls.get('inrPerSar') || 0) || 24.9;  // INR per SAR until today's rate arrives (Nov 2026: 24.90)
 state.extra = +(ls.get('extraInr') || 0) || 0;
 async function loadMoney() {
   state.moneyAt = Date.now();
@@ -951,14 +951,15 @@ async function loadMoney() {
     if (!document.querySelector('details.txn[open], form.holding:focus-within')) render();
   } catch {}
 }
-// SAR is pegged to the dollar at 3.75, so INR per SAR = INR per USD / 3.75. Once a day; a rate you type wins.
+// Today's rate, looked up by the server from open services (open.er-api.com, else Frankfurter). A rate you type wins.
 async function loadRate() {
-  if (ls.get('rateMine') || Date.now() - +(ls.get('rateAt') || 0) < 864e5) return;
+  if (ls.get('rateMine') || Date.now() - +(ls.get('rateAt') || 0) < 6 * 3600e3) return;
   try {
-    const usd = (await (await fetch('https://api.frankfurter.app/latest?from=USD&to=INR')).json()).rates.INR;
-    state.rate = Math.round(usd / 3.75 * 100) / 100;
-    ls.set('inrPerSar', state.rate); ls.set('rateAt', Date.now());
-    if (location.hash.startsWith('#/money')) render();
+    const r = await fetch('/api/rate');
+    if (!r.ok) return;
+    const j = await r.json();
+    state.rate = j.rate; ls.set('inrPerSar', j.rate); ls.set('rateAt', Date.now()); ls.set('rateSource', j.source);
+    if (location.hash.startsWith('#/money') || location.hash.startsWith('#/overview') || !location.hash) render();
   } catch {}
 }
 const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().slice(0, 7));
@@ -1013,7 +1014,7 @@ function moneyPage() {
     `<section class="hero"><div class="label">Net worth</div><div class="total"><small>₹</small><span>${inrFmt.format((saved - debt) / 100)}</span></div>` +
     `<div class="kpis"><div><span>Savings</span><b>${rupees(saved)}</b></div><div><span>Loans</span><b>${rupees(debt)}</b></div>` +
     `<div><span>Debt-free (plan)</span><b>${loans.length ? whenMonths(best.months) : '–'}</b></div><div><span>Interest still to pay</span><b>${loans.length ? rupees(best.interest) : '–'}</b></div></div>` +
-    `<p class="proj">1 SAR = ₹${state.rate} ${ls.get('rateMine') ? '(your rate)' : ls.get('rateAt') ? '(today)' : '(approximate: set it below)'}</p></section>` +
+    `<p class="proj">1 SAR = ₹${state.rate} ${ls.get('rateMine') ? '(your rate)' : ls.get('rateAt') ? `(today, ${esc(ls.get('rateSource') || '')})` : '(approximate: today’s rate unavailable)'}</p></section>` +
     card('Loans', rupees(debt), loans.map(loanRow).join('') + `<details class="hold add"><summary class="link">+ Add a loan</summary>${holdingForm(null, 'loan')}</details>`) +
     (loans.some(h => h.currency === 'INR') ? card('Payoff plan', 'INR loans',
       `<label class="extra">Extra each month toward the loans <span class="row2"><b>₹</b><input type="text" inputmode="numeric" id="extra" value="${state.extra || ''}" placeholder="0">` +
@@ -1025,7 +1026,7 @@ function moneyPage() {
       '<p class="muted small">Indian home loans on a floating rate can be prepaid without a penalty; check fixed-rate and car loans with the bank first. This is a guide from your numbers, not financial advice.</p>') : '') +
     card('Savings', rupees(saved), saves.map(saveRow).join('') + `<details class="hold add"><summary class="link">+ Add savings</summary>${holdingForm(null, 'saving')}</details>`) +
     card('Exchange rate', '', `<label class="extra">₹ per 1 SAR <span class="row2"><input type="text" inputmode="decimal" id="rate" value="${state.rate}"></span></label>` +
-      `<p class="muted small">Filled in daily from the dollar rate (SAR is fixed at 3.75 to the dollar). Type your own to keep it; clear it to go back to the daily rate.</p>`) };
+      `<p class="muted small">Looked up every few hours from open exchange-rate services (open.er-api.com, or Frankfurter's dollar rate ÷ 3.75). Type your own to keep it; clear it to go back to today’s rate.</p>`) };
 }
 const friendNote = t => `${t.friend} · ${t.direction === 'credit' ? 'paid you back'
   : t._t >= t._c ? 'all theirs' : `they owe ${fmt(t._t)}, yours ${fmt(t._mine)}`}${t.settled ? ' · settled' : ''}`;

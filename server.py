@@ -19,6 +19,7 @@ from decimal import Decimal
 from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 from parse import AD, ARABIC_DIGITS, account_of, categorize, compile_rules, merchant_of, parse
@@ -427,6 +428,30 @@ def money(db, currency='INR', extra=0, every=None):
             'plans': {'as_is': plan(loans, 0), 'avalanche': plan(loans, extra, 'avalanche'), 'snowball': plan(loans, extra, 'snowball')}}
 
 
+# Open exchange-rate services, no key needed. SAR is pegged at 3.75 to the dollar, so the dollar rate works too.
+RATE_SOURCES = [('open.er-api.com', 'https://open.er-api.com/v6/latest/SAR', lambda d: d['rates']['INR']),
+                ('frankfurter.dev', 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=INR', lambda d: d['rates']['INR'] / 3.75)]
+RATE_TTL = 6 * 3600
+_rate = {}
+
+
+def inr_per_sar(now=None):
+    """Today's ₹ per SAR from the first service that answers, kept for 6 hours. None if none answers."""
+    now = now or time.time()
+    if _rate and now - _rate['at'] < RATE_TTL:
+        return _rate['value']
+    for name, url, pick in RATE_SOURCES:
+        try:
+            with urlopen(url, timeout=5) as r:
+                value = round(float(pick(json.load(r))), 4)
+            if 10 < value < 100:  # a wildly wrong number is worse than none
+                _rate.update(at=now, value={'rate': value, 'source': name, 'at': datetime.now(timezone.utc).isoformat(timespec='minutes')})
+                return _rate['value']
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
 def save_holding(db, h):
     if h.get('id'):
         if not db.run('SELECT id FROM holdings WHERE id = :id', id=h['id']):
@@ -779,7 +804,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -818,6 +843,9 @@ def _app(environ, start_response):
             except KeyError:
                 return respond('404 Not Found', {'error': 'no such transaction'})
             return respond('200 OK', {'deleted': True, **refreshed(db, query)})
+        if path == '/api/rate':
+            rate = inr_per_sar()
+            return respond('200 OK' if rate else '503 Service Unavailable', rate or {'error': 'no exchange-rate service answered'})
         if path.startswith('/api/money'):
             if path == '/api/money' and method == 'POST':
                 try:

@@ -493,6 +493,29 @@ class AppTest(unittest.TestCase):
         self.assertEqual(json.loads(self.call('POST', '/api/money/delete', json.dumps({'id': hid}).encode())[1])['holdings'], [])
         self.assertEqual(self.call('GET', '/api/money', auth='')[0], 401)
 
+    def test_exchange_rate_falls_back_and_rejects_nonsense(self):
+        server._rate.clear()
+        answers = iter([OSError('down'), {'rates': {'INR': 93.375}}])  # first service down, the dollar rate answers
+        class Reply(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        def fake(url, timeout):
+            a = next(answers)
+            if isinstance(a, Exception):
+                raise a
+            return Reply(json.dumps(a).encode())
+        real, server.urlopen = server.urlopen, fake
+        try:
+            status, out = self.call('GET', '/api/rate')
+            self.assertEqual((status, json.loads(out)['rate'], json.loads(out)['source']), (200, 24.9, 'frankfurter.dev'))
+            self.assertEqual(self.call('GET', '/api/rate')[0], 200)  # kept: no second lookup (the fake has no answers left)
+            server._rate.clear()
+            server.urlopen = lambda url, timeout: Reply(b'{"rates": {"INR": 0.04}}')  # upside down: refused
+            self.assertEqual(self.call('GET', '/api/rate')[0], 503)
+        finally:
+            server.urlopen = real
+            server._rate.clear()
+
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),
                          (SAMPLES[8][0], '2026-09-17T10:00:00+03:00'), (SAMPLES[0][0], '2026-10-01T10:00:00+05:30')):
