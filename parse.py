@@ -16,7 +16,7 @@ AMOUNT_LINE = re.compile(r'(?:\bamount\b|\bamt\b|مبلغ)[^\n]*', re.I)  # 'Amo
 
 # Arabic words are matched as substrings because Arabic attaches prefixes ("بال", "و") to words.
 DEBIT = re.compile(r'\b(?:debited|spent|paid|sent|withdrawn|withdrawal|purchase|outgoing|pos)\b|شراء|خصم|سحب|صادرة|سداد|دفع', re.I)
-CREDIT = re.compile(r'\b(?:credited|received|deposited|deposit|incoming|refunded|refund|reversal)\b|إيداع|ايداع|واردة|استرداد|مسترد|راتب', re.I)
+CREDIT = re.compile(r'\b(?:credited|received|deposited|deposit|incoming|refunded|refund|reversal|reversed|reverse)\b|إيداع|ايداع|واردة|استرداد|مسترد|راتب', re.I)
 # Messages that mention money but are not a completed transaction.
 SKIP = re.compile(
     r'\b(?:otp|one[- ]time password|verification code|passcode|will be debited|is due|due on|requested|pre-?approved|offer)\b'

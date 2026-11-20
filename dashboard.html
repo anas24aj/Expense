@@ -1216,7 +1216,7 @@ function skippedRow(d) {
   const text = d.body.replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c)).replace(/٫/g, '.');
   const amount = (text.match(/(?:sar|sr|inr|rs\.?|₹|ريال)\s*:?\s*(\d[\d,]*(?:\.\d{1,2})?)|(\d[\d,]*(?:\.\d{1,2})?)\s*(?:sar|sr|inr|rs|ريال)/i) || [])
     .slice(1).find(Boolean)?.replace(/,/g, '') || '';
-  const inr = /\b(?:inr|rs)\b|₹/i.test(text), credit = /credit|receiv|refund|deposit|incoming|إيداع|واردة|استرداد/i.test(text);
+  const inr = /\b(?:inr|rs)\b|₹/i.test(text), credit = /credit|receiv|refund|revers|deposit|incoming|إيداع|واردة|استرداد/i.test(text);
   const opt = (v, label, on) => `<option value="${v}" ${on ? 'selected' : ''}>${label}</option>`;
   return `<li><details class="skipped"><summary class="delivery"><span>${ago(d.at)} · ${esc(d.sender)}</span><span class="link-ish">not a transaction · review ›</span></summary>` +
     `<pre>${esc(d.body)}</pre><form class="keep" data-id="${d.id}">` +

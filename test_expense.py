@@ -487,6 +487,14 @@ class AppTest(unittest.TestCase):
         self.assertEqual(cats, {40.0: 'Uncategorized', 900.0: 'Income'})  # the refund waits for a category; a transfer in is income
         self.assertEqual([t['amount'] for t in s['to_review']], [40.0])
 
+    def test_reverse_transaction_from_iphone_shortcut(self):
+        # An iPhone Shortcut that sends the whole message as its sender too; "Reverse Transaction" is money back.
+        body = 'Reverse Transaction\nBy:0785;Visa\nAt:Amazon\nAmount: SAR 49.00\nOn: 2026-11-19 21:40'
+        self.assertEqual(self.call('POST', '/sms', json.dumps({'sender': body, 'body': body}).encode())[0], 201)
+        t = json.loads(self.call('GET', '/api/transactions')[1])[0]
+        self.assertEqual((t['direction'], t['amount'], t['category']), ('credit', 49.0, 'Shopping'))  # a refund, not income
+        self.assertTrue(t['account'].startswith('iPhone'))
+
     def test_latest_marker_changes_when_an_sms_arrives(self):
         before = json.loads(self.call('GET', '/api/latest')[1])
         self.call('POST', '/sms', json.dumps({'sender': 'AlRajhiBank', 'body': SAMPLES[6][0]}).encode())

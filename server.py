@@ -70,7 +70,7 @@ NOT_COUNTED = {IGNORED, OWN_TRANSFER}
 # Advert senders: Saudi rules put "AD" on promotional sender names ("Mobily-AD"); Indian promotional ones end in "-P".
 AD_SENDER = re.compile(r'(?:^ad[-_ ]|[-_ ]ad$|[-_ ]adv$|-p$)', re.I)
 # A refund from a merchant with no category is money back on spending, not income: it waits for a category.
-REFUND = re.compile(r'\b(?:refund(?:ed)?|reversal|reversed|cashback)\b|استرداد|مسترد', re.I)
+REFUND = re.compile(r'\b(?:refund(?:ed)?|reversal|reversed|reverse|cashback)\b|استرداد|مسترد', re.I)
 # Words that mark a bank-to-bank transfer (English and Arabic), used to pair the two sides of an own transfer.
 TRANSFER = re.compile(r'\b(?:transfer(?:red)?|trf|xfer|neft|imps|rtgs|upi|iban|sarie)\b|حوالة|تحويل', re.I)
 # shortcut: pairs only same-currency, same-amount SMS within an hour; a slower or cross-currency transfer
@@ -533,6 +533,8 @@ def read_sms(environ):
 def clean_message(msg):
     """(sender, body, received_at) from one message dict; raises ValueError/KeyError/TypeError when it's malformed."""
     sender, body = str(msg['sender']).strip(), str(msg['body']).strip()
+    if len(sender) > 40 or '\n' in sender or sender == body:  # an iPhone Shortcut sending the message as its sender
+        sender = 'iPhone'
     received_at = str(msg.get('received_at') or '').strip()
     if received_at.isdigit():  # epoch milliseconds from the phone; shown in EXPENSE_TZ so months split at local midnight
         when = datetime.fromtimestamp(int(received_at) / 1000, ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh'))
