@@ -424,8 +424,16 @@ def money(db, currency='INR', extra=0, every=None):
                     h['payments'].append({'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount']})
         items.append(h)
     loans = [h for h in items if h['kind'] == 'loan' and h['currency'] == currency]
-    return {'holdings': items, 'currency': currency, 'extra': extra / 100,
-            'plans': {'as_is': plan(loans, 0), 'avalanche': plan(loans, extra, 'avalanche'), 'snowball': plan(loans, extra, 'snowball')}}
+    as_is = plan(loans, 0)
+    # What prepaying 1 lakh (or 1,000 SAR) on each loan today would save, for the suggestions.
+    lump, prepay = 1_00000_00 if currency == 'INR' else 1000_00, {}
+    for h in loans:
+        if h['balance_now'] > 0:
+            after = plan([{**l, 'balance_now': max(0, l['balance_now'] - lump)} if l is h else l for l in loans], 0)
+            prepay[h['id']] = {'interest': as_is['interest'] - after['interest'],
+                               'months': (as_is['payoff'].get(h['id']) or PLAN_MONTHS) - (after['payoff'].get(h['id']) or PLAN_MONTHS)}
+    return {'holdings': items, 'currency': currency, 'extra': extra / 100, 'lump': lump / 100, 'prepay': prepay,
+            'plans': {'as_is': as_is, 'avalanche': plan(loans, extra, 'avalanche'), 'snowball': plan(loans, extra, 'snowball')}}
 
 
 # Open exchange-rate services, no key needed. SAR is pegged at 3.75 to the dollar, so the dollar rate works too.

@@ -280,6 +280,9 @@ class StoreMixin:
         faster = server.money(db, 'INR', 50000_00)['plans']['avalanche']
         self.assertLess(faster['months'], p['avalanche']['months'])
         self.assertLess(faster['interest'], p['avalanche']['interest'])
+        car = next(x for x in m['holdings'] if x['name'] == 'Car')
+        self.assertGreater(m['prepay'][car['id']]['interest'], 0)  # a lakh prepaid saves interest
+        self.assertGreater(m['prepay'][car['id']]['months'], 0)    # and closes it sooner
         # A loan whose EMI doesn't cover its interest is never paid off.
         self.assertIsNone(server.plan([{'id': 1, 'balance_now': 100000, 'rate_bp': 2400, 'emi_minor': 1000}], 0)['months'])
         # 1,000 at 0 % with an EMI of 300 takes 4 months.
