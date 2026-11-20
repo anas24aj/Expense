@@ -61,6 +61,15 @@ MAX_FRIEND = 40
 HOLDINGS_SCHEMA = '''CREATE TABLE IF NOT EXISTS holdings (id {id} PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
   currency TEXT NOT NULL, balance_minor BIGINT NOT NULL, rate_bp INTEGER NOT NULL DEFAULT 0, emi_minor BIGINT NOT NULL DEFAULT 0,
   due_day INTEGER NOT NULL DEFAULT 0, pattern TEXT NOT NULL DEFAULT '', as_of TEXT NOT NULL)'''
+# Payments you record yourself on the Plan page: an EMI the SMS didn't show, or an extra (pre)payment.
+PAYMENTS_SCHEMA = '''CREATE TABLE IF NOT EXISTS loan_payments (id {id} PRIMARY KEY, holding_id BIGINT NOT NULL, paid_on TEXT NOT NULL,
+  amount_minor BIGINT NOT NULL, note TEXT NOT NULL DEFAULT '')'''
+# The monthly check-in: what you planned (an extra payment, a spending limit) and whether you did it.
+ACTIONS_SCHEMA = '''CREATE TABLE IF NOT EXISTS plan_actions (month TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
+  target_minor BIGINT NOT NULL DEFAULT 0, actual_minor BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL, at TEXT NOT NULL,
+  PRIMARY KEY (month, kind, ref))'''
+PLAN_KINDS = {'balances', 'emi', 'extra', 'limit', 'savings'}
+PLAN_STATUS = {'planned', 'done', 'skipped'}
 PLAN_MONTHS = 600  # 50 years: a loan whose EMI doesn't cover its interest never ends
 # SMS of transactions you deleted, so the phone sending them again (or an import) doesn't bring them back.
 DELETED_SCHEMA = 'CREATE TABLE IF NOT EXISTS deleted_sms (body TEXT PRIMARY KEY)'
@@ -109,7 +118,7 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         if url not in DB._schema_ready:  # once per process, not per request
             self.run(schema)
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
             try:
@@ -409,19 +418,28 @@ def money(db, currency='INR', extra=0, every=None):
     """Loans (with today's balance after the EMI SMS since it was entered) and savings, plus payoff plans for
     the loans in `currency`: as they are, and with `extra` a month by each strategy."""
     every = transactions(db) if every is None else every
-    items = []
+    items, recorded = [], defaultdict(list)
+    for r in db.run('SELECT * FROM loan_payments ORDER BY paid_on, id'):
+        recorded[r['holding_id']].append(r)
     for h in db.run('SELECT * FROM holdings ORDER BY kind, id'):
         h = dict(h)
         h['balance_now'], h['payments'] = h['balance_minor'], []
-        if h['kind'] == 'loan' and h['pattern'].strip():
+        if h['kind'] == 'loan':
             key = h['pattern'].strip().lower()
-            for t in sorted(every, key=lambda t: t['received_at']):
-                if (t['direction'] == 'debit' and t['currency'] == h['currency'] and t['received_at'][:10] > h['as_of']
-                        and t['category'] not in NOT_COUNTED and key in t['body'].lower()):
-                    # shortcut: one month's interest per payment, as for a monthly EMI; two EMIs in a month overstate it
-                    paid = round(t['amount'] * 100)
-                    h['balance_now'] = max(0, h['balance_now'] + round(h['balance_now'] * h['rate_bp'] / 120000) - paid)
-                    h['payments'].append({'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount']})
+            sms = [{'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount'], 'source': 'sms'} for t in every
+                   if key and t['direction'] == 'debit' and t['currency'] == h['currency'] and t['received_at'][:10] > h['as_of']
+                   and t['category'] not in NOT_COUNTED and key in t['body'].lower()]
+            sms_months = {p['date'][:7] for p in sms}
+            mine = [{'pid': r['id'], 'date': r['paid_on'], 'amount': r['amount_minor'] / 100, 'source': r['note'] or 'manual'}
+                    for r in recorded[h['id']] if r['paid_on'] >= h['as_of']  # recorded on the day you typed the balance: after it
+                    and not (r['note'] == 'EMI' and r['paid_on'][:7] in sms_months)]  # the SMS turned up after all: count it once
+            interest_month = None
+            for p in sorted(sms + mine, key=lambda p: p['date']):
+                if p['date'][:7] != interest_month:  # one month's interest per month with a payment (yearly rate / 12)
+                    interest_month = p['date'][:7]
+                    h['balance_now'] += round(h['balance_now'] * h['rate_bp'] / 120000)
+                h['balance_now'] = max(0, h['balance_now'] - round(p['amount'] * 100))
+                h['payments'].append(p)
         items.append(h)
     loans = [h for h in items if h['kind'] == 'loan' and h['currency'] == currency]
     as_is = plan(loans, 0)
@@ -458,6 +476,28 @@ def inr_per_sar(now=None):
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return None
+
+
+def record_payment(db, holding_id, paid_on, amount_minor, note):
+    if not db.run("SELECT id FROM holdings WHERE id = :id AND kind = 'loan'", id=holding_id):
+        raise KeyError('no such loan')
+    db.run('INSERT INTO loan_payments (holding_id, paid_on, amount_minor, note) VALUES (:h, :d, :a, :n)',
+           h=holding_id, d=paid_on, a=amount_minor, n=note)
+
+
+def plan_month(db, month):
+    """This month's check-in actions and last month's, for the review."""
+    y, m = map(int, month.split('-'))
+    previous = f'{y - (m == 1):04d}-{(m - 2) % 12 + 1:02d}'
+    rows = lambda mo: db.run('SELECT * FROM plan_actions WHERE month = :m ORDER BY at', m=mo)
+    return {'month': month, 'actions': rows(month), 'previous_month': previous, 'previous': rows(previous)}
+
+
+def save_action(db, a):
+    db.run('INSERT INTO plan_actions (month, kind, ref, target_minor, actual_minor, status, at) '
+           'VALUES (:month, :kind, :ref, :target_minor, :actual_minor, :status, :at) '
+           'ON CONFLICT (month, kind, ref) DO UPDATE SET target_minor = excluded.target_minor, '
+           'actual_minor = excluded.actual_minor, status = excluded.status, at = excluded.at', **a)
 
 
 def save_holding(db, h):
@@ -678,6 +718,30 @@ def read_friend(environ):
     return int(msg['id']), friend, theirs
 
 
+def read_payment(environ):
+    """{"holding_id": 3, "amount": "57500", "paid_on": "2026-12-05", "note": "EMI" | "Extra"}"""
+    msg = read_json(environ, MAX_BODY)
+    amount = int(Decimal(str(msg['amount']).replace(',', '').strip()) * 100)
+    paid_on = str(msg['paid_on'])
+    datetime.strptime(paid_on, '%Y-%m-%d')
+    note = str(msg.get('note') or '')
+    if not 0 < amount < 10 ** 13 or note not in ('EMI', 'Extra', ''):
+        raise ValueError('amount must be more than 0; note EMI or Extra')
+    return int(msg['holding_id']), paid_on, amount, note
+
+
+def read_action(environ):
+    """{"month": "2026-12", "kind": "extra", "ref": "3", "target": "20000", "actual": "0", "status": "planned"}"""
+    msg = read_json(environ, MAX_BODY)
+    minor = lambda v: int(Decimal(str(v or 0).replace(',', '').strip()) * 100)
+    a = {'month': str(msg['month']), 'kind': msg['kind'], 'ref': str(msg.get('ref') or '')[:60], 'target_minor': minor(msg.get('target')),
+         'actual_minor': minor(msg.get('actual')), 'status': msg['status'], 'at': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+    datetime.strptime(a['month'], '%Y-%m')
+    if a['kind'] not in PLAN_KINDS or a['status'] not in PLAN_STATUS or not 0 <= a['target_minor'] < 10 ** 13 or not 0 <= a['actual_minor'] < 10 ** 13:
+        raise ValueError('unknown step or status, or a bad amount')
+    return a
+
+
 def read_holding(environ):
     """A loan or saving from the Money page: {kind, name, currency, balance, rate, emi, due_day, match, as_of, id?}."""
     msg = read_json(environ, MAX_BODY)
@@ -802,6 +866,21 @@ def _app(environ, start_response):
             holding = read_holding(environ)
         except (ValueError, KeyError, TypeError, ArithmeticError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/money/pay'):
+        try:
+            payment = read_payment(environ)
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/money/pay/delete'):
+        try:
+            unpaid = int(read_json(environ, MAX_BODY)['id'])
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/plan'):
+        try:
+            action = read_action(environ)
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/money/delete'):
         try:
             gone = int(read_json(environ, MAX_BODY)['id'])
@@ -812,7 +891,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -854,14 +933,30 @@ def _app(environ, start_response):
         if path == '/api/rate':
             rate = inr_per_sar()
             return respond('200 OK' if rate else '503 Service Unavailable', rate or {'error': 'no exchange-rate service answered'})
+        if path == '/api/plan':
+            if method == 'POST':
+                save_action(db, action)
+            month = action['month'] if method == 'POST' else query.get('month') or datetime.now(timezone.utc).strftime('%Y-%m')
+            try:
+                return respond('200 OK', plan_month(db, month))
+            except ValueError:
+                return respond('400 Bad Request', {'error': 'month must look like 2026-12'})
         if path.startswith('/api/money'):
-            if path == '/api/money' and method == 'POST':
+            if path == '/api/money/pay':
+                try:
+                    record_payment(db, *payment)
+                except KeyError:
+                    return respond('404 Not Found', {'error': 'no such loan'})
+            elif path == '/api/money/pay/delete':
+                db.run('DELETE FROM loan_payments WHERE id = :id', id=unpaid)
+            elif path == '/api/money' and method == 'POST':
                 try:
                     save_holding(db, holding)
                 except KeyError:
                     return respond('404 Not Found', {'error': 'no such loan or saving'})
             elif path == '/api/money/delete':
                 db.run('DELETE FROM holdings WHERE id = :id', id=gone)
+                db.run('DELETE FROM loan_payments WHERE holding_id = :id', id=gone)
             try:
                 extra = int(Decimal(query.get('extra') or 0) * 100)
             except ArithmeticError:

@@ -344,7 +344,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()
@@ -518,6 +518,36 @@ class AppTest(unittest.TestCase):
         finally:
             server.urlopen = real
             server._rate.clear()
+
+    def test_plan_checkin_and_recorded_payments(self):
+        loan = {'kind': 'loan', 'name': 'Car loan', 'currency': 'INR', 'balance': '600000', 'rate': '12', 'emi': '20000', 'due_day': 10,
+                'match': '9911', 'as_of': '2026-10-31'}
+        hid = json.loads(self.call('POST', '/api/money', json.dumps(loan).encode())[1])['holdings'][0]['id']
+        pay = lambda **kw: self.call('POST', '/api/money/pay', json.dumps({'holding_id': hid, **kw}).encode())
+        # An EMI ticked by hand plus an extra payment in the same month: one month's interest (1 %), both amounts off.
+        pay(amount='20000', paid_on='2026-11-10', note='EMI')
+        m = json.loads(pay(amount='50000', paid_on='2026-11-20', note='Extra')[1])
+        self.assertEqual(m['holdings'][0]['balance_now'], (600000 + 6000 - 20000 - 50000) * 100)
+        # The EMI SMS shows up after all: the hand-ticked EMI for that month no longer counts twice.
+        self.call('POST', '/sms', json.dumps({'sender': 'JD-ICICIB', 'body': 'Rs 20,000.00 debited towards loan a/c XX9911', 'received_at': '2026-11-10T10:00:00+05:30'}).encode())
+        h = json.loads(self.call('GET', '/api/money')[1])['holdings'][0]
+        self.assertEqual(h['balance_now'], (600000 + 6000 - 20000 - 50000) * 100)
+        self.assertEqual(sorted(p['source'] for p in h['payments']), ['Extra', 'sms'])
+        self.assertEqual(pay(amount='0', paid_on='2026-11-20')[0], 400)
+        self.assertEqual(self.call('POST', '/api/money/pay', json.dumps({'holding_id': 999, 'amount': '1', 'paid_on': '2026-11-20'}).encode())[0], 404)
+        extra_pid = next(p['pid'] for p in h['payments'] if p['source'] == 'Extra')
+        h = json.loads(self.call('POST', '/api/money/pay/delete', json.dumps({'id': extra_pid}).encode())[1])['holdings'][0]
+        self.assertEqual(h['balance_now'], (600000 + 6000 - 20000) * 100)
+        # The check-in: plan an extra payment, then mark it done; last month's actions come back for the review.
+        act = lambda **kw: self.call('POST', '/api/plan', json.dumps({'month': '2026-12', 'kind': 'extra', 'ref': str(hid), **kw}).encode())
+        act(target='30000', status='planned')
+        p = json.loads(act(target='30000', actual='25000', status='done')[1])
+        self.assertEqual([(a['status'], a['target_minor'], a['actual_minor']) for a in p['actions']], [('done', 3000000, 2500000)])
+        self.call('POST', '/api/plan', json.dumps({'month': '2027-01', 'kind': 'limit', 'ref': 'Food', 'target': '1200', 'status': 'planned'}).encode())
+        jan = json.loads(self.call('GET', '/api/plan', query='month=2027-01')[1])
+        self.assertEqual((jan['previous_month'], len(jan['previous']), jan['actions'][0]['ref']), ('2026-12', 1, 'Food'))
+        self.assertEqual(act(status='maybe')[0], 400)
+        self.assertEqual(self.call('GET', '/api/plan', query='month=junk')[0], 400)
 
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),
