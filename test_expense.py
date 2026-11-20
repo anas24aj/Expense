@@ -549,6 +549,24 @@ class AppTest(unittest.TestCase):
         self.assertEqual(act(status='maybe')[0], 400)
         self.assertEqual(self.call('GET', '/api/plan', query='month=junk')[0], 400)
 
+    def test_credit_card_debt_follows_purchases_and_payments(self):
+        card = {'kind': 'card', 'name': 'SNB credit card', 'currency': 'SAR', 'balance': '5000', 'rate': '30', 'emi': '1000', 'due_day': 28,
+                'match': '4455', 'as_of': '2026-10-31'}
+        self.call('POST', '/api/money', json.dumps(card).encode())
+        sms = lambda body, at: self.call('POST', '/sms', json.dumps({'sender': 'SNB', 'body': body, 'received_at': at}).encode())
+        sms('PoS Purchase\nAmount: SAR 300.00\nCard: *4455\nAt: PANDA', '2026-11-03T10:00:00+03:00')     # adds to the debt
+        sms('Credit card payment received\nAmount: SAR 1,000.00\nCard: *4455', '2026-11-25T10:00:00+03:00')  # takes it off
+        sms('PoS Purchase\nAmount: SAR 80.00\nCard: *9999\nAt: PANDA', '2026-11-04T10:00:00+03:00')      # another card: ignored
+        m = json.loads(self.call('GET', '/api/money', query='currency=INR&rate=25')[1])
+        c = m['holdings'][0]
+        self.assertEqual((c['balance_now'], len(c['charges']), [p['amount'] for p in c['payments']]), (4300_00, 1, [1000.0]))
+        self.assertEqual(m['rate'], 25.0)
+        self.assertIn(str(c['id']), m['prepay'])  # the card is in the payoff plan, converted to INR
+        self.assertIsNotNone(m['plans']['avalanche']['months'])
+        # A card payment can be recorded by hand too.
+        m = json.loads(self.call('POST', '/api/money/pay', json.dumps({'holding_id': c['id'], 'amount': '300', 'paid_on': '2026-11-26'}).encode(), query='rate=25')[1])
+        self.assertEqual(m['holdings'][0]['balance_now'], 4000_00)
+
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),
                          (SAMPLES[8][0], '2026-09-17T10:00:00+03:00'), (SAMPLES[0][0], '2026-10-01T10:00:00+05:30')):

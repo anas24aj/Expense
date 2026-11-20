@@ -414,9 +414,13 @@ def plan(loans, extra, strategy=None):
     return {'months': None if bal else month, 'interest': interest, 'payoff': done}
 
 
-def money(db, currency='INR', extra=0, every=None):
-    """Loans (with today's balance after the EMI SMS since it was entered) and savings, plus payoff plans for
-    the loans in `currency`: as they are, and with `extra` a month by each strategy."""
+DEBTS = ('loan', 'card')
+
+
+def money(db, currency='INR', extra=0, every=None, rate=None):
+    """Loans and credit cards (with today's balance after the SMS since it was entered) and savings, plus payoff
+    plans for all of them in `currency` (the others converted at `rate`, INR per SAR): as they are, and with
+    `extra` a month by each strategy. A card's balance goes up with each purchase SMS and down with each payment."""
     every = transactions(db) if every is None else every
     items, recorded = [], defaultdict(list)
     for r in db.run('SELECT * FROM loan_payments ORDER BY paid_on, id'):
@@ -424,33 +428,46 @@ def money(db, currency='INR', extra=0, every=None):
     for h in db.run('SELECT * FROM holdings ORDER BY kind, id'):
         h = dict(h)
         h['balance_now'], h['payments'] = h['balance_minor'], []
-        if h['kind'] == 'loan':
-            key = h['pattern'].strip().lower()
-            sms = [{'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount'], 'source': 'sms'} for t in every
-                   if key and t['direction'] == 'debit' and t['currency'] == h['currency'] and t['received_at'][:10] > h['as_of']
-                   and t['category'] not in NOT_COUNTED and key in t['body'].lower()]
+        h['charges'] = []
+        if h['kind'] in DEBTS:
+            key, card = h['pattern'].strip().lower(), h['kind'] == 'card'
+            seen = [t for t in every if key and t['currency'] == h['currency'] and t['received_at'][:10] > h['as_of']
+                    and t['category'] not in NOT_COUNTED and key in t['body'].lower()]
+            # A loan's matching SMS are EMIs going out. A card's are purchases (debits) and payments in (credits).
+            sms = [{'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount'], 'source': 'sms'} for t in seen
+                   if t['direction'] == ('credit' if card else 'debit')]
+            if card:
+                h['charges'] = [{'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount']} for t in seen if t['direction'] == 'debit']
+                h['balance_now'] += round(sum(c['amount'] for c in h['charges']) * 100)
             sms_months = {p['date'][:7] for p in sms}
             mine = [{'pid': r['id'], 'date': r['paid_on'], 'amount': r['amount_minor'] / 100, 'source': r['note'] or 'manual'}
                     for r in recorded[h['id']] if r['paid_on'] >= h['as_of']  # recorded on the day you typed the balance: after it
                     and not (r['note'] == 'EMI' and r['paid_on'][:7] in sms_months)]  # the SMS turned up after all: count it once
             interest_month = None
             for p in sorted(sms + mine, key=lambda p: p['date']):
-                if p['date'][:7] != interest_month:  # one month's interest per month with a payment (yearly rate / 12)
+                # One month's interest per month with a payment (yearly rate / 12). Not on a card: its interest
+                # shows up when you type the statement balance in the check-in.
+                if not card and p['date'][:7] != interest_month:
                     interest_month = p['date'][:7]
                     h['balance_now'] += round(h['balance_now'] * h['rate_bp'] / 120000)
                 h['balance_now'] = max(0, h['balance_now'] - round(p['amount'] * 100))
                 h['payments'].append(p)
         items.append(h)
-    loans = [h for h in items if h['kind'] == 'loan' and h['currency'] == currency]
+    other = [h for h in items if h['kind'] in DEBTS and h['currency'] != currency]
+    if other and not rate:
+        rate = (inr_per_sar() or {}).get('rate') or 24.9
+    factor = lambda h: 1 if h['currency'] == currency else rate if currency == 'INR' else 1 / rate
+    loans = [{**h, 'balance_now': round(h['balance_now'] * factor(h)), 'emi_minor': round(h['emi_minor'] * factor(h))}
+             for h in items if h['kind'] in DEBTS]
     as_is = plan(loans, 0)
     # What prepaying 1 lakh (or 1,000 SAR) on each loan today would save, for the suggestions.
     lump, prepay = 1_00000_00 if currency == 'INR' else 1000_00, {}
     for h in loans:
         if h['balance_now'] > 0:
-            after = plan([{**l, 'balance_now': max(0, l['balance_now'] - lump)} if l is h else l for l in loans], 0)
+            after = plan([{**l, 'balance_now': max(0, l['balance_now'] - lump)} if l is h else l for l in loans], 0)  # in `currency`
             prepay[h['id']] = {'interest': as_is['interest'] - after['interest'],
                                'months': (as_is['payoff'].get(h['id']) or PLAN_MONTHS) - (after['payoff'].get(h['id']) or PLAN_MONTHS)}
-    return {'holdings': items, 'currency': currency, 'extra': extra / 100, 'lump': lump / 100, 'prepay': prepay,
+    return {'holdings': items, 'currency': currency, 'rate': rate, 'extra': extra / 100, 'lump': lump / 100, 'prepay': prepay,
             'plans': {'as_is': as_is, 'avalanche': plan(loans, extra, 'avalanche'), 'snowball': plan(loans, extra, 'snowball')}}
 
 
@@ -479,7 +496,7 @@ def inr_per_sar(now=None):
 
 
 def record_payment(db, holding_id, paid_on, amount_minor, note):
-    if not db.run("SELECT id FROM holdings WHERE id = :id AND kind = 'loan'", id=holding_id):
+    if not db.run("SELECT id FROM holdings WHERE id = :id AND kind IN ('loan', 'card')", id=holding_id):
         raise KeyError('no such loan')
     db.run('INSERT INTO loan_payments (holding_id, paid_on, amount_minor, note) VALUES (:h, :d, :a, :n)',
            h=holding_id, d=paid_on, a=amount_minor, n=note)
@@ -751,7 +768,7 @@ def read_holding(environ):
          'emi_minor': minor(msg.get('emi')), 'due_day': int(msg.get('due_day') or 0), 'pattern': ' '.join(str(msg.get('match') or '').split()),
          'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat())}
     datetime.strptime(h['as_of'], '%Y-%m-%d')
-    if (h['kind'] not in ('loan', 'saving') or h['currency'] not in ('SAR', 'INR') or not 0 < len(h['name']) <= 40
+    if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR') or not 0 < len(h['name']) <= 40
             or not 0 <= h['balance_minor'] < 10 ** 13 or not 0 <= h['rate_bp'] <= 6000 or not 0 <= h['emi_minor'] < 10 ** 11
             or not 0 <= h['due_day'] <= 31 or len(h['pattern']) > 40):
         raise ValueError('check the name (1-40 letters), amounts, rate (0-60 %) and due day (1-31)')
@@ -961,7 +978,11 @@ def _app(environ, start_response):
                 extra = int(Decimal(query.get('extra') or 0) * 100)
             except ArithmeticError:
                 extra = 0
-            return respond('200 OK', money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11))))
+            try:
+                rate = float(query.get('rate') or 0)
+            except ValueError:
+                rate = 0
+            return respond('200 OK', money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11)), rate=rate if 10 < rate < 100 else None))
         if path == '/api/friend/settle':
             settle_friend(db, square, query.get('currency') or 'SAR')
             return respond('200 OK', {'saved': True, **refreshed(db, query)})

@@ -961,7 +961,7 @@ state.extra = +(ls.get('extraInr') || 0) || 0;
 async function loadMoney() {
   state.moneyAt = Date.now();
   try {
-    const r = await fetch(`/api/money?currency=INR&extra=${state.extra}`);
+    const r = await fetch(`/api/money?${moneyQs()}`);
     if (!r.ok) return;
     state.money = await r.json();
     if (!document.querySelector('details.txn[open], form.holding:focus-within')) render();
@@ -983,24 +983,27 @@ const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().s
 function emisDue(days = 3) {
   const d = +today().slice(8);
   // Only loans with SMS words: without them a paid EMI can't be seen, and every month would look overdue.
-  return (state.money?.holdings || []).filter(h => h.kind === 'loan' && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
+  return (state.money?.holdings || []).filter(h => isDebt(h) && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
     .map(h => ({ h, inDays: h.due_day - d }));
 }
 const whenMonths = n => n == null ? 'never at this EMI' : monthName(addM(today().slice(0, 7), n), 'short');
+const isDebt = h => h.kind === 'loan' || h.kind === 'card';
+const moneyQs = () => `currency=INR&extra=${state.extra}&rate=${state.rate}`;  // SAR debts join the INR plan at this rate
 function holdingForm(h, kind) {
-  const v = (k, d = '') => esc(h?.[k] ?? d), num = c => c == null ? '' : (c / 100).toString();
+  const v = (k, d = '') => esc(h?.[k] ?? d), num = c => c == null ? '' : (c / 100).toString(), card = kind === 'card', debt = kind !== 'saving';
   return `<form class="fix holding" data-id="${h?.id || ''}" data-kind="${kind}">` +
-    `<label>Name<input type="text" name="name" maxlength="40" required value="${v('name')}" placeholder="${kind === 'loan' ? 'e.g. HDFC home loan' : 'e.g. Al Rajhi savings'}"></label>` +
+    `<label>Name<input type="text" name="name" maxlength="40" required value="${v('name')}" placeholder="${card ? 'e.g. SNB credit card' : debt ? 'e.g. HDFC home loan' : 'e.g. Al Rajhi savings'}"></label>` +
     `<div class="two"><label>Currency<select name="currency">${['INR', 'SAR'].map(c => `<option ${c === (h?.currency || (kind === 'loan' ? 'INR' : 'SAR')) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>` +
-    `<label>${kind === 'loan' ? 'Outstanding' : 'Balance'}<input type="text" inputmode="decimal" name="balance" required value="${num(h?.balance_minor)}"></label></div>` +
-    (kind === 'loan' ? `<div class="two"><label>Interest % a year<input type="text" inputmode="decimal" name="rate" required value="${h ? h.rate_bp / 100 : ''}"></label>` +
-      `<label>EMI a month<input type="text" inputmode="decimal" name="emi" required value="${num(h?.emi_minor)}"></label></div>` +
+    `<label>${card ? 'Owed now' : debt ? 'Outstanding' : 'Balance'}<input type="text" inputmode="decimal" name="balance" required value="${num(h?.balance_minor)}"></label></div>` +
+    (debt ? `<div class="two"><label>Interest % a year${card ? ' (monthly % × 12)' : ''}<input type="text" inputmode="decimal" name="rate" required value="${h ? h.rate_bp / 100 : ''}"></label>` +
+      `<label>${card ? 'You pay a month' : 'EMI a month'}<input type="text" inputmode="decimal" name="emi" required value="${num(h?.emi_minor)}"></label></div>` +
       `<div class="two"><label>Due day<input type="text" inputmode="numeric" name="due_day" value="${h?.due_day || ''}" placeholder="1-31"></label>` +
-      `<label>Balance as on<input type="date" name="as_of" value="${v('as_of', today())}" max="${today()}"></label></div>` +
-      `<label>Words in the EMI SMS<input type="text" name="match" maxlength="40" value="${v('pattern')}" placeholder="e.g. the loan account's last 4 digits"></label>` +
-      '<p class="muted small">EMI SMS after "Balance as on" that contain these words bring the balance down by themselves.</p>'
+      `<label>${card ? 'Owed as on' : 'Balance as on'}<input type="date" name="as_of" value="${v('as_of', today())}" max="${today()}"></label></div>` +
+      `<label>${card ? 'Card’s last 4 digits' : 'Words in the EMI SMS'}<input type="text" name="match" maxlength="40" value="${v('pattern')}" placeholder="${card ? 'e.g. 4455' : 'e.g. the loan account’s last 4 digits'}"></label>` +
+      (card ? '<p class="muted small">SMS after "Owed as on" with these digits: purchases add to what you owe, payments to the card take it off.</p>'
+        : '<p class="muted small">EMI SMS after "Balance as on" that contain these words bring the balance down by themselves.</p>')
       : `<input type="hidden" name="as_of" value="${today()}">`) +
-    `<div class="actions"><button>${h ? 'Save' : kind === 'loan' ? 'Add loan' : 'Add savings'}</button>${h ? `<button type="button" class="link danger" data-del-holding="${h.id}">Delete</button>` : ''}</div></form>`;
+    `<div class="actions"><button>${h ? 'Save' : card ? 'Add card' : debt ? 'Add loan' : 'Add savings'}</button>${h ? `<button type="button" class="link danger" data-del-holding="${h.id}">Delete</button>` : ''}</div></form>`;
 }
 // Your average month in SAR over the last 3 full months: received, spent and what's left over (null without them).
 function monthly() {
@@ -1029,7 +1032,7 @@ async function loadPlan() {
 const act = (kind, ref) => state.plan?.actions.find(a => a.kind === kind && a.ref === String(ref));
 const settled = a => a && a.status !== 'planned';
 async function post(path, body, money) {
-  const r = await fetch(money ? `${path}?currency=INR&extra=${state.extra}` : path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(money ? `${path}?${moneyQs()}` : path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (r.status === 401) { location.href = '/login'; throw new Error('signed out'); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
   return r.json();
@@ -1042,26 +1045,28 @@ const cash = (c, cur) => cur === 'INR' ? rupees(c) : `SAR ${fmt(c)}`;
 function planSteps() {
   const M = state.money, cur = today().slice(0, 7), d = +today().slice(8), steps = [];
   if (!M) return steps;
-  const loans = M.holdings.filter(h => h.kind === 'loan' && h.balance_now > 0), saves = M.holdings.filter(h => h.kind === 'saving');
+  const loans = M.holdings.filter(h => isDebt(h) && h.balance_now > 0), saves = M.holdings.filter(h => h.kind === 'saving');
   for (const h of loans.filter(h => h.due_day && h.due_day <= d)) {
     const paid = paidThisMonth(h);
-    steps.push({ key: `emi${h.id}`, done: !!paid || settled(act('emi', h.id)), title: `${h.name}: EMI of ${cash(h.emi_minor, h.currency)}`,
+    steps.push({ key: `emi${h.id}`, done: !!paid || settled(act('emi', h.id)), title: `${h.name}: ${h.kind === 'card' ? 'card payment' : 'EMI'} of ${cash(h.emi_minor, h.currency)}`,
       doneText: paid ? `paid ${shortDay(paid.date)}` : act('emi', h.id)?.status === 'done' ? 'marked paid' : 'not paid yet', ask: `Did it go out on ${shortDay(`${cur}-${pad(Math.min(h.due_day, daysIn(cur)))}`)}?`,
       buttons: [['emi-paid', 'Yes, it’s paid', h.id], ['emi-not', 'Not yet', h.id]] });
   }
   if (loans.length) steps.push({ key: 'balances', done: settled(act('balances', 'all')), title: 'Check what you still owe', doneText: 'checked',
     ask: 'Open each bank app and type the outstanding amount, so the plan matches the bank.',
     inputs: loans.map(h => [`bal${h.id}`, h.name, (h.balance_now / 100).toFixed(0)]), buttons: [['balances-save', 'Save balances'], ['balances-ok', 'They’re right']] });
-  const avg = monthly(), target = [...loans].filter(h => h.currency === 'INR').sort((a, b) => b.rate_bp - a.rate_bp)[0];
+  const avg = monthly(), target = [...loans].sort((a, b) => b.rate_bp - a.rate_bp)[0];
   if (target && avg && avg.spare > 0) {
-    const a = act('extra', target.id), suggest = Math.max(1000, Math.round(toInr(avg.spare, 'SAR') / 2 / 100 / 1000) * 1000);
-    const per = M.prepay[target.id], saves1 = per ? Math.round(per.interest * suggest / M.lump) : 0;
-    if (!a) steps.push({ key: 'extra', done: false, title: `Pay extra toward ${target.name}`, inputs: [['extra-amt', 'Extra this month (₹)', suggest]],
-      ask: `It has the highest rate (${target.rate_bp / 100}%). ${rupees(suggest * 100)} is half of what's usually left over (SAR ${fmt(avg.spare)} a month) and saves about ${rupees(saves1)} in interest.`,
+    // In the debt's own currency: half of the usual leftover, rounded (₹1,000s for INR, SAR 100s for SAR).
+    const c = target.currency, unit = c === 'INR' ? 1000 : 100, sym = c === 'INR' ? '₹' : 'SAR';
+    const a = act('extra', target.id), suggest = Math.max(unit, Math.round((c === 'INR' ? toInr(avg.spare, 'SAR') : avg.spare) / 2 / 100 / unit) * unit);
+    const per = M.prepay[target.id], saves1 = per ? Math.round(per.interest * toInr(suggest * 100, c) / (M.lump * 100)) : 0;
+    if (!a) steps.push({ key: 'extra', done: false, title: `Pay extra toward ${target.name}`, inputs: [['extra-amt', `Extra this month (${sym})`, suggest]],
+      ask: `It has the highest rate (${target.rate_bp / 100}%). ${cash(suggest * 100, c)} is half of what's usually left over (SAR ${fmt(avg.spare)} a month) and saves about ${rupees(saves1)} in interest.`,
       buttons: [['extra-plan', 'I’ll pay this', target.id], ['extra-skip', 'Not this month', target.id]] });
-    else steps.push({ key: 'extra', done: settled(a), title: `Extra ${rupees(a.target_minor)} toward ${target.name}`,
-      doneText: a.status === 'done' ? `paid ${rupees(a.actual_minor)}` : 'skipped', ask: 'Did you pay it? Enter what you paid; it comes off the loan.',
-      inputs: [['extra-paid', 'Paid (₹)', a.target_minor / 100]], buttons: [['extra-done', 'Yes, paid', target.id], ['extra-skip', 'Didn’t pay', target.id]] });
+    else steps.push({ key: 'extra', done: settled(a), title: `Extra ${cash(a.target_minor, c)} toward ${target.name}`,
+      doneText: a.status === 'done' ? `paid ${cash(a.actual_minor, c)}` : 'skipped', ask: `Did you pay it? Enter what you paid; it comes off ${target.kind === 'card' ? 'what you owe' : 'the loan'}.`,
+      inputs: [['extra-paid', `Paid (${sym})`, a.target_minor / 100]], buttons: [['extra-done', 'Yes, paid', target.id], ['extra-skip', 'Didn’t pay', target.id]] });
   }
   const hot = state.currency === 'SAR' ? aboveUsual()[0] : null;
   if (hot) {
@@ -1088,15 +1093,16 @@ function planPage() {
   const list = steps.filter(s => s.done).map(s => `<li>✓ ${esc(s.title)} <span class="muted">· ${esc(s.doneText)}</span></li>`).join('');
   // This month so far: limits and the extra payment.
   const spentIn = (cat, m) => state.all.filter(t => t._m === m && t.category === cat).reduce((a, t) => a + t._s, 0);
-  const loanName = id => state.money.holdings.find(h => String(h.id) === String(id))?.name || 'a loan';
+  const loanOf = id => state.money.holdings.find(h => String(h.id) === String(id)), loanName = id => loanOf(id)?.name || 'a loan';
+  const inCur = (c, id) => cash(c, loanOf(id)?.currency || 'INR');
   const now = state.plan.actions.filter(a => (a.kind === 'limit' && a.status === 'planned') || a.kind === 'extra').map(a => a.kind === 'limit'
     ? rk({ icon: icon(a.ref), name: `${a.ref}: limit SAR ${fmt(a.target_minor)}`, sub: spentIn(a.ref, cur) > a.target_minor ? `<span class="up">over by SAR ${fmt(spentIn(a.ref, cur) - a.target_minor)}</span>` : `SAR ${fmt(a.target_minor - spentIn(a.ref, cur))} left`,
       value: spentIn(a.ref, cur), bar: Math.min(1, spentIn(a.ref, cur) / Math.max(1, a.target_minor)) })
     : rk({ icon: '🎯', name: `Extra to ${loanName(a.ref)}`, sub: a.status === 'done' ? '✓ paid' : a.status === 'skipped' ? 'skipped' : 'planned · not paid yet',
-      value: a.status === 'done' ? a.actual_minor : a.target_minor, valueText: rupees(a.status === 'done' ? a.actual_minor : a.target_minor), bar: a.status === 'done' ? 1 : 0 })).join('');
+      value: a.status === 'done' ? a.actual_minor : a.target_minor, valueText: inCur(a.status === 'done' ? a.actual_minor : a.target_minor, a.ref), bar: a.status === 'done' ? 1 : 0 })).join('');
   // Last month's review.
   const prev = state.plan.previous_month, review = state.plan.previous.map(a => {
-    if (a.kind === 'extra') return `<li>${a.status === 'done' ? '✓' : '✗'} Extra to ${esc(loanName(a.ref))}: ${a.status === 'done' ? `paid ${rupees(a.actual_minor)}` : a.status === 'skipped' ? 'skipped' : `planned ${rupees(a.target_minor)}, not confirmed`}</li>`;
+    if (a.kind === 'extra') return `<li>${a.status === 'done' ? '✓' : '✗'} Extra to ${esc(loanName(a.ref))}: ${a.status === 'done' ? `paid ${inCur(a.actual_minor, a.ref)}` : a.status === 'skipped' ? 'skipped' : `planned ${inCur(a.target_minor, a.ref)}, not confirmed`}</li>`;
     if (a.kind === 'limit' && a.status === 'planned') { const sp = spentIn(a.ref, prev); return `<li>${sp <= a.target_minor ? '✓' : '✗'} ${esc(a.ref)}: SAR ${fmt(sp)} of SAR ${fmt(a.target_minor)} ${sp <= a.target_minor ? '(kept)' : `(over by ${fmt(sp - a.target_minor)})`}</li>`; }
     if (a.kind === 'emi') return a.status === 'done' ? `<li>✓ EMI: ${esc(loanName(a.ref))}</li>` : `<li>✗ EMI: ${esc(loanName(a.ref))} not confirmed</li>`;
     return '';
@@ -1120,7 +1126,7 @@ document.addEventListener('click', async e => {
     else if (a === 'emi-not') { await planAct('emi', ref, 'skipped'); toast('Noted. Overview will remind you while it’s due.'); }
     else if (a === 'balances-save' || a === 'savings-save') {
       const kind = a === 'balances-save' ? 'loan' : 'saving', pre = kind === 'loan' ? 'bal' : 'sav';
-      for (const x of M.holdings.filter(x => x.kind === kind && $(pre + x.id))) {
+      for (const x of M.holdings.filter(x => (kind === 'loan' ? isDebt(x) : x.kind === 'saving') && $(pre + x.id))) {
         const v = val(pre + x.id);
         if (v && Math.round(+v) !== Math.round(x.balance_now / 100)) state.money = await post('/api/money', holdingBody(x, { balance: v }), true);
       }
@@ -1145,31 +1151,33 @@ function moneyPage() {
   loadRate();
   const M = state.money;
   if (!M) { if (!state.moneyAt) loadMoney(); return { title: 'Debt', html: `<section class="card">${empty('Loading…')}</section>` }; }
-  const loans = M.holdings.filter(h => h.kind === 'loan'), saves = M.holdings.filter(h => h.kind === 'saving');
+  const loans = M.holdings.filter(isDebt), saves = M.holdings.filter(h => h.kind === 'saving');
   const debt = loans.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0), saved = saves.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
   const P = M.plans, best = P.avalanche, d = +today().slice(8);
   const loanRow = h => {
-    const paid = paidThisMonth(h), cut = h.balance_minor ? 1 - h.balance_now / h.balance_minor : 0;
-    const due = !h.due_day ? '' : !h.pattern ? `EMI on day ${h.due_day}` : paid ? `✓ EMI paid ${shortDay(paid.date)}`
-      : h.due_day < d ? `<span class="up">EMI overdue (day ${h.due_day})</span>` : `EMI due in ${plural(h.due_day - d, 'day')}`;
-    return `<details class="hold"><summary>${rk({ icon: h.name.toLowerCase().includes('car') ? '🚗' : '🏠', name: h.name,
-      sub: `${h.rate_bp / 100}% · EMI ${h.currency === 'INR' ? rupees(h.emi_minor) : money(h.emi_minor)}`, vsub: due, value: h.balance_now, valueText: h.currency === 'INR' ? rupees(h.balance_now) : money(h.balance_now), bar: cut })}</summary>` +
-      (h.payments.length ? `<p class="muted small">EMIs seen since ${shortDay(h.as_of)}: ${h.payments.map(p => `${shortDay(p.date)} ${fmt(Math.round(p.amount * 100))}`).join(' · ')}</p>` : '') +
-      holdingForm(h, 'loan') + '</details>';
+    const paid = paidThisMonth(h), cut = h.balance_minor ? 1 - h.balance_now / h.balance_minor : 0, E = h.kind === 'card' ? 'Payment' : 'EMI';
+    const due = !h.due_day ? '' : !h.pattern ? `${E} on day ${h.due_day}` : paid ? `✓ ${h.kind === 'card' ? 'Paid' : 'EMI paid'} ${shortDay(paid.date)}`
+      : h.due_day < d ? `<span class="up">${E} overdue (day ${h.due_day})</span>` : `${E} due in ${plural(h.due_day - d, 'day')}`;
+    return `<details class="hold"><summary>${rk({ icon: h.kind === 'card' ? '💳' : /car|auto|vehicle/i.test(h.name) ? '🚗' : '🏠', name: h.name,
+      sub: `${h.rate_bp / 100}% · ${h.kind === 'card' ? 'paying' : 'EMI'} ${cash(h.emi_minor, h.currency)}`, vsub: due, value: h.balance_now, valueText: cash(h.balance_now, h.currency), bar: cut })}</summary>` +
+      (h.payments.length ? `<p class="muted small">${h.kind === 'card' ? 'Payments' : 'EMIs'} seen since ${shortDay(h.as_of)}: ${h.payments.map(p => `${shortDay(p.date)} ${fmt(Math.round(p.amount * 100))}`).join(' · ')}</p>` : '') +
+      (h.charges?.length ? `<p class="muted small">Card purchases since ${shortDay(h.as_of)}: ${plural(h.charges.length, 'purchase')}, ${cash(Math.round(h.charges.reduce((a, c) => a + c.amount, 0) * 100), h.currency)}</p>` : '') +
+      holdingForm(h, h.kind) + '</details>';
   };
   const saveRow = h => `<details class="hold"><summary>${rk({ icon: '🏦', name: h.name, sub: h.currency === 'INR' ? '' : `≈ ${rupees(toInr(h.balance_now, h.currency))}`, value: h.balance_now, valueText: h.currency === 'INR' ? rupees(h.balance_now) : `SAR ${fmt(h.balance_now)}` })}</summary>${holdingForm(h, 'saving')}</details>`;
   const spare = monthly()?.spare ?? null;
   const strat = (key, label) => { const p = P[key], gain = P.as_is.interest - p.interest;
     return `<tr><th>${label}</th><td>${whenMonths(p.months)}</td><td>${rupees(p.interest)}</td><td>${p.months != null && gain > 0 ? `saves ${rupees(gain)}` : '–'}</td></tr>`; };
-  const order = loans.filter(h => h.currency === 'INR' && best.payoff[h.id]).sort((a, b) => best.payoff[a.id] - best.payoff[b.id]);
+  const order = loans.filter(h => best.payoff[h.id]).sort((a, b) => best.payoff[a.id] - best.payoff[b.id]);
   const costliest = [...order].sort((a, b) => b.rate_bp - a.rate_bp)[0];
   return { title: 'Debt', sub: 'Loans, savings and your payoff plan', html:
     `<section class="hero"><div class="label">Net worth</div><div class="total"><small>₹</small><span>${inrFmt.format((saved - debt) / 100)}</span></div>` +
     `<div class="kpis"><div><span>Savings</span><b>${rupees(saved)}</b></div><div><span>Loans</span><b>${rupees(debt)}</b></div>` +
     `<div><span>Debt-free (plan)</span><b>${loans.length ? whenMonths(best.months) : '–'}</b></div><div><span>Interest still to pay</span><b>${loans.length ? rupees(best.interest) : '–'}</b></div></div>` +
     `<p class="proj">1 SAR = ₹${state.rate} ${ls.get('rateMine') ? '(your rate)' : ls.get('rateAt') ? `(today, ${esc(ls.get('rateSource') || '')})` : '(approximate: today’s rate unavailable)'}</p></section>` +
-    card('Loans', rupees(debt), loans.map(loanRow).join('') + `<details class="hold add"><summary class="link">+ Add a loan</summary>${holdingForm(null, 'loan')}</details>`) +
-    (loans.some(h => h.currency === 'INR') ? card('Payoff plan', 'INR loans',
+    card('Loans &amp; cards', rupees(debt), loans.map(loanRow).join('') + `<details class="hold add"><summary class="link">+ Add a loan</summary>${holdingForm(null, 'loan')}</details>` +
+      `<details class="hold add"><summary class="link">+ Add a credit card</summary>${holdingForm(null, 'card')}</details>`) +
+    (loans.length ? card('Payoff plan', loans.some(h => h.currency === 'SAR') ? 'all debts in ₹' : 'INR loans',
       `<label class="extra">Extra each month toward the loans <span class="row2"><b>₹</b><input type="text" inputmode="numeric" id="extra" value="${state.extra || ''}" placeholder="0">` +
       `<small>${state.extra ? `≈ SAR ${fmt(Math.round(state.extra * 100 / state.rate))}` : ''}</small></span></label>` +
       (spare != null ? `<p class="muted small">Left over in an average month lately: SAR ${fmt(spare)} ≈ ${rupees(Math.round(spare * state.rate))}.${spare > 0 ? ' Some of it could go here.' : ''}</p>` : '') +
@@ -1299,7 +1307,7 @@ function overview(rt, P, X) {
       ln(`#/large?${q}`, 'Large transactions', 'Far above the usual', String(large.length)) +
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
-      ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (h.kind === 'loan' ? -1 : 1) * toInr(h.balance_now, h.currency), 0)) : '') +
+      ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * toInr(h.balance_now, h.currency), 0)) : '') +
       ln('#/friends', 'Friends', 'Bought for friends, paid back', fmt(friendBalances().reduce((a, e) => a + Math.max(0, e.owed), 0)))) };
 }
 function catRows(groups, total, X, P, f = {}) {
@@ -1780,7 +1788,7 @@ document.addEventListener('click', async e => {
 
 async function saveMoney(path, body) {
   try {
-    const r = await fetch(`${path}?currency=INR&extra=${state.extra}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch(`${path}?${moneyQs()}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (r.status === 401) { location.href = '/login'; return false; }
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
     state.money = await r.json(); render();
