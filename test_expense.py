@@ -262,6 +262,29 @@ class StoreMixin:
         server.set_friend(db, dinner, '', 0)
         self.assertEqual(server.summary(db)['months'][0]['spent'], 140.0)
 
+    def test_loans_come_down_with_emi_sms_and_plans_pay_them_off(self):
+        db = self.db
+        h = lambda **kw: {'id': None, 'kind': 'loan', 'currency': 'INR', 'rate_bp': 0, 'emi_minor': 0, 'due_day': 5, 'pattern': '', 'as_of': '2026-09-30', **kw}
+        server.save_holding(db, h(name='Home 1', balance_minor=12_00000_00, rate_bp=900, emi_minor=1_50000_00, pattern='XX4321'))
+        server.save_holding(db, h(name='Car', balance_minor=3_00000_00, rate_bp=1100, emi_minor=20000_00))
+        server.save_holding(db, h(kind='saving', name='FD', currency='SAR', balance_minor=50000_00))
+        server.store_sms(db, 'HDFCBK', 'Rs 1,50,000.00 debited from A/c XX7788 towards loan A/c XX4321 on 05-10-26', '2026-10-05T09:00:00+05:30')
+        server.store_sms(db, 'HDFCBK', 'Rs 1,50,000.00 debited from A/c XX7788 towards loan A/c XX4321 on 05-09-26', '2026-09-05T09:00:00+05:30')  # before as_of
+        m = server.money(db, 'INR', 0)
+        home = next(x for x in m['holdings'] if x['name'] == 'Home 1')
+        self.assertEqual(len(home['payments']), 1)  # only EMIs after the balance was entered
+        self.assertEqual(home['balance_now'], 12_00000_00 + 9_00000 - 1_50000_00)  # + one month at 9 %/12, - the EMI
+        p = m['plans']
+        self.assertTrue(p['as_is']['months'] and p['avalanche']['months'] <= p['as_is']['months'])
+        self.assertLessEqual(p['avalanche']['interest'], p['snowball']['interest'])  # highest rate first costs least
+        faster = server.money(db, 'INR', 50000_00)['plans']['avalanche']
+        self.assertLess(faster['months'], p['avalanche']['months'])
+        self.assertLess(faster['interest'], p['avalanche']['interest'])
+        # A loan whose EMI doesn't cover its interest is never paid off.
+        self.assertIsNone(server.plan([{'id': 1, 'balance_now': 100000, 'rate_bp': 2400, 'emi_minor': 1000}], 0)['months'])
+        # 1,000 at 0 % with an EMI of 300 takes 4 months.
+        self.assertEqual(server.plan([{'id': 1, 'balance_now': 1000, 'rate_bp': 0, 'emi_minor': 300}], 0)['months'], 4)
+
     def test_corrections_follow_the_merchant(self):
         db = self.db
         server.store_sms(db, 'B', 'PoS Purchase\nAmount: SAR 30.00\nAt: ABU SAAD TRADING\nRef 1', '2026-10-01T09:00:00+03:00')
@@ -318,7 +341,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()
@@ -455,6 +478,20 @@ class AppTest(unittest.TestCase):
         self.assertEqual(json.loads(self.call('GET', '/api/transactions')[1]), [])
         self.assertEqual(self.call('POST', '/api/delete', json.dumps({'id': txn['id']}).encode())[0], 404)
         self.assertEqual(self.call('POST', '/api/delete', b'{}', auth='')[0], 401)
+
+    def test_money_endpoints(self):
+        loan = {'kind': 'loan', 'name': 'Home loan', 'currency': 'INR', 'balance': '45,00,000', 'rate': '8.5', 'emi': '42000', 'due_day': 5, 'match': '4321'}
+        status, out = self.call('POST', '/api/money', json.dumps(loan).encode(), query='currency=INR&extra=10000')
+        m = json.loads(out)
+        self.assertEqual((status, m['holdings'][0]['balance_minor'], m['holdings'][0]['rate_bp'], m['extra']), (200, 4500000_00, 850, 10000.0))
+        self.assertIsNotNone(m['plans']['avalanche']['months'])
+        self.assertEqual(self.call('POST', '/api/money', json.dumps({**loan, 'rate': '75'}).encode())[0], 400)
+        self.assertEqual(self.call('POST', '/api/money', json.dumps({**loan, 'kind': 'gold'}).encode())[0], 400)
+        self.assertEqual(self.call('POST', '/api/money', json.dumps({**loan, 'id': 999}).encode())[0], 404)
+        hid = m['holdings'][0]['id']
+        self.assertEqual(json.loads(self.call('POST', '/api/money', json.dumps({**loan, 'id': hid, 'balance': '44,00,000'}).encode())[1])['holdings'][0]['balance_minor'], 4400000_00)
+        self.assertEqual(json.loads(self.call('POST', '/api/money/delete', json.dumps({'id': hid}).encode())[1])['holdings'], [])
+        self.assertEqual(self.call('GET', '/api/money', auth='')[0], 401)
 
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),

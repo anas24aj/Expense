@@ -55,6 +55,12 @@ MAX_CATEGORY = 40
 # friend is them paying you back, not income. settled: paid back outside the bank, or squared up by hand.
 FRIENDS_SCHEMA = 'CREATE TABLE IF NOT EXISTS txn_friends (txn_id BIGINT PRIMARY KEY, friend TEXT NOT NULL, theirs_minor BIGINT NOT NULL, settled INTEGER NOT NULL DEFAULT 0)'
 MAX_FRIEND = 40
+# Your loans and savings, entered by hand. A loan's balance is as of `as_of`; EMI SMS after that whose text
+# contains `pattern` (e.g. the loan account's last digits) bring it down. rate_bp: yearly rate in hundredths of a %.
+HOLDINGS_SCHEMA = '''CREATE TABLE IF NOT EXISTS holdings (id {id} PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
+  currency TEXT NOT NULL, balance_minor BIGINT NOT NULL, rate_bp INTEGER NOT NULL DEFAULT 0, emi_minor BIGINT NOT NULL DEFAULT 0,
+  due_day INTEGER NOT NULL DEFAULT 0, pattern TEXT NOT NULL DEFAULT '', as_of TEXT NOT NULL)'''
+PLAN_MONTHS = 600  # 50 years: a loan whose EMI doesn't cover its interest never ends
 # SMS of transactions you deleted, so the phone sending them again (or an import) doesn't bring them back.
 DELETED_SCHEMA = 'CREATE TABLE IF NOT EXISTS deleted_sms (body TEXT PRIMARY KEY)'
 # A receipt per SMS the phone sends (time, sender, what happened; never the text), so you can check delivery.
@@ -102,7 +108,7 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         if url not in DB._schema_ready:  # once per process, not per request
             self.run(schema)
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
             try:
@@ -365,6 +371,74 @@ def settle_friend(db, friend, currency):
            f=friend, c=currency)
 
 
+def plan(loans, extra, strategy=None):
+    """Pay the loans off month by month: interest is added (yearly rate / 12), then each loan's EMI is paid.
+    With a strategy, the extra per month and the EMIs of loans already paid off go to one loan at a time:
+    'avalanche' = highest rate first (least interest), 'snowball' = smallest balance first (fastest wins).
+    Without one ('as is'), each loan just pays its own EMI. Returns months to debt-free (None if never),
+    total interest, and the month each loan is paid off. Amounts in minor units."""
+    bal = {l['id']: l['balance_now'] for l in loans if l['balance_now'] > 0}
+    rate = {l['id']: l['rate_bp'] / 120000 for l in loans}
+    emi = {l['id']: l['emi_minor'] for l in loans}
+    budget, done, interest, month = sum(emi[i] for i in bal) + extra, {}, 0, 0
+    while bal and month < PLAN_MONTHS:
+        month += 1
+        for i in bal:
+            charge = round(bal[i] * rate[i])
+            interest += charge
+            bal[i] += charge
+        left = budget
+        for i in bal:  # every loan gets its EMI first
+            paid = min(emi[i], bal[i])
+            bal[i] -= paid
+            left -= paid
+        if strategy:
+            key = (lambda i: (-rate[i], bal[i])) if strategy == 'avalanche' else (lambda i: (bal[i], -rate[i]))
+            for i in sorted(bal, key=key):
+                paid = min(max(left, 0), bal[i])
+                bal[i] -= paid
+                left -= paid
+        for i in [i for i in bal if bal[i] <= 0]:
+            done[i] = month
+            del bal[i]
+    return {'months': None if bal else month, 'interest': interest, 'payoff': done}
+
+
+def money(db, currency='INR', extra=0, every=None):
+    """Loans (with today's balance after the EMI SMS since it was entered) and savings, plus payoff plans for
+    the loans in `currency`: as they are, and with `extra` a month by each strategy."""
+    every = transactions(db) if every is None else every
+    items = []
+    for h in db.run('SELECT * FROM holdings ORDER BY kind, id'):
+        h = dict(h)
+        h['balance_now'], h['payments'] = h['balance_minor'], []
+        if h['kind'] == 'loan' and h['pattern'].strip():
+            key = h['pattern'].strip().lower()
+            for t in sorted(every, key=lambda t: t['received_at']):
+                if (t['direction'] == 'debit' and t['currency'] == h['currency'] and t['received_at'][:10] > h['as_of']
+                        and t['category'] not in NOT_COUNTED and key in t['body'].lower()):
+                    # shortcut: one month's interest per payment, as for a monthly EMI; two EMIs in a month overstate it
+                    paid = round(t['amount'] * 100)
+                    h['balance_now'] = max(0, h['balance_now'] + round(h['balance_now'] * h['rate_bp'] / 120000) - paid)
+                    h['payments'].append({'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount']})
+        items.append(h)
+    loans = [h for h in items if h['kind'] == 'loan' and h['currency'] == currency]
+    return {'holdings': items, 'currency': currency, 'extra': extra / 100,
+            'plans': {'as_is': plan(loans, 0), 'avalanche': plan(loans, extra, 'avalanche'), 'snowball': plan(loans, extra, 'snowball')}}
+
+
+def save_holding(db, h):
+    if h.get('id'):
+        if not db.run('SELECT id FROM holdings WHERE id = :id', id=h['id']):
+            raise KeyError('no such loan or saving')
+        db.run('UPDATE holdings SET kind = :kind, name = :name, currency = :currency, balance_minor = :balance_minor, rate_bp = :rate_bp, '
+               'emi_minor = :emi_minor, due_day = :due_day, pattern = :pattern, as_of = :as_of WHERE id = :id', **h)
+    else:
+        db.run('INSERT INTO holdings (kind, name, currency, balance_minor, rate_bp, emi_minor, due_day, pattern, as_of) '
+               'VALUES (:kind, :name, :currency, :balance_minor, :rate_bp, :emi_minor, :due_day, :pattern, :as_of)',
+               **{k: v for k, v in h.items() if k != 'id'})
+
+
 def mine(t):
     """Your part of a transaction in minor units: the amount less a friend's share."""
     return round((t['amount'] - t['theirs']) * 100)
@@ -571,6 +645,22 @@ def read_friend(environ):
     return int(msg['id']), friend, theirs
 
 
+def read_holding(environ):
+    """A loan or saving from the Money page: {kind, name, currency, balance, rate, emi, due_day, match, as_of, id?}."""
+    msg = read_json(environ, MAX_BODY)
+    minor = lambda v: int(Decimal(str(v or 0).replace(',', '').strip()) * 100)
+    h = {'id': int(msg['id']) if msg.get('id') else None, 'kind': msg['kind'], 'name': ' '.join(str(msg['name']).split()),
+         'currency': msg['currency'], 'balance_minor': minor(msg.get('balance')), 'rate_bp': minor(msg.get('rate')),
+         'emi_minor': minor(msg.get('emi')), 'due_day': int(msg.get('due_day') or 0), 'pattern': ' '.join(str(msg.get('match') or '').split()),
+         'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat())}
+    datetime.strptime(h['as_of'], '%Y-%m-%d')
+    if (h['kind'] not in ('loan', 'saving') or h['currency'] not in ('SAR', 'INR') or not 0 < len(h['name']) <= 40
+            or not 0 <= h['balance_minor'] < 10 ** 13 or not 0 <= h['rate_bp'] <= 6000 or not 0 <= h['emi_minor'] < 10 ** 11
+            or not 0 <= h['due_day'] <= 31 or len(h['pattern']) > 40):
+        raise ValueError('check the name (1-40 letters), amounts, rate (0-60 %) and due day (1-31)')
+    return h
+
+
 def read_import(environ):
     """A batch from the import page: JSON {"messages": [{sender, body, received_at}, ...]}."""
     messages = read_json(environ, MAX_IMPORT_BODY)['messages']
@@ -674,12 +764,22 @@ def _app(environ, start_response):
             doomed = int(read_json(environ, MAX_BODY)['id'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/money'):
+        try:
+            holding = read_holding(environ)
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/money/delete'):
+        try:
+            gone = int(read_json(environ, MAX_BODY)['id'])
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/friend/settle'):
         try:
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -718,6 +818,19 @@ def _app(environ, start_response):
             except KeyError:
                 return respond('404 Not Found', {'error': 'no such transaction'})
             return respond('200 OK', {'deleted': True, **refreshed(db, query)})
+        if path.startswith('/api/money'):
+            if path == '/api/money' and method == 'POST':
+                try:
+                    save_holding(db, holding)
+                except KeyError:
+                    return respond('404 Not Found', {'error': 'no such loan or saving'})
+            elif path == '/api/money/delete':
+                db.run('DELETE FROM holdings WHERE id = :id', id=gone)
+            try:
+                extra = int(Decimal(query.get('extra') or 0) * 100)
+            except ArithmeticError:
+                extra = 0
+            return respond('200 OK', money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11))))
         if path == '/api/friend/settle':
             settle_friend(db, square, query.get('currency') or 'SAR')
             return respond('200 OK', {'saved': True, **refreshed(db, query)})

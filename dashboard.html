@@ -301,6 +301,19 @@
   a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   .fix { margin: 0 0 16px 50px; display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }  /* a one-word 40-letter merchant must wrap, not widen the page */
   .fix label { font-size: 13px; color: var(--text-2); }
+  .holding.fix { margin: 8px 0 16px; }
+  .holding .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .holding input[type=date] { width: 100%; min-height: 44px; margin-top: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+  details.hold > summary { list-style: none; cursor: pointer; } details.hold > summary::-webkit-details-marker { display: none; }
+  details.hold > summary .rk { pointer-events: none; }
+  details.hold.add > summary { padding: 10px 0; }
+  .small { font-size: 13px; margin: 6px 0; }
+  .extra { display: grid; gap: 6px; font-size: 14px; color: var(--text-2); }
+  .extra .row2 { display: flex; align-items: center; gap: 8px; }
+  .extra input { width: 9em; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+  table.plan { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0 4px; font-variant-numeric: tabular-nums; }
+  table.plan th, table.plan td { text-align: left; padding: 8px 4px; border-top: 1px solid var(--line); }
+  table.plan tr:first-child th { border-top: 0; color: var(--muted); font-weight: 500; }
   .fix select, .fix input[type=text] { width: 100%; min-height: 44px; margin-top: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
   .fix .check { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--text); min-height: 44px; }
   .txn .friend-tag { color: var(--accent); }
@@ -802,6 +815,7 @@ function setData(sum, all) {
   state.sum = sum; state.currency = sum.currency; state.all = prep(all);
   state.earliest = state.all.reduce((a, t) => t._d < a ? t._d : a, today());
   $('friend-names').innerHTML = [...new Set(state.all.map(t => t.friend).filter(Boolean))].map(n => `<option value="${esc(n)}">`).join('');
+  if (!state.moneyAt || Date.now() - state.moneyAt > 60000) loadMoney();  // EMI alerts on Overview need it too
 }
 // Keep the screen current without a manual refresh: ask "anything new?" when the app comes back to the
 // foreground and every 30 s while it's on screen (never in the background), and reload only when there is.
@@ -863,7 +877,7 @@ const splitAcct = a => { const i = a.lastIndexOf('•'); return i > 0 ? `<b clas
 // Ranked bar row: icon | name + detail | amount (+ change) | share, with the share as a bar below.
 const rk = r => `<${r.href ? `a href="${r.href}"` : 'div'} class="rk"><span class="ic" aria-hidden="true"${r.color ? ` style="background:color-mix(in srgb, ${r.color} 18%, var(--surface-2))"` : ''}>${r.icon}</span>` +
   `<span class="nm">${r.nameHtml || `<b title="${esc(r.name)}">${esc(r.name)}</b>`}${r.sub ? `<small>${r.sub}</small>` : ''}</span>` +
-  `<span class="v">${fmt(r.value)}${r.vsub ? `<small>${r.vsub}</small>` : ''}</span>` +
+  `<span class="v">${r.valueText ?? fmt(r.value)}${r.vsub ? `<small>${r.vsub}</small>` : ''}</span>` +
   `<span class="pc">${r.pct == null ? '' : Math.round(r.pct * 100) + '%'}</span>` +
   `<span class="tr" aria-hidden="true"><i style="width:${(Math.max(0, Math.min(1, r.bar ?? r.pct ?? 0)) * 100).toFixed(1)}%${r.color ? `;background:${r.color}` : ''}"></i></span></${r.href ? 'a' : 'div'}>`;
 // Category colors by rank in the view (biggest first), shared by the donut and the bars under it.
@@ -918,6 +932,100 @@ function row(t, withDate) {
     `<label hidden>New category name<input type="text" name="custom" maxlength="40" autocomplete="off"></label>` +
     `<label class="check"><input type="checkbox" name="all" checked>${t.merchant ? `Apply to all from ${esc(t.merchant)}` : 'Apply to all similar messages'}, including future SMS</label>` +
     `<div><button>Save</button></div></form>${friendForm(t)}</details>`;
+}
+/* ---------- Money: loans, savings and the payoff plan (loans are planned in INR; SAR converts at state.rate) ---------- */
+// localStorage can throw (private browsing, blocked storage): treat that as empty.
+const ls = { get: k => { try { return ls.get(k); } catch { return null; } },
+  set: (k, v) => { try { ls.set(k, v); } catch {} }, del: k => { try { localStorage.removeItem(k); } catch {} } };
+const inrFmt = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+const rupees = c => `₹${c < 0 ? '−' : ''}${inrFmt.format(Math.abs(c) / 100)}`;
+const toInr = (c, cur) => cur === 'INR' ? c : Math.round(c * state.rate);
+state.rate = +(ls.get('inrPerSar') || 0) || 23.4;  // INR per SAR, refreshed from the USD rate below
+state.extra = +(ls.get('extraInr') || 0) || 0;
+async function loadMoney() {
+  state.moneyAt = Date.now();
+  try {
+    const r = await fetch(`/api/money?currency=INR&extra=${state.extra}`);
+    if (!r.ok) return;
+    state.money = await r.json();
+    if (!document.querySelector('details.txn[open], form.holding:focus-within')) render();
+  } catch {}
+}
+// SAR is pegged to the dollar at 3.75, so INR per SAR = INR per USD / 3.75. Once a day; a rate you type wins.
+async function loadRate() {
+  if (ls.get('rateMine') || Date.now() - +(ls.get('rateAt') || 0) < 864e5) return;
+  try {
+    const usd = (await (await fetch('https://api.frankfurter.app/latest?from=USD&to=INR')).json()).rates.INR;
+    state.rate = Math.round(usd / 3.75 * 100) / 100;
+    ls.set('inrPerSar', state.rate); ls.set('rateAt', Date.now());
+    if (location.hash.startsWith('#/money')) render();
+  } catch {}
+}
+const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().slice(0, 7));
+// EMIs due in the next `days` days (or overdue this month) that no SMS has shown as paid yet.
+function emisDue(days = 3) {
+  const d = +today().slice(8);
+  // Only loans with SMS words: without them a paid EMI can't be seen, and every month would look overdue.
+  return (state.money?.holdings || []).filter(h => h.kind === 'loan' && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
+    .map(h => ({ h, inDays: h.due_day - d }));
+}
+const whenMonths = n => n == null ? 'never at this EMI' : monthName(addM(today().slice(0, 7), n), 'short');
+function holdingForm(h, kind) {
+  const v = (k, d = '') => esc(h?.[k] ?? d), num = c => c == null ? '' : (c / 100).toString();
+  return `<form class="fix holding" data-id="${h?.id || ''}" data-kind="${kind}">` +
+    `<label>Name<input type="text" name="name" maxlength="40" required value="${v('name')}" placeholder="${kind === 'loan' ? 'e.g. HDFC home loan' : 'e.g. Al Rajhi savings'}"></label>` +
+    `<div class="two"><label>Currency<select name="currency">${['INR', 'SAR'].map(c => `<option ${c === (h?.currency || (kind === 'loan' ? 'INR' : 'SAR')) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>` +
+    `<label>${kind === 'loan' ? 'Outstanding' : 'Balance'}<input type="text" inputmode="decimal" name="balance" required value="${num(h?.balance_minor)}"></label></div>` +
+    (kind === 'loan' ? `<div class="two"><label>Interest % a year<input type="text" inputmode="decimal" name="rate" required value="${h ? h.rate_bp / 100 : ''}"></label>` +
+      `<label>EMI a month<input type="text" inputmode="decimal" name="emi" required value="${num(h?.emi_minor)}"></label></div>` +
+      `<div class="two"><label>Due day<input type="text" inputmode="numeric" name="due_day" value="${h?.due_day || ''}" placeholder="1-31"></label>` +
+      `<label>Balance as on<input type="date" name="as_of" value="${v('as_of', today())}" max="${today()}"></label></div>` +
+      `<label>Words in the EMI SMS<input type="text" name="match" maxlength="40" value="${v('pattern')}" placeholder="e.g. the loan account's last 4 digits"></label>` +
+      '<p class="muted small">EMI SMS after "Balance as on" that contain these words bring the balance down by themselves.</p>'
+      : `<input type="hidden" name="as_of" value="${today()}">`) +
+    `<div class="actions"><button>${h ? 'Save' : kind === 'loan' ? 'Add loan' : 'Add savings'}</button>${h ? `<button type="button" class="link danger" data-del-holding="${h.id}">Delete</button>` : ''}</div></form>`;
+}
+function moneyPage() {
+  loadRate();
+  const M = state.money;
+  if (!M) { if (!state.moneyAt) loadMoney(); return { title: 'Money', html: `<section class="card">${empty('Loading…')}</section>` }; }
+  const loans = M.holdings.filter(h => h.kind === 'loan'), saves = M.holdings.filter(h => h.kind === 'saving');
+  const debt = loans.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0), saved = saves.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
+  const P = M.plans, best = P.avalanche, d = +today().slice(8);
+  const loanRow = h => {
+    const paid = paidThisMonth(h), cut = h.balance_minor ? 1 - h.balance_now / h.balance_minor : 0;
+    const due = !h.due_day ? '' : !h.pattern ? `EMI on day ${h.due_day}` : paid ? `✓ EMI paid ${shortDay(paid.date)}`
+      : h.due_day < d ? `<span class="up">EMI overdue (day ${h.due_day})</span>` : `EMI due in ${plural(h.due_day - d, 'day')}`;
+    return `<details class="hold"><summary>${rk({ icon: h.name.toLowerCase().includes('car') ? '🚗' : '🏠', name: h.name,
+      sub: `${h.rate_bp / 100}% · EMI ${h.currency === 'INR' ? rupees(h.emi_minor) : money(h.emi_minor)}`, vsub: due, value: h.balance_now, valueText: h.currency === 'INR' ? rupees(h.balance_now) : money(h.balance_now), bar: cut })}</summary>` +
+      (h.payments.length ? `<p class="muted small">EMIs seen since ${shortDay(h.as_of)}: ${h.payments.map(p => `${shortDay(p.date)} ${fmt(Math.round(p.amount * 100))}`).join(' · ')}</p>` : '') +
+      holdingForm(h, 'loan') + '</details>';
+  };
+  const saveRow = h => `<details class="hold"><summary>${rk({ icon: '🏦', name: h.name, sub: h.currency === 'INR' ? '' : `≈ ${rupees(toInr(h.balance_now, h.currency))}`, value: h.balance_now, valueText: h.currency === 'INR' ? rupees(h.balance_now) : `SAR ${fmt(h.balance_now)}` })}</summary>${holdingForm(h, 'saving')}</details>`;
+  // What's usually left over each month (SAR, last 3 full months): the most you could add to the loans.
+  const full = (state.currency === 'SAR' ? state.sum?.months || [] : []).filter(m => m.month < today().slice(0, 7)).slice(-3);
+  const spare = full.length ? Math.round(full.reduce((a, m) => a + (m.received - m.spent) * 100, 0) / full.length) : null;
+  const strat = (key, label) => { const p = P[key], gain = P.as_is.interest - p.interest;
+    return `<tr><th>${label}</th><td>${whenMonths(p.months)}</td><td>${rupees(p.interest)}</td><td>${p.months != null && gain > 0 ? `saves ${rupees(gain)}` : '–'}</td></tr>`; };
+  const order = loans.filter(h => h.currency === 'INR' && best.payoff[h.id]).sort((a, b) => best.payoff[a.id] - best.payoff[b.id]);
+  const costliest = [...order].sort((a, b) => b.rate_bp - a.rate_bp)[0];
+  return { title: 'Money', sub: 'Loans, savings and your payoff plan', html:
+    `<section class="hero"><div class="label">Net worth</div><div class="total"><small>₹</small><span>${inrFmt.format((saved - debt) / 100)}</span></div>` +
+    `<div class="kpis"><div><span>Savings</span><b>${rupees(saved)}</b></div><div><span>Loans</span><b>${rupees(debt)}</b></div>` +
+    `<div><span>Debt-free (plan)</span><b>${loans.length ? whenMonths(best.months) : '–'}</b></div><div><span>Interest still to pay</span><b>${loans.length ? rupees(best.interest) : '–'}</b></div></div>` +
+    `<p class="proj">1 SAR = ₹${state.rate} ${ls.get('rateMine') ? '(your rate)' : ls.get('rateAt') ? '(today)' : '(approximate: set it below)'}</p></section>` +
+    card('Loans', rupees(debt), loans.map(loanRow).join('') + `<details class="hold add"><summary class="link">+ Add a loan</summary>${holdingForm(null, 'loan')}</details>`) +
+    (loans.some(h => h.currency === 'INR') ? card('Payoff plan', 'INR loans',
+      `<label class="extra">Extra each month toward the loans <span class="row2"><b>₹</b><input type="text" inputmode="numeric" id="extra" value="${state.extra || ''}" placeholder="0">` +
+      `<small>${state.extra ? `≈ SAR ${fmt(Math.round(state.extra * 100 / state.rate))}` : ''}</small></span></label>` +
+      (spare != null ? `<p class="muted small">Left over in an average month lately: SAR ${fmt(spare)} ≈ ${rupees(Math.round(spare * state.rate))}.${spare > 0 ? ' Some of it could go here.' : ''}</p>` : '') +
+      `<table class="plan"><tr><th></th><th>Debt-free</th><th>Interest</th><th></th></tr>${strat('as_is', 'EMIs only')}${strat('avalanche', 'Highest rate first')}${strat('snowball', 'Smallest first')}</table>` +
+      (order.length ? `<p class="muted small">Highest rate first: put the extra on <b>${esc(costliest.name)}</b> until it's closed, then its EMI and the extra move to the next.</p>` +
+        `<ol class="how">${order.map(h => `<li>${esc(h.name)}: closed by <b>${whenMonths(best.payoff[h.id])}</b></li>`).join('')}</ol>` : '') +
+      '<p class="muted small">Indian home loans on a floating rate can be prepaid without a penalty; check fixed-rate and car loans with the bank first. This is a guide from your numbers, not financial advice.</p>') : '') +
+    card('Savings', rupees(saved), saves.map(saveRow).join('') + `<details class="hold add"><summary class="link">+ Add savings</summary>${holdingForm(null, 'saving')}</details>`) +
+    card('Exchange rate', '', `<label class="extra">₹ per 1 SAR <span class="row2"><input type="text" inputmode="decimal" id="rate" value="${state.rate}"></span></label>` +
+      `<p class="muted small">Filled in daily from the dollar rate (SAR is fixed at 3.75 to the dollar). Type your own to keep it; clear it to go back to the daily rate.</p>`) };
 }
 const friendNote = t => `${t.friend} · ${t.direction === 'credit' ? 'paid you back'
   : t._t >= t._c ? 'all theirs' : `they owe ${fmt(t._t)}, yours ${fmt(t._mine)}`}${t.settled ? ' · settled' : ''}`;
@@ -1022,7 +1130,8 @@ function overview(rt, P, X) {
     `<dl class="stats"><div><dt>Next 7 days</dt><dd>${money(w7.exp)}</dd><dt>likely ${fmt(w7.low)}–${fmt(w7.high)}</dt></div>` +
     `<div><dt>Regular payments, next 14 days</dt><dd>${money(soon.reduce((a, x) => a + x.r.A, 0))}</dd><dt>${plural(soon.length, 'payment')}</dt></div></dl>` +
     (soon.length ? upcomingRows(soon.slice(0, 3)) : ''), '#/forecast') : '';
-  return { html: chips(P) + hero + todayCard + coming +
+  const emis = emisDue().map(({ h, inDays }) => `<a class="banner" href="#/money"><span>${inDays < 0 ? 'EMI overdue' : inDays ? `EMI due in ${plural(inDays, 'day')}` : 'EMI due today'} · ${esc(h.name)} ${h.currency === 'INR' ? rupees(h.emi_minor) : money(h.emi_minor)}</span>${go1}</a>`).join('');
+  return { html: chips(P) + hero + emis + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
@@ -1034,6 +1143,7 @@ function overview(rt, P, X) {
       ln(`#/large?${q}`, 'Large transactions', 'Far above the usual', String(large.length)) +
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
+      ln('#/money', 'Money &amp; loans', 'Loans, savings, payoff plan', state.money ? rupees(state.money.holdings.reduce((a, h) => a + (h.kind === 'loan' ? -1 : 1) * toInr(h.balance_now, h.currency), 0)) : '') +
       ln('#/friends', 'Friends', 'Bought for friends, paid back', fmt(friendBalances().reduce((a, e) => a + Math.max(0, e.owed), 0)))) };
 }
 function catRows(groups, total, X, P, f = {}) {
@@ -1274,7 +1384,7 @@ function renderResults() {
 const PAGES = { overview, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage };
 const TITLES = Object.fromEntries(TABS.map(([k, label]) => [k, label]));
 
 function render() {
@@ -1410,7 +1520,7 @@ document.addEventListener('change', e => {
   if (e.target.name === 'split') e.target.form.theirs.parentElement.hidden = e.target.value !== 'custom';
 });
 document.addEventListener('submit', async e => {
-  if (!e.target.matches('form.fix:not(.friend)')) return;  // leave the sign-out and friend forms alone
+  if (!e.target.matches('form.fix:not(.friend):not(.holding)')) return;  // leave the sign-out, friend and money forms alone
   e.preventDefault();
   const form = e.target, row = form.closest('details'), f = filterOf(parseRoute());
   const chosen = form.category.value === '__new' ? form.custom.value.trim() : form.category.value;
@@ -1509,6 +1619,42 @@ document.addEventListener('click', async e => {
     if (await postAndRedraw('/api/friend/settle', { friend: settle.dataset.settle })) toast(`Settled with ${settle.dataset.settle}.`);
     else settle.disabled = false;
   }
+});
+
+async function saveMoney(path, body) {
+  try {
+    const r = await fetch(`${path}?currency=INR&extra=${state.extra}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.status === 401) { location.href = '/login'; return false; }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    state.money = await r.json(); render();
+    return true;
+  } catch (err) { toast(`Could not save: ${err.message}`); return false; }
+}
+document.addEventListener('submit', async e => {
+  if (!e.target.matches('form.holding')) return;
+  e.preventDefault();
+  const f = e.target, data = Object.fromEntries(new FormData(f));
+  f.querySelector('button').disabled = true;
+  if (await saveMoney('/api/money', { ...data, id: f.dataset.id || null, kind: f.dataset.kind })) toast(f.dataset.id ? 'Saved.' : 'Added.');
+  else f.querySelector('button').disabled = false;
+});
+document.addEventListener('click', async e => {
+  const del = e.target.closest('[data-del-holding]');
+  if (del && confirm('Delete this from your Money page?') && await saveMoney('/api/money/delete', { id: +del.dataset.delHolding })) toast('Deleted.');
+});
+let extraTimer;
+document.addEventListener('input', e => {
+  if (e.target.id === 'extra') {
+    clearTimeout(extraTimer);
+    extraTimer = setTimeout(() => { state.extra = Math.max(0, parseInt(e.target.value.replace(/\D/g, ''), 10) || 0); ls.set('extraInr', state.extra); loadMoney(); }, 500);
+  }
+});
+document.addEventListener('change', e => {
+  if (e.target.id !== 'rate') return;
+  const v = parseFloat(e.target.value);
+  if (v > 0) { state.rate = v; ls.set('inrPerSar', v); ls.set('rateMine', '1'); }
+  else { ls.del('rateMine'); ls.del('rateAt'); loadRate(); }
+  render();
 });
 
 history.replaceState({ d: 0 }, '');
