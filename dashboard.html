@@ -1159,7 +1159,7 @@ function moneyPage() {
     const due = !h.due_day ? '' : !h.pattern ? `${E} on day ${h.due_day}` : paid ? `✓ ${h.kind === 'card' ? 'Paid' : 'EMI paid'} ${shortDay(paid.date)}`
       : h.due_day < d ? `<span class="up">${E} overdue (day ${h.due_day})</span>` : `${E} due in ${plural(h.due_day - d, 'day')}`;
     return `<details class="hold"><summary>${rk({ icon: h.kind === 'card' ? '💳' : /car|auto|vehicle/i.test(h.name) ? '🚗' : '🏠', name: h.name,
-      sub: `${h.rate_bp / 100}% · ${h.kind === 'card' ? 'paying' : 'EMI'} ${cash(h.emi_minor, h.currency)}`, vsub: due, value: h.balance_now, valueText: cash(h.balance_now, h.currency), bar: cut })}</summary>` +
+      sub: `${h.rate_bp ? `${h.rate_bp / 100}%` : '<span class="up">rate not set ✎</span>'} · ${h.kind === 'card' ? 'due' : 'EMI'} ${cash(h.emi_minor, h.currency)}`, vsub: due, value: h.balance_now, valueText: cash(h.balance_now, h.currency), bar: cut })}</summary>` +
       (h.payments.length ? `<p class="muted small">${h.kind === 'card' ? 'Payments' : 'EMIs'} seen since ${shortDay(h.as_of)}: ${h.payments.map(p => `${shortDay(p.date)} ${fmt(Math.round(p.amount * 100))}`).join(' · ')}</p>` : '') +
       (h.charges?.length ? `<p class="muted small">Card purchases since ${shortDay(h.as_of)}: ${plural(h.charges.length, 'purchase')}, ${cash(Math.round(h.charges.reduce((a, c) => a + c.amount, 0) * 100), h.currency)}</p>` : '') +
       holdingForm(h, h.kind) + '</details>';

@@ -495,6 +495,41 @@ def inr_per_sar(now=None):
     return None
 
 
+# Credit-card due reminders: '…VISA Card is due on 25/11/2026 for SAR 8,622.00 total amount due SAR 13,845.84'.
+_AMT = r'(SAR|SR|INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?)'
+CARD_TOTAL = re.compile(r'(?:total\s+(?:amount\s+)?due|total\s+outstanding|outstanding\s+balance|statement\s+balance)\s*(?:is|of|:)?\s*' + _AMT, re.I)
+CARD_DUE = re.compile(r'(?:\bdue\b[^\n]*?\bfor\s*|minimum\s+(?:amount\s+)?(?:due|payment)\s*(?:is|of|:)?\s*)' + _AMT, re.I)
+CARD_DUE_DAY = re.compile(r'\bdue\s+(?:on|by|date)?\s*:?\s*(\d{1,2})[/.-]\d{1,2}[/.-]\d{2,4}', re.I)
+CARD_DIGITS = re.compile(r'(?:card|ending|\*)\D{0,12}?(\d{4})\b', re.I)
+CARD_BRAND = re.compile(r'\b(visa|master\s?card|mada|amex|american\s+express)\b', re.I)
+
+
+def card_statement(db, body, received_at):
+    """A card's due reminder puts the card on the Debt page, or updates what's owed, the payment due and the due
+    day from it (a reminder older than the card's last update is ignored). Returns the card's name, or None."""
+    total = CARD_TOTAL.search(body) if re.search(r'\bcard\b', body, re.I) else None
+    if not total:
+        return None
+    minor = lambda m: round(float(m.group(2).replace(',', '')) * 100)
+    currency = 'INR' if total.group(1).upper().startswith(('INR', 'RS', '₹')) else 'SAR'
+    due, day, digits, brand = CARD_DUE.search(body), CARD_DUE_DAY.search(body), CARD_DIGITS.search(body), CARD_BRAND.search(body)
+    digits = digits and digits.group(1)
+    name = f"{brand.group(1).title() if brand else 'Credit'} card" + (f' ••{digits}' if digits else '')
+    when = received_at[:10]
+    cards = [c for c in db.run("SELECT * FROM holdings WHERE kind = 'card'") if c['currency'] == currency]
+    card = (next((c for c in cards if digits and c['pattern'] == digits), None) or next((c for c in cards if c['name'] == name), None)
+            or (cards[0] if len(cards) == 1 and not digits else None))  # one card in that currency: the reminder is about it
+    owed, pay = minor(total), minor(due) if due else minor(total)
+    if card:
+        if when >= card['as_of']:
+            db.run('UPDATE holdings SET balance_minor = :b, emi_minor = :e, due_day = :d, as_of = :a WHERE id = :id',
+                   b=owed, e=pay, d=int(day.group(1)) if day else card['due_day'], a=when, id=card['id'])
+        return card['name']
+    save_holding(db, {'id': None, 'kind': 'card', 'name': name, 'currency': currency, 'balance_minor': owed, 'rate_bp': 0,
+                      'emi_minor': pay, 'due_day': int(day.group(1)) if day else 0, 'pattern': digits or '', 'as_of': when})
+    return name
+
+
 def record_payment(db, holding_id, paid_on, amount_minor, note):
     if not db.run("SELECT id FROM holdings WHERE id = :id AND kind IN ('loan', 'card')", id=holding_id):
         raise KeyError('no such loan')
@@ -988,6 +1023,8 @@ def _app(environ, start_response):
             return respond('200 OK', {'saved': True, **refreshed(db, query)})
         if path == '/api/import':
             stored = store_many(db, batch)
+            for _, body, received_at in sorted(batch, key=lambda m: m[2]):  # oldest first, so the newest reminder wins
+                card_statement(db, body, received_at)
             if environ.get('HTTP_AUTHORIZATION', '').startswith('Bearer '):  # the Expense Sync phone app (the import page uses the login cookie)
                 record_delivery(db, 'Phone sync', f'{len(stored)} new of {len(batch)} checked')
             return respond('200 OK', {'received': len(batch), 'stored': len(stored)})
@@ -995,8 +1032,9 @@ def _app(environ, start_response):
             stored = store_sms(db, *sms)
             advert = bool(AD_SENDER.search(sms[0].strip()))
             skipped = not stored and not advert and not parse(sms[1])
-            record_delivery(db, sms[0], 'advert, not counted' if advert else 'not a transaction' if skipped
-                            else 'saved' if stored else 'already had it', (sms[1], sms[2]) if skipped else None)
+            card = skipped and card_statement(db, sms[1], sms[2])
+            record_delivery(db, sms[0], 'advert, not counted' if advert else f'card due: {card} updated on the Debt tab' if card else 'not a transaction' if skipped
+                            else 'saved' if stored else 'already had it', (sms[1], sms[2]) if skipped and not card else None)
             return respond('201 Created' if stored else '200 OK', {'stored': bool(stored), 'transaction': stored})
         if path == '/api/summary':
             return respond('200 OK', summary(db, query.get('month'), query.get('currency')))

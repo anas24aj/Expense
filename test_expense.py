@@ -567,6 +567,23 @@ class AppTest(unittest.TestCase):
         m = json.loads(self.call('POST', '/api/money/pay', json.dumps({'holding_id': c['id'], 'amount': '300', 'paid_on': '2026-11-26'}).encode(), query='rate=25')[1])
         self.assertEqual(m['holdings'][0]['balance_now'], 4000_00)
 
+    def test_card_due_reminder_adds_and_updates_the_card(self):
+        nov = 'Payment on your VISA Card is due on 25/11/2026 for SAR 8,622.00 total amount due SAR 13,845.84 , Your SADAD No 16001880067 . Please ignore if already paid'
+        self.call('POST', '/sms', json.dumps({'sender': 'SNB-AlAhli', 'body': nov, 'received_at': '2026-11-18T10:00:00+03:00'}).encode())
+        c = json.loads(self.call('GET', '/api/money', query='rate=25')[1])['holdings'][0]
+        self.assertEqual((c['kind'], c['name'], c['currency'], c['balance_minor'], c['emi_minor'], c['due_day'], c['as_of']),
+                         ('card', 'Visa card', 'SAR', 1384584, 862200, 25, '2026-11-18'))
+        self.assertEqual(json.loads(self.call('GET', '/api/transactions')[1]), [])  # a reminder is not spending
+        self.assertIn('card due: Visa card', json.loads(self.call('GET', '/api/summary')[1])['deliveries'][0]['outcome'])
+        # Next month's reminder (via the phone app's batch import) updates the same card; an older one changes nothing.
+        dec = nov.replace('25/11/2026', '25/12/2026').replace('8,622.00', '7,900.00').replace('13,845.84', '11,200.00')
+        oct_ = nov.replace('25/11/2026', '25/10/2026').replace('13,845.84', '15,000.00')
+        batch = {'messages': [{'sender': 'SNB', 'body': dec, 'received_at': '2026-12-18T10:00:00+03:00'},
+                              {'sender': 'SNB', 'body': oct_, 'received_at': '2026-10-18T10:00:00+03:00'}]}
+        self.call('POST', '/api/import', json.dumps(batch).encode())
+        cards = [h for h in json.loads(self.call('GET', '/api/money', query='rate=25')[1])['holdings'] if h['kind'] == 'card']
+        self.assertEqual([(h['balance_minor'], h['emi_minor'], h['as_of']) for h in cards], [(1120000, 790000, '2026-12-18')])
+
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),
                          (SAMPLES[8][0], '2026-09-17T10:00:00+03:00'), (SAMPLES[0][0], '2026-10-01T10:00:00+05:30')):
