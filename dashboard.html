@@ -31,6 +31,8 @@
     }
   }
   * { box-sizing: border-box; }
+  input, select, textarea { max-width: 100%; }  /* a form field never pushes the page wider than the phone */
+  html, body { overflow-x: clip; }
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
   main { max-width: 720px; margin: 0 auto; padding: 12px 16px calc(88px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
@@ -302,7 +304,7 @@
   .fix { margin: 0 0 16px 50px; display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }  /* a one-word 40-letter merchant must wrap, not widen the page */
   .fix label { font-size: 13px; color: var(--text-2); }
   .holding.fix { margin: 8px 0 16px; }
-  .holding .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .holding .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
   .holding input[type=date] { width: 100%; min-height: 44px; margin-top: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
   details.hold > summary { list-style: none; cursor: pointer; } details.hold > summary::-webkit-details-marker { display: none; }
   details.hold > summary .rk { pointer-events: none; }
@@ -313,8 +315,8 @@
   .extra input { width: 9em; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
   .setup h3 { font-size: 15px; margin: 16px 0 8px; }
   .setup label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
-  .setup input { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
-  .setup .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .setup input { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+  .setup .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
   .setup .actions { display: flex; gap: 16px; align-items: center; }
   .alloc { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
   .alloc .ic { width: 32px; height: 32px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; }
@@ -327,7 +329,7 @@
   .opt b { display: block; } .opt small { display: block; color: var(--muted); font-size: 12px; } .opt .stats { grid-template-columns: repeat(3, 1fr); margin: 8px 0; }
   .step h2 { margin-top: 2px; } .step p { margin: 6px 0 12px; color: var(--text-2); }
   .step label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
-  .step input { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+  .step input { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
   .step .actions { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
   .meter { height: 6px; border-radius: 3px; background: rgb(255 255 255 / .25); margin-top: 10px; overflow: hidden; } .meter i { display: block; height: 100%; background: #fff; border-radius: 3px; }
   .donelist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }

@@ -43,7 +43,8 @@
   [hidden] { display: none !important; }
   textarea, input[type=date], input[type=time] { width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   textarea { min-height: 120px; resize: vertical; }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+  .row input { min-width: 0; }
   .row label { font-size: 13px; color: var(--text-2); display: grid; gap: 4px; }
 </style>
 </head>
