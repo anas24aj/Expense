@@ -60,7 +60,7 @@ MAX_FRIEND = 40
 # contains `pattern` (e.g. the loan account's last digits) bring it down. rate_bp: yearly rate in hundredths of a %.
 HOLDINGS_SCHEMA = '''CREATE TABLE IF NOT EXISTS holdings (id {id} PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
   currency TEXT NOT NULL, balance_minor BIGINT NOT NULL, rate_bp INTEGER NOT NULL DEFAULT 0, emi_minor BIGINT NOT NULL DEFAULT 0,
-  due_day INTEGER NOT NULL DEFAULT 0, pattern TEXT NOT NULL DEFAULT '', as_of TEXT NOT NULL)'''
+  due_day INTEGER NOT NULL DEFAULT 0, pattern TEXT NOT NULL DEFAULT '', as_of TEXT NOT NULL, auto INTEGER NOT NULL DEFAULT 0)'''
 # Payments you record yourself on the Plan page: an EMI the SMS didn't show, or an extra (pre)payment.
 PAYMENTS_SCHEMA = '''CREATE TABLE IF NOT EXISTS loan_payments (id {id} PRIMARY KEY, holding_id BIGINT NOT NULL, paid_on TEXT NOT NULL,
   amount_minor BIGINT NOT NULL, note TEXT NOT NULL DEFAULT '')'''
@@ -120,11 +120,21 @@ class DB:
             self.run(schema)
             for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
+            self.migrate()
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
             try:
                 self.reread_amounts()
             except Exception as e:  # a clean-up; never worth failing a request over
                 print(f'reread_amounts failed: {type(e).__name__}: {e}', file=sys.stderr)
+
+    def migrate(self):
+        """Columns added after a table first existed. holdings.auto: the EMI is taken automatically each month
+        (loans made before it existed are, as Indian EMIs usually are; cards aren't)."""
+        cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'holdings'")}
+                if self.pg else {r['name'] for r in self.run('PRAGMA table_info(holdings)')})
+        if 'auto' not in cols:
+            self.run('ALTER TABLE holdings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0')
+            self.run("UPDATE holdings SET auto = 1 WHERE kind = 'loan'")
 
     @staticmethod
     def _connect(url):
@@ -417,7 +427,20 @@ def plan(loans, extra, strategy=None):
 DEBTS = ('loan', 'card')
 
 
-def money(db, currency='INR', extra=0, every=None, rate=None):
+def auto_emis(h, taken, today):
+    """The EMIs an auto-debited debt has paid since its balance was entered: one on each due day up to today,
+    except in months where an SMS or a payment you recorded already shows it (`taken`: those months)."""
+    out, month = [], h['as_of'][:7]
+    while month <= today[:7]:
+        y, m = map(int, month.split('-'))
+        day = f'{month}-{min(h["due_day"], [31, 29 if y % 4 == 0 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]):02d}'
+        if h['as_of'] < day <= today and month not in taken:
+            out.append({'date': day, 'amount': h['emi_minor'] / 100, 'source': 'auto'})
+        month = f'{y + m // 12:04d}-{m % 12 + 1:02d}'
+    return out
+
+
+def money(db, currency='INR', extra=0, every=None, rate=None, today=None):
     """Loans and credit cards (with today's balance after the SMS since it was entered) and savings, plus payoff
     plans for all of them in `currency` (the others converted at `rate`, INR per SAR): as they are, and with
     `extra` a month by each strategy. A card's balance goes up with each purchase SMS and down with each payment."""
@@ -443,6 +466,9 @@ def money(db, currency='INR', extra=0, every=None, rate=None):
             mine = [{'pid': r['id'], 'date': r['paid_on'], 'amount': r['amount_minor'] / 100, 'source': r['note'] or 'manual'}
                     for r in recorded[h['id']] if r['paid_on'] >= h['as_of']  # recorded on the day you typed the balance: after it
                     and not (r['note'] == 'EMI' and r['paid_on'][:7] in sms_months)]  # the SMS turned up after all: count it once
+            if h['auto'] and h['due_day'] and h['emi_minor']:
+                today = today or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).date().isoformat()
+                mine += auto_emis(h, sms_months | {p['date'][:7] for p in mine if p['source'] == 'EMI'}, today)
             interest_month = None
             for p in sorted(sms + mine, key=lambda p: p['date']):
                 # One month's interest per month with a payment (yearly rate / 12). Not on a card: its interest
@@ -525,7 +551,7 @@ def card_statement(db, body, received_at):
             db.run('UPDATE holdings SET balance_minor = :b, emi_minor = :e, due_day = :d, as_of = :a WHERE id = :id',
                    b=owed, e=pay, d=int(day.group(1)) if day else card['due_day'], a=when, id=card['id'])
         return card['name']
-    save_holding(db, {'id': None, 'kind': 'card', 'name': name, 'currency': currency, 'balance_minor': owed, 'rate_bp': 0,
+    save_holding(db, {'id': None, 'kind': 'card', 'auto': 0, 'name': name, 'currency': currency, 'balance_minor': owed, 'rate_bp': 0,
                       'emi_minor': pay, 'due_day': int(day.group(1)) if day else 0, 'pattern': digits or '', 'as_of': when})
     return name
 
@@ -557,10 +583,10 @@ def save_holding(db, h):
         if not db.run('SELECT id FROM holdings WHERE id = :id', id=h['id']):
             raise KeyError('no such loan or saving')
         db.run('UPDATE holdings SET kind = :kind, name = :name, currency = :currency, balance_minor = :balance_minor, rate_bp = :rate_bp, '
-               'emi_minor = :emi_minor, due_day = :due_day, pattern = :pattern, as_of = :as_of WHERE id = :id', **h)
+               'emi_minor = :emi_minor, due_day = :due_day, pattern = :pattern, as_of = :as_of, auto = :auto WHERE id = :id', **h)
     else:
-        db.run('INSERT INTO holdings (kind, name, currency, balance_minor, rate_bp, emi_minor, due_day, pattern, as_of) '
-               'VALUES (:kind, :name, :currency, :balance_minor, :rate_bp, :emi_minor, :due_day, :pattern, :as_of)',
+        db.run('INSERT INTO holdings (kind, name, currency, balance_minor, rate_bp, emi_minor, due_day, pattern, as_of, auto) '
+               'VALUES (:kind, :name, :currency, :balance_minor, :rate_bp, :emi_minor, :due_day, :pattern, :as_of, :auto)',
                **{k: v for k, v in h.items() if k != 'id'})
 
 
@@ -801,7 +827,8 @@ def read_holding(environ):
     h = {'id': int(msg['id']) if msg.get('id') else None, 'kind': msg['kind'], 'name': ' '.join(str(msg['name']).split()),
          'currency': msg['currency'], 'balance_minor': minor(msg.get('balance')), 'rate_bp': minor(msg.get('rate')),
          'emi_minor': minor(msg.get('emi')), 'due_day': int(msg.get('due_day') or 0), 'pattern': ' '.join(str(msg.get('match') or '').split()),
-         'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat())}
+         'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat()),
+         'auto': 1 if msg.get('auto') in (True, 1, '1', 'on', 'true') else 0}
     datetime.strptime(h['as_of'], '%Y-%m-%d')
     if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR') or not 0 < len(h['name']) <= 40
             or not 0 <= h['balance_minor'] < 10 ** 13 or not 0 <= h['rate_bp'] <= 6000 or not 0 <= h['emi_minor'] < 10 ** 11

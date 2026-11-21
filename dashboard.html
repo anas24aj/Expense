@@ -983,7 +983,7 @@ const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().s
 function emisDue(days = 3) {
   const d = +today().slice(8);
   // Only loans with SMS words: without them a paid EMI can't be seen, and every month would look overdue.
-  return (state.money?.holdings || []).filter(h => isDebt(h) && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
+  return (state.money?.holdings || []).filter(h => isDebt(h) && !h.auto && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
     .map(h => ({ h, inDays: h.due_day - d }));
 }
 const whenMonths = n => n == null ? 'never at this EMI' : monthName(addM(today().slice(0, 7), n), 'short');
@@ -1000,8 +1000,9 @@ function holdingForm(h, kind) {
       `<div class="two"><label>Due day<input type="text" inputmode="numeric" name="due_day" value="${h?.due_day || ''}" placeholder="1-31"></label>` +
       `<label>${card ? 'Owed as on' : 'Balance as on'}<input type="date" name="as_of" value="${v('as_of', today())}" max="${today()}"></label></div>` +
       `<label>${card ? 'Card’s last 4 digits' : 'Words in the EMI SMS'}<input type="text" name="match" maxlength="40" value="${v('pattern')}" placeholder="${card ? 'e.g. 4455' : 'e.g. the loan account’s last 4 digits'}"></label>` +
+      `<label class="check"><input type="checkbox" name="auto" ${(h ? h.auto : !card) ? 'checked' : ''}>${card ? 'Paid automatically from my account each month' : 'EMI is auto-debited each month'}</label>` +
       (card ? '<p class="muted small">SMS after "Owed as on" with these digits: purchases add to what you owe, payments to the card take it off.</p>'
-        : '<p class="muted small">EMI SMS after "Balance as on" that contain these words bring the balance down by themselves.</p>')
+        : '<p class="muted small">Auto-debited: each due day the EMI counts as paid by itself (an EMI SMS, if it comes, is used instead). Otherwise EMI SMS with these words bring the balance down.</p>')
       : `<input type="hidden" name="as_of" value="${today()}">`) +
     `<div class="actions"><button>${h ? 'Save' : card ? 'Add card' : debt ? 'Add loan' : 'Add savings'}</button>${h ? `<button type="button" class="link danger" data-del-holding="${h.id}">Delete</button>` : ''}</div></form>`;
 }
@@ -1039,22 +1040,24 @@ async function post(path, body, money) {
 }
 const planAct = (kind, ref, status, target = 0, actual = 0) => post('/api/plan', { month: today().slice(0, 7), kind, ref: String(ref), status, target, actual }).then(p => { state.plan = p; });
 const holdingBody = (h, changes) => ({ id: h.id, kind: h.kind, name: h.name, currency: h.currency, balance: h.balance_now / 100, rate: h.rate_bp / 100,
-  emi: h.emi_minor / 100, due_day: h.due_day, match: h.pattern, as_of: today(), ...changes });
+  emi: h.emi_minor / 100, due_day: h.due_day, match: h.pattern, auto: h.auto ? 1 : 0, as_of: today(), ...changes });
 const cash = (c, cur) => cur === 'INR' ? rupees(c) : `SAR ${fmt(c)}`;
 // This month's steps, in order. Each knows whether it's already done (by you, or by an SMS that showed it).
 function planSteps() {
   const M = state.money, cur = today().slice(0, 7), d = +today().slice(8), steps = [];
   if (!M) return steps;
   const loans = M.holdings.filter(h => isDebt(h) && h.balance_now > 0), saves = M.holdings.filter(h => h.kind === 'saving');
-  for (const h of loans.filter(h => h.due_day && h.due_day <= d)) {
+  for (const h of loans.filter(h => !h.auto && h.due_day && h.due_day <= d)) {  // auto-debited ones count themselves
     const paid = paidThisMonth(h);
     steps.push({ key: `emi${h.id}`, done: !!paid || settled(act('emi', h.id)), title: `${h.name}: ${h.kind === 'card' ? 'card payment' : 'EMI'} of ${cash(h.emi_minor, h.currency)}`,
       doneText: paid ? `paid ${shortDay(paid.date)}` : act('emi', h.id)?.status === 'done' ? 'marked paid' : 'not paid yet', ask: `Did it go out on ${shortDay(`${cur}-${pad(Math.min(h.due_day, daysIn(cur)))}`)}?`,
       buttons: [['emi-paid', 'Yes, it’s paid', h.id], ['emi-not', 'Not yet', h.id]] });
   }
-  if (loans.length) steps.push({ key: 'balances', done: settled(act('balances', 'all')), title: 'Check what you still owe', doneText: 'checked',
-    ask: 'Open each bank app and type the outstanding amount, so the plan matches the bank.',
-    inputs: loans.map(h => [`bal${h.id}`, h.name, (h.balance_now / 100).toFixed(0)]), buttons: [['balances-save', 'Save balances'], ['balances-ok', 'They’re right']] });
+  // Only debts nothing keeps up to date by itself (no auto-debit, no SMS, no card reminder this month).
+  const untracked = loans.filter(h => !h.auto && !h.pattern && h.as_of.slice(0, 7) < cur);
+  if (untracked.length) steps.push({ key: 'balances', done: settled(act('balances', 'all')), title: 'Check what you still owe', doneText: 'checked',
+    ask: 'These aren’t updated by SMS or auto-debit. Open each bank app and type the outstanding amount.',
+    inputs: untracked.map(h => [`bal${h.id}`, h.name, (h.balance_now / 100).toFixed(0)]), buttons: [['balances-save', 'Save balances'], ['balances-ok', 'They’re right']] });
   const avg = monthly(), target = [...loans].sort((a, b) => b.rate_bp - a.rate_bp)[0];
   if (target && avg && avg.spare > 0) {
     // In the debt's own currency: half of the usual leftover, rounded (₹1,000s for INR, SAR 100s for SAR).
@@ -1156,7 +1159,8 @@ function moneyPage() {
   const P = M.plans, best = P.avalanche, d = +today().slice(8);
   const loanRow = h => {
     const paid = paidThisMonth(h), cut = h.balance_minor ? 1 - h.balance_now / h.balance_minor : 0, E = h.kind === 'card' ? 'Payment' : 'EMI';
-    const due = !h.due_day ? '' : !h.pattern ? `${E} on day ${h.due_day}` : paid ? `✓ ${h.kind === 'card' ? 'Paid' : 'EMI paid'} ${shortDay(paid.date)}`
+    const due = !h.due_day ? '' : h.auto ? (paid ? `✓ ${paid.source === 'auto' ? 'auto-debited' : 'paid'} ${shortDay(paid.date)}` : `Auto-debit on day ${h.due_day}`)
+      : !h.pattern ? `${E} on day ${h.due_day}` : paid ? `✓ ${h.kind === 'card' ? 'Paid' : 'EMI paid'} ${shortDay(paid.date)}`
       : h.due_day < d ? `<span class="up">${E} overdue (day ${h.due_day})</span>` : `${E} due in ${plural(h.due_day - d, 'day')}`;
     return `<details class="hold"><summary>${rk({ icon: h.kind === 'card' ? '💳' : /car|auto|vehicle/i.test(h.name) ? '🚗' : '🏠', name: h.name,
       sub: `${h.rate_bp ? `${h.rate_bp / 100}%` : '<span class="up">rate not set ✎</span>'} · ${h.kind === 'card' ? 'due' : 'EMI'} ${cash(h.emi_minor, h.currency)}`, vsub: due, value: h.balance_now, valueText: cash(h.balance_now, h.currency), bar: cut })}</summary>` +

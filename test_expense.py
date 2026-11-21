@@ -264,7 +264,7 @@ class StoreMixin:
 
     def test_loans_come_down_with_emi_sms_and_plans_pay_them_off(self):
         db = self.db
-        h = lambda **kw: {'id': None, 'kind': 'loan', 'currency': 'INR', 'rate_bp': 0, 'emi_minor': 0, 'due_day': 5, 'pattern': '', 'as_of': '2026-09-30', **kw}
+        h = lambda **kw: {'id': None, 'kind': 'loan', 'currency': 'INR', 'rate_bp': 0, 'emi_minor': 0, 'due_day': 5, 'pattern': '', 'as_of': '2026-09-30', 'auto': 0, **kw}
         server.save_holding(db, h(name='Home 1', balance_minor=12_00000_00, rate_bp=900, emi_minor=1_50000_00, pattern='XX4321'))
         server.save_holding(db, h(name='Car', balance_minor=3_00000_00, rate_bp=1100, emi_minor=20000_00))
         server.save_holding(db, h(kind='saving', name='FD', currency='SAR', balance_minor=50000_00))
@@ -287,6 +287,20 @@ class StoreMixin:
         self.assertIsNone(server.plan([{'id': 1, 'balance_now': 100000, 'rate_bp': 2400, 'emi_minor': 1000}], 0)['months'])
         # 1,000 at 0 % with an EMI of 300 takes 4 months.
         self.assertEqual(server.plan([{'id': 1, 'balance_now': 1000, 'rate_bp': 0, 'emi_minor': 300}], 0)['months'], 4)
+
+    def test_auto_debited_emis_count_themselves(self):
+        db = self.db
+        server.save_holding(db, {'id': None, 'kind': 'loan', 'name': 'SBI home loan', 'currency': 'INR', 'balance_minor': 40_00000_00,
+                                 'rate_bp': 1200, 'emi_minor': 50000_00, 'due_day': 5, 'pattern': '6935', 'as_of': '2026-09-20', 'auto': 1})
+        # October's EMI arrived as an SMS; November's didn't: it's assumed taken on the 5th. December's isn't due yet.
+        server.store_sms(db, 'SBIINB', 'Rs 50,000.00 debited towards loan a/c XX6935', '2026-10-05T09:00:00+05:30')
+        h = server.money(db, 'INR', today='2026-11-21')['holdings'][0]
+        self.assertEqual([(p['date'], p['source']) for p in h['payments']], [('2026-10-05', 'sms'), ('2026-11-05', 'auto')])
+        after_oct = 40_00000_00 + 40000_00 - 50000_00  # 1 % a month
+        self.assertEqual(h['balance_now'], after_oct + round(after_oct / 100) - 50000_00)
+        # Turned off, only what was seen counts.
+        db.run('UPDATE holdings SET auto = 0')
+        self.assertEqual(len(server.money(db, 'INR', today='2026-11-21')['holdings'][0]['payments']), 1)
 
     def test_corrections_follow_the_merchant(self):
         db = self.db
