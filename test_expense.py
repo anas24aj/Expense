@@ -77,6 +77,16 @@ class ParseTest(unittest.TestCase):
             with self.subTest(sms=sms):
                 self.assertIsNone(parse(sms))
 
+    def test_dollar_purchase_not_the_available_limit(self):
+        sms = ('Transaction Successful! USD 23.60 spent on your IDFC FIRST Bank Credit Card ending XX3662 at ANTHROPIC* CLAUDE SUB '
+               'on 10 NOV 2026 at 06:51 PM Avbl Limit: INR 314721.04 If not done by you, call 180010888 for dispute or to block your card SMS CCBLOCK 3662 to 5676732')
+        t = parse(sms)
+        self.assertEqual((t['amount_minor'], t['currency'], t['direction'], t['merchant']), (2360, 'USD', 'debit', 'ANTHROPIC* CLAUDE SUB'))
+        # A purchase in rupees with only the available limit after it, in either order of words.
+        self.assertEqual(parse('Rs 499.00 spent on Card XX1234 at SWIGGY. Avl Lmt: Rs 2,50,000')['amount_minor'], 49900)
+        self.assertEqual(parse('Available balance: INR 50,000. INR 1,200.00 debited from A/c XX9876 at AMAZON')['amount_minor'], 120000)
+        self.assertEqual(parse('$15.99 charged to your card ending 4455 at NETFLIX.COM, spent')['currency'], 'USD')
+
     def test_account_number_not_amount(self):
         self.assertEqual(parse('A/c XX1234 debited Rs 500 at DMART')['amount_minor'], 50000)
 

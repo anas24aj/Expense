@@ -3,8 +3,9 @@ import re
 from decimal import Decimal, InvalidOperation
 
 ARABIC_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩٫٬', '0123456789.,')
-CURRENCIES = {'rs': 'INR', 'inr': 'INR', '₹': 'INR', 'sar': 'SAR', 'sr': 'SAR', 'ريال': 'SAR', 'ر.س': 'SAR'}
-_CUR = r'(rs\.?|inr|₹|sar|sr|ريال|ر\.س)'
+CURRENCIES = {'rs': 'INR', 'inr': 'INR', '₹': 'INR', 'sar': 'SAR', 'sr': 'SAR', 'ريال': 'SAR', 'ر.س': 'SAR', 'usd': 'USD', 'us$': 'USD', '$': 'USD'}
+# USD: cards used abroad or online ('USD 23.60 spent on your … Credit Card'): the purchase, not the INR limit after it.
+_CUR = r'(rs\.?|inr|₹|sar|sr|ريال|ر\.س|usd|us\$|\$)'
 _NUM = r'(\d[\d,]*(?:\.\d{1,2})?)'
 # Currency before the number ("Rs.250", "SAR 45.00") is tried first; number before currency ("45.00 ريال") is the fallback,
 # so an account number like "XX1234 Rs 500" isn't mistaken for the amount.
@@ -13,6 +14,9 @@ _NUM = r'(\d[\d,]*(?:\.\d{1,2})?)'
 CUR_FIRST = re.compile(rf'(?<![A-Za-z]){_CUR}[ \t]*:?[ \t]*{_NUM}', re.I)
 NUM_FIRST = re.compile(rf'(?<![\w.]){_NUM}[ \t]*{_CUR}(?![A-Za-z])', re.I)
 AMOUNT_LINE = re.compile(r'(?:\bamount\b|\bamt\b|مبلغ)[^\n]*', re.I)  # 'Amount: 57.5 SAR' beats balances and dates
+# 'Avbl Limit: INR 314721.04', 'Available balance Rs 5,000': what's left, never what was spent.
+LEFT_OVER = re.compile(r'\b(?:avl|avbl|avail|available|aval)\.?\s*(?:credit\s+)?(?:limit|lmt|bal(?:ance)?)\b[^\n]*?(?=\s+(?:if|call|to|on)\b|[\n.;]|$)'
+                       r'|\b(?:bal(?:ance)?|limit)\s*(?:is|:)\s*' + _CUR + r'?\s*[\d,]+(?:\.\d+)?', re.I)
 
 # Arabic words are matched as substrings because Arabic attaches prefixes ("بال", "و") to words.
 DEBIT = re.compile(r'\b(?:debited|spent|paid|sent|withdrawn|withdrawal|purchase|outgoing|pos)\b|شراء|خصم|سحب|صادرة|سداد|دفع', re.I)
@@ -42,7 +46,7 @@ def parse(body):
         return None
     currency = number = amount = None
     labelled = AMOUNT_LINE.search(body)
-    for text in ((labelled.group(0),) if labelled else ()) + (body,):
+    for text in ((labelled.group(0),) if labelled else ()) + (LEFT_OVER.sub(' ', body),):
         if amount := CUR_FIRST.search(text):
             currency, number = amount.group(1), amount.group(2)
         elif amount := NUM_FIRST.search(text):

@@ -104,7 +104,7 @@
 </main>
 <script>
 // Same pre-filter as the phone forwarder: only SMS that show an amount in SAR or INR leave the phone.
-const MONEY = /(rs\.?|inr|₹|sar|sr|ريال)\s*:?\s*[0-9٠-٩]|[0-9٠-٩]\s*(sar|sr|ريال)/i;
+const MONEY = /(rs\.?|inr|₹|sar|sr|ريال|usd|us\$|\$)\s*:?\s*[0-9٠-٩]|[0-9٠-٩]\s*(sar|sr|ريال|usd)/i;
 const BATCH = 200;
 const $ = id => document.getElementById(id);
 let messages = [];
