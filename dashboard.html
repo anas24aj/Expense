@@ -338,6 +338,18 @@
   .step .actions { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
   .meter { height: 6px; border-radius: 3px; background: rgb(255 255 255 / .25); margin-top: 10px; overflow: hidden; } .meter i { display: block; height: 100%; background: #fff; border-radius: 3px; }
   .donelist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+  .closein { margin: 4px 0 8px; } .closein .chip { display: inline-grid; margin: 0 8px 8px 0; padding: 8px 12px; min-height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
+  .closein .chip.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } .closein .chip small { color: var(--muted); font-size: 12px; }
+  .banner.health.good b { color: var(--good); } .banner.health.warn b { color: var(--warn); } .banner.health.bad b { color: var(--bad); }
+  .hv { font-variant-numeric: tabular-nums; margin-left: 4px; }
+  .lc svg { display: block; width: 100%; height: 160px; overflow: visible; }
+  .lc polyline { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+  .lc .axis { stroke: var(--line); vector-effect: non-scaling-stroke; }
+  .lc .past, .legend i.past { stroke: var(--text-2); background: var(--text-2); } .lc .plan, .legend i.plan { stroke: var(--accent); background: var(--accent); }
+  .lc .base { stroke: var(--muted); stroke-dasharray: 4 4; } .legend i.base { background: var(--muted); }
+  .lc .save, .legend i.save { stroke: var(--bar-2); background: var(--bar-2); } .lc .net, .legend i.net { stroke: var(--accent); background: var(--accent); }
+  .lc-zero { margin: 2px 0 0; }
+  .lc-x { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
   .tip { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 12px 0; text-decoration: none; color: inherit; border-top: 1px solid var(--line); }
   .tip:first-of-type { border-top: 0; }
   .tip .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; font-size: 18px; }
@@ -1024,7 +1036,7 @@ const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().s
 function emisDue(days = 3) {
   const d = +today().slice(8);
   // Only loans with SMS words: without them a paid EMI can't be seen, and every month would look overdue.
-  return (state.money?.holdings || []).filter(h => isDebt(h) && !h.auto && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
+  return (state.money?.holdings || []).filter(h => isDebt(h) && !h.auto && h.emi_minor && h.due_day && h.pattern && h.balance_now > 0 && !paidThisMonth(h) && h.due_day - d <= days)
     .map(h => ({ h, inDays: h.due_day - d }));
 }
 const whenMonths = n => n == null ? 'never at this EMI' : monthName(addM(today().slice(0, 7), n), 'short');
@@ -1037,7 +1049,7 @@ function holdingForm(h, kind) {
     `<div class="two"><label>Currency<select name="currency">${['INR', 'SAR'].map(c => `<option ${c === (h?.currency || (kind === 'loan' ? 'INR' : 'SAR')) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>` +
     `<label>${card ? 'Owed now' : debt ? 'Outstanding' : 'Balance'}<input type="text" inputmode="decimal" name="balance" required value="${num(h?.balance_minor)}"></label></div>` +
     (debt ? `<div class="two"><label>Interest % a year${card ? ' (monthly % × 12)' : ''}<input type="text" inputmode="decimal" name="rate" required value="${h ? h.rate_bp / 100 : ''}"></label>` +
-      `<label>${card ? 'You pay a month' : 'EMI a month'}<input type="text" inputmode="decimal" name="emi" required value="${num(h?.emi_minor)}"></label></div>` +
+      `<label>${card ? 'You pay a month' : 'EMI a month'} <small class="muted">(optional)</small><input type="text" inputmode="decimal" name="emi" value="${h?.emi_minor ? num(h.emi_minor) : ''}" placeholder="none"></label></div>` +
       `<div class="two"><label>Due day<input type="text" inputmode="numeric" name="due_day" value="${h?.due_day || ''}" placeholder="1-31"></label>` +
       `<label>${card ? 'Owed as on' : 'Balance as on'}<input type="date" name="as_of" value="${v('as_of', today())}" max="${today()}"></label></div>` +
       `<label>${card ? 'Card’s last 4 digits' : 'Words in the EMI SMS'}<input type="text" name="match" maxlength="40" value="${v('pattern')}" placeholder="${card ? 'e.g. 4455' : 'e.g. the loan account’s last 4 digits'}"></label>` +
@@ -1083,7 +1095,7 @@ function planSteps() {
   const M = state.money, cur = today().slice(0, 7), d = +today().slice(8), steps = [];
   if (!M) return steps;
   const loans = M.holdings.filter(h => isDebt(h) && h.balance_now > 0), saves = M.holdings.filter(h => h.kind === 'saving');
-  for (const h of loans.filter(h => !h.auto && h.due_day && h.due_day <= d)) {  // auto-debited ones count themselves
+  for (const h of loans.filter(h => !h.auto && h.emi_minor && h.due_day && h.due_day <= d)) {  // auto-debited ones count themselves
     const paid = paidThisMonth(h);
     steps.push({ key: `emi${h.id}`, done: !!paid || settled(act('emi', h.id)), title: `${h.name}: ${h.kind === 'card' ? 'card payment' : 'EMI'} of ${cash(h.emi_minor, h.currency)}`,
       doneText: paid ? `paid ${shortDay(paid.date)}` : act('emi', h.id)?.status === 'done' ? 'marked paid' : 'not paid yet', ask: `Did it go out on ${shortDay(`${cur}-${pad(Math.min(h.due_day, daysIn(cur)))}`)}?`,
@@ -1171,7 +1183,7 @@ async function loadOptions() {
   const opts = debtOptions(), key = opts.map(o => o.inr).join(',') + '|' + state.rate;
   if (state.optionsKey === key) return;
   state.optionsKey = key;
-  try { const r = await fetch(`/api/money?${moneyQs()}&options=${opts.map(o => o.inr).join(',')}`); if (r.ok) { state.optionData = await r.json(); if (location.hash.startsWith('#/plan')) render(); } } catch {}
+  try { const r = await fetch(`/api/money?${moneyQs()}&options=${opts.map(o => o.inr).join(',')}`); if (r.ok) { state.optionData = await r.json(); if (/^#\/(plan|health|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], .setup input:focus')) render(); } } catch {}
 }
 const chosen = () => { const c = state.settings?.debt_choice; return c && debtOptions().find(o => o.key === c.option); };
 // This month's salary SMS, if it came: the biggest SAR credit marked Salary or Income this month.
@@ -1347,6 +1359,87 @@ document.addEventListener('click', async e => {
     render();
   } catch (err) { toast(`Could not save: ${err.message}`); b.disabled = false; }
 });
+// What a month would take to close a loan in 12, 24 or 36 months (the usual EMI formula), with a button to plan on it.
+function closeIn(h) {
+  const r = h.rate_bp / 120000, P = h.balance_now;
+  const pay = n => Math.ceil((r ? P * r / (1 - (1 + r) ** -n) : P / n) / 10000) * 100;  // rounded up to 100s
+  const unit = h.currency === 'INR' ? rupees : c => `SAR ${fmt(c)}`;
+  return `<div class="closein"><p class="muted small">${h.emi_minor ? 'To close it sooner, pay a month:' : 'No fixed EMI? To close it, pay a month:'}</p>` +
+    [12, 24, 36].map(n => `<button type="button" class="chip${h.emi_minor === pay(n) * 100 ? ' on' : ''}" data-closein="${h.id}" data-amt="${pay(n)}">` +
+      `<b>${unit(pay(n) * 100)}</b><small>${n / 12} year${n > 12 ? 's' : ''}</small></button>`).join('') +
+    '<p class="muted small">Tap one to set it as this loan\'s monthly payment; the plan and check-in then count on it.</p></div>';
+}
+/* ---------- Money health: a score from four checks, and graphs of debt, savings and money in vs out ---------- */
+function health() {
+  const M = state.money, avg = monthly();
+  if (!M) return null;
+  const debts = M.holdings.filter(h => isDebt(h) && h.balance_now > 0), saves = M.holdings.filter(h => h.kind === 'saving');
+  const debt = debts.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0), saved = saves.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
+  const emisInr = debts.reduce((a, h) => a + toInr(h.emi_minor, h.currency), 0), emisSar = sarOf(emisInr);
+  const checks = [], tone = (v, good, fair, up = true) => (up ? v >= good : v <= good) ? 'good' : (up ? v >= fair : v <= fair) ? 'fair' : 'poor';
+  if (avg && avg.received > 0) {
+    const keep = Math.round((avg.received - avg.spent - emisSar) / avg.received * 100);
+    checks.push({ icon: '💰', label: 'Saving each month', value: `${keep}%`, tone: tone(keep, 20, 10),
+      text: `Of SAR ${fmt(avg.received)} coming in, ${keep >= 0 ? `about ${keep}% is left after spending and EMIs` : 'more goes out than comes in'}. Aim for 20% or more.` });
+    const share = Math.round(emisSar / avg.received * 100);
+    checks.push({ icon: '⚖️', label: 'EMIs vs income', value: `${share}%`, tone: tone(share, 30, 45, false),
+      text: share <= 30 ? 'Comfortable: under 30% of income goes to EMIs.' : share <= 45 ? 'Tight: keep new loans off until one closes.' : 'High: over 45% of income goes to EMIs.' });
+    const need = toInr(avg.spent, 'SAR') + emisInr, months = need > 0 ? saved / need : 0;
+    checks.push({ icon: '🛟', label: 'Safety buffer', value: `${months.toFixed(1)} mo`, tone: tone(months, 6, 3),
+      text: `Savings would cover ${months.toFixed(1)} months of spending and EMIs. 3 is the minimum, 6 is comfortable.` });
+  }
+  const opt = chosen(), strat = state.settings?.debt_choice?.strategy || 'avalanche', i = opt ? debtOptions().findIndex(o => o.key === opt.key) : -1;
+  const planned = i >= 0 && state.optionData?.options?.[i]?.[strat], P = planned || M.plans.as_is;
+  if (debts.length) {
+    const y = P.months == null ? null : P.months / 12;
+    checks.push({ icon: '🏁', label: 'Debt-free', value: whenMonths(P.months), tone: y == null ? 'poor' : tone(y, 5, 10, false),
+      text: y == null ? 'At today\'s payments some debt never closes: choose a plan on the Plan tab.' : `In ${y.toFixed(1)} years${planned ? ` with your ${opt.label} plan` : ' at today\'s EMIs'}.` });
+  }
+  const pts = { good: 100, fair: 60, poor: 20 }, score = checks.length ? Math.round(checks.reduce((a, c) => a + pts[c.tone], 0) / checks.length) : null;
+  return { checks, score, rating: score == null ? '' : score >= 75 ? 'Good' : score >= 50 ? 'Fair' : 'Needs work', debt, saved, P, base: M.plans.as_is, planned: !!planned, opt };
+}
+// A small line chart: past points solid, the future dashed; x = months from the first point.
+function lineChart(series, months, labels) {
+  const vals = series.flatMap(s => s.points.map(p => p[1])), W = 320, H = 150;
+  const max = Math.max(1, ...vals), min = Math.min(0, ...vals);  // below zero too (net worth can be)
+  const X = m => (m / Math.max(1, months)) * W, Y = v => H - 8 - ((v - min) / (max - min)) * (H - 20);
+  const lines = series.map(s => s.points.length < 2 ? '' : `<polyline class="${s.cls}" points="${s.points.map(([m, v]) => `${X(m).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')}"/>`).join('');
+  return `<div class="lc"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(series.map(s => s.label).join(', '))}">` +
+    `<line class="axis" x1="0" y1="${Y(0).toFixed(1)}" x2="${W}" y2="${Y(0).toFixed(1)}"/>${lines}</svg>` +
+    (min < 0 ? `<p class="muted small lc-zero">Below the line: owing more than you have.</p>` : '') +
+    `<div class="lc-x">${labels.map(l => `<span>${esc(l)}</span>`).join('')}</div>` +
+    `<p class="legend">${series.map(s => `<span><i class="${s.cls}"></i>${esc(s.label)}</span>`).join('')}</p></div>`;
+}
+function healthPage(rt, P) {
+  if (!state.money || !state.settings) return waitFor('Money health', [['money', loadMoney], ['settings', loadSettings]]);
+  loadOptions(); loadRate();
+  const H = health(), cur = today().slice(0, 7), hist = state.money.history || [];
+  const color = { good: 'var(--good)', fair: 'var(--warn)', poor: 'var(--bad)' };
+  const tag = H.rating === 'Good' ? 'good' : H.rating === 'Fair' ? 'fair' : 'poor';
+  // Debt: the months recorded so far, then the plan from now (yours, and EMIs only) for up to 10 years.
+  const start = hist.length ? hist[0].month : cur, past = hist.map(h => [monthsBetween(start, h.month), h.debt_minor / 100]);
+  const now = monthsBetween(start, cur), ahead = Math.min(120, Math.max(12, (H.P.months ?? 120)));
+  const fut = (plan, n) => [[now, H.debt / 100], ...plan.curve.slice(0, n).map((v, i) => [now + i + 1, v])];
+  const debtChart = H.debt ? lineChart([{ label: 'So far', cls: 'past', points: past.length > 1 ? past : [] },
+    ...(H.planned ? [{ label: 'EMIs only', cls: 'base', points: fut(H.base, ahead) }] : []),
+    { label: H.planned ? `Your ${H.opt.label} plan` : 'At today\'s EMIs', cls: 'plan', points: fut(H.P, ahead) }], now + ahead,
+    [monthName(start, 'short'), 'now', monthName(addM(cur, ahead), 'short')].filter((l, i) => i !== 1 || now > 0)) : empty('No debts on the Debt tab');
+  const saveChart = hist.length > 1 ? lineChart([{ label: 'Savings', cls: 'save', points: hist.map(h => [monthsBetween(start, h.month), h.savings_minor / 100]) },
+    { label: 'Net worth (savings − debt)', cls: 'net', points: hist.map(h => [monthsBetween(start, h.month), (h.savings_minor - h.debt_minor) / 100]) }],
+    monthsBetween(start, cur), [monthName(start, 'short'), monthName(cur, 'short')])
+    : `<p class="muted small">This graph fills in month by month: the app keeps your savings and debt totals each month from now on (first: ${esc(monthName(hist[0]?.month || cur, 'short'))}).</p>`;
+  return { title: 'Money health', sub: 'Where you stand', html:
+    (H.score != null ? `<section class="hero"><div class="label">Your money health</div><div class="total">${H.rating}<small> · ${H.score}/100</small></div>` +
+      `<div class="meter"><i style="width:${H.score}%"></i></div><div class="kpis"><div><span>Savings</span><b>${rupees(H.saved)}</b></div><div><span>Debt</span><b>${rupees(H.debt)}</b></div></div></section>`
+      : `<section class="card">${empty('Not enough to judge yet', 'Add your loans and savings on the Debt tab; the score needs a few months of transactions.')}</section>`) +
+    (H.checks.length ? `<section class="card"><h2>The checks<span>tap for what to do</span></h2>${H.checks.map(c => `<a class="tip" href="${c.label === 'Debt-free' ? '#/plan' : c.label === 'Safety buffer' ? '#/debt' : '#/categories'}">` +
+      `<span class="ic" aria-hidden="true">${c.icon}</span><span><b>${c.label} <span class="hv" style="color:${color[c.tone]}">${esc(c.value)}</span></b><small>${c.text}</small></span></a>`).join('')}</section>` : '') +
+    card('Debt over time', 'in ₹', debtChart) + card('Savings and net worth', 'in ₹', saveChart) +
+    card('Money in and out', `SAR, last 12 months`, `<p class="legend"><span><i style="background:var(--bar)"></i>Spent</span><span><i style="background:var(--bar-2)"></i>Received</span></p>` +
+      monthBars(state.all, cur, P, { received: true })) +
+    '<p class="version">Checked against common guidelines from your own numbers, not financial advice.</p>' };
+}
+const monthsBetween = (a, b) => (+b.slice(0, 4) - +a.slice(0, 4)) * 12 + (+b.slice(5, 7) - +a.slice(5, 7));
 function moneyPage() {
   loadRate();
   const M = state.money;
@@ -1356,12 +1449,13 @@ function moneyPage() {
   const P = M.plans, best = P.avalanche, d = +today().slice(8);
   const loanRow = h => {
     const paid = paidThisMonth(h), cut = h.balance_minor ? 1 - h.balance_now / h.balance_minor : 0, E = h.kind === 'card' ? 'Payment' : 'EMI';
-    const due = !h.due_day ? '' : h.auto ? (paid ? `✓ ${paid.source === 'auto' ? 'auto-debited' : 'paid'} ${shortDay(paid.date)}` : `Auto-debit on day ${h.due_day}`)
+    const due = !h.emi_minor ? 'pay any amount, any time' : !h.due_day ? '' : h.auto ? (paid ? `✓ ${paid.source === 'auto' ? 'auto-debited' : 'paid'} ${shortDay(paid.date)}` : `Auto-debit on day ${h.due_day}`)
       : !h.pattern ? `${E} on day ${h.due_day}` : paid ? `✓ ${h.kind === 'card' ? 'Paid' : 'EMI paid'} ${shortDay(paid.date)}`
       : h.due_day < d ? `<span class="up">${E} overdue (day ${h.due_day})</span>` : `${E} due in ${plural(h.due_day - d, 'day')}`;
-    return `<details class="hold"><summary>${rk({ icon: h.kind === 'card' ? '💳' : /car|auto|vehicle/i.test(h.name) ? '🚗' : '🏠', name: h.name,
-      sub: `${h.rate_bp ? `${h.rate_bp / 100}%` : '<span class="up">rate not set ✎</span>'} · ${h.kind === 'card' ? 'due' : 'EMI'} ${cash(h.emi_minor, h.currency)}`, vsub: due, value: h.balance_now, valueText: cash(h.balance_now, h.currency), bar: cut })}</summary>` +
+    return `<details class="hold"><summary>${rk({ icon: h.kind === 'card' ? '💳' : /gold/i.test(h.name) ? '🪙' : /car|auto|vehicle/i.test(h.name) ? '🚗' : '🏠', name: h.name,
+      sub: `${h.rate_bp ? `${h.rate_bp / 100}%` : '<span class="up">rate not set ✎</span>'} · ${h.emi_minor ? `${h.kind === 'card' ? 'due' : 'EMI'} ${cash(h.emi_minor, h.currency)}` : 'no fixed EMI'}`, vsub: due, value: h.balance_now, valueText: cash(h.balance_now, h.currency), bar: cut })}</summary>` +
       (h.payments.length ? `<p class="muted small">${h.kind === 'card' ? 'Payments' : 'EMIs'} seen since ${shortDay(h.as_of)}: ${h.payments.map(p => `${shortDay(p.date)} ${fmt(Math.round(p.amount * 100))}`).join(' · ')}</p>` : '') +
+      (h.balance_now > 0 && h.kind === 'loan' ? closeIn(h) : '') +
       (h.charges?.length ? `<p class="muted small">Card purchases since ${shortDay(h.as_of)}: ${plural(h.charges.length, 'purchase')}, ${cash(Math.round(h.charges.reduce((a, c) => a + c.amount, 0) * 100), h.currency)}</p>` : '') +
       holdingForm(h, h.kind) + '</details>';
   };
@@ -1500,7 +1594,9 @@ function overview(rt, P, X) {
     .filter(([k, amt]) => amt > 0 && act('alloc', k)?.status !== 'done').length : 0;
   const salaryBanner = got && toMove ? `<a class="banner" href="#/plan"><span>Salary arrived · split SAR ${fmt(got._c)}</span>${go1}</a>` : '';
   const checkin = left ? `<a class="banner" href="#/plan"><span>${esc(monthName(today().slice(0, 7), 'short'))} check-in · ${plural(left, 'step')} left</span>${go1}</a>` : '';
-  return { html: chips(P) + hero + salaryBanner + checkin + emis + todayCard + coming +
+  const Hh = state.money && health(), hcol = { Good: 'good', Fair: 'warn', 'Needs work': 'bad' };
+  const healthCard = Hh?.score != null ? `<a class="banner health ${hcol[Hh.rating]}" href="#/health"><span>Money health: <b>${Hh.rating}</b> · ${Hh.score}/100 · ${esc(Hh.checks.find(c => c.tone === 'poor')?.label || Hh.checks.find(c => c.tone === 'fair')?.label || 'all checks good')}</span>${go1}</a>` : '';
+  return { html: chips(P) + hero + healthCard + salaryBanner + checkin + emis + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
@@ -1753,7 +1849,7 @@ function renderResults() {
 const PAGES = { overview, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage };
 const TITLES = { ...Object.fromEntries(TABS.map(([k, label]) => [k, label])), merchants: 'Spending', cards: 'Spending' };
 
 function render() {
@@ -2009,6 +2105,12 @@ document.addEventListener('submit', async e => {
   else f.querySelector('button').disabled = false;
 });
 document.addEventListener('click', async e => {
+  const ci = e.target.closest('[data-closein]');
+  if (ci) {
+    const h = state.money.holdings.find(x => String(x.id) === ci.dataset.closein);
+    if (h && await saveMoney('/api/money', holdingBody(h, { emi: ci.dataset.amt, as_of: h.as_of, balance: h.balance_minor / 100 }))) toast(`Planned: ${cash(ci.dataset.amt * 100, h.currency)} a month on ${h.name}.`);
+    return;
+  }
   const del = e.target.closest('[data-del-holding]');
   if (del && confirm('Delete this from your Money page?') && await saveMoney('/api/money/delete', { id: +del.dataset.delHolding })) toast('Deleted.');
 });

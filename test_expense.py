@@ -358,7 +358,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()
@@ -614,6 +614,18 @@ class AppTest(unittest.TestCase):
         months = [o['avalanche']['months'] for o in opts]
         self.assertTrue(months[0] > months[1] > months[2])  # more extra, sooner
         self.assertGreater(opts[0]['avalanche']['interest'], opts[2]['avalanche']['interest'])
+
+    def test_optional_emi_curve_and_history(self):
+        gold = {'kind': 'loan', 'name': 'Gold loan', 'currency': 'INR', 'balance': '690899', 'rate': '10.95', 'emi': '', 'due_day': 3}
+        status, out = self.call('POST', '/api/money', json.dumps(gold).encode(), query='rate=25')
+        m = json.loads(out)
+        self.assertEqual((status, m['holdings'][0]['emi_minor']), (200, 0))  # no EMI: allowed
+        self.assertIsNone(m['plans']['as_is']['months'])  # nothing paid: it never closes
+        self.assertGreater(m['plans']['as_is']['curve'][11], 690899)  # and grows with interest
+        p = json.loads(self.call('GET', '/api/money', query='rate=25&extra=30000')[1])['plans']['avalanche']
+        self.assertTrue(p['months'] and p['curve'][-1] == 0 and len(p['curve']) == p['months'])
+        h = json.loads(self.call('GET', '/api/money', query='rate=25')[1])['history']
+        self.assertEqual([(x['debt_minor'], x['savings_minor']) for x in h], [(69089900, 0)])  # one snapshot a month, replaced
 
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),

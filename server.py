@@ -72,6 +72,8 @@ PLAN_KINDS = {'balances', 'emi', 'extra', 'limit', 'savings', 'alloc'}
 # Your answers to the Plan tab's setup: the salary, how you split it, and the debt option you chose.
 SETTINGS_SCHEMA = 'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
 SETTING_KEYS = {'salary', 'allocations', 'debt_choice'}
+# What you owed and had saved, once a month (INR, the latest look at the Debt tab that month), for the graphs.
+SNAPSHOTS_SCHEMA = 'CREATE TABLE IF NOT EXISTS snapshots (month TEXT PRIMARY KEY, debt_minor BIGINT NOT NULL, savings_minor BIGINT NOT NULL)'
 PLAN_STATUS = {'planned', 'done', 'skipped'}
 PLAN_MONTHS = 600  # 50 years: a loan whose EMI doesn't cover its interest never ends
 # SMS of transactions you deleted, so the phone sending them again (or an import) doesn't bring them back.
@@ -121,7 +123,7 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         if url not in DB._schema_ready:  # once per process, not per request
             self.run(schema)
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
@@ -399,11 +401,12 @@ def plan(loans, extra, strategy=None):
     With a strategy, the extra per month and the EMIs of loans already paid off go to one loan at a time:
     'avalanche' = highest rate first (least interest), 'snowball' = smallest balance first (fastest wins).
     Without one ('as is'), each loan just pays its own EMI. Returns months to debt-free (None if never),
-    total interest, and the month each loan is paid off. Amounts in minor units."""
+    total interest, the month each loan is paid off, and `curve`: what's still owed in total at the end of each
+    month (whole units, the first 30 years) for the graphs. Amounts in minor units."""
     bal = {l['id']: l['balance_now'] for l in loans if l['balance_now'] > 0}
     rate = {l['id']: l['rate_bp'] / 120000 for l in loans}
     emi = {l['id']: l['emi_minor'] for l in loans}
-    budget, done, interest, month = sum(emi[i] for i in bal) + extra, {}, 0, 0
+    budget, done, interest, month, curve = sum(emi[i] for i in bal) + extra, {}, 0, 0, []
     while bal and month < PLAN_MONTHS:
         month += 1
         for i in bal:
@@ -424,7 +427,9 @@ def plan(loans, extra, strategy=None):
         for i in [i for i in bal if bal[i] <= 0]:
             done[i] = month
             del bal[i]
-    return {'months': None if bal else month, 'interest': interest, 'payoff': done}
+        if month <= 360:
+            curve.append(round(sum(bal.values()) / 100))
+    return {'months': None if bal else month, 'interest': interest, 'payoff': done, 'curve': curve}
 
 
 DEBTS = ('loan', 'card')
@@ -562,6 +567,16 @@ def card_statement(db, body, received_at):
     save_holding(db, {'id': None, 'kind': 'card', 'auto': 0, 'name': name, 'currency': currency, 'balance_minor': owed, 'rate_bp': 0,
                       'emi_minor': pay, 'due_day': int(day.group(1)) if day else 0, 'pattern': digits or '', 'as_of': when})
     return name
+
+
+def snapshot(db, m, month=None):
+    """Keep this month's totals (INR) for the history graphs; later looks in the same month replace it."""
+    inr = lambda h, v: v if h['currency'] == 'INR' else round(v * (m['rate'] or 24.9))
+    debt = sum(inr(h, h['balance_now']) for h in m['holdings'] if h['kind'] in DEBTS)
+    saved = sum(inr(h, h['balance_now']) for h in m['holdings'] if h['kind'] == 'saving')
+    month = month or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
+    db.run('INSERT INTO snapshots (month, debt_minor, savings_minor) VALUES (:m, :d, :s) '
+           'ON CONFLICT (month) DO UPDATE SET debt_minor = excluded.debt_minor, savings_minor = excluded.savings_minor', m=month, d=debt, s=saved)
 
 
 def record_payment(db, holding_id, paid_on, amount_minor, note):
@@ -1068,7 +1083,11 @@ def _app(environ, start_response):
                 options = [max(0, min(int(Decimal(x) * 100), 10 ** 11)) for x in (query.get('options') or '').split(',') if x.strip()][:6]
             except ArithmeticError:
                 options = []
-            return respond('200 OK', money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11)), rate=rate if 10 < rate < 100 else None, options=options))
+            result = money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11)), rate=rate if 10 < rate < 100 else None, options=options)
+            if result['currency'] == 'INR' and result['rate'] or not any(h['currency'] == 'SAR' for h in result['holdings']):
+                snapshot(db, result)
+            result['history'] = db.run('SELECT * FROM snapshots ORDER BY month')
+            return respond('200 OK', result)
         if path == '/api/friend/settle':
             settle_friend(db, square, query.get('currency') or 'SAR')
             return respond('200 OK', {'saved': True, **refreshed(db, query)})
