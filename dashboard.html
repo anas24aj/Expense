@@ -357,23 +357,24 @@
   .dc .a.debt { fill: url(#gDebt); } .dc .a.save { fill: url(#gSave); }
   .dc .l { fill: none; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
   .dc .l.debt { stroke: #ff6b4a; filter: drop-shadow(0 2px 6px rgb(255 107 74 / .45)); } .dc .l.save { stroke: #1fd17f; filter: drop-shadow(0 2px 6px rgb(31 209 127 / .45)); }
+  .dc .a { transition: opacity .3s; }
   .dc .today { stroke: var(--text-2); stroke-dasharray: 3 3; opacity: .6; }
-  .dc .now { stroke: var(--surface); stroke-width: 2; } .dc .now.debt { fill: #ff6b4a; } .dc .now.save { fill: #1fd17f; }
-  .dc .cross circle { fill: #ffc531; filter: drop-shadow(0 0 6px #ffc531); } .dc .cross text { fill: #5b3b00; font-size: 13px; font-weight: 700; }
-  .dc .cursor { stroke: var(--accent); stroke-width: 1.5; }
-  .dc .tipbox { position: absolute; top: 0; width: 130px; padding: 6px 8px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line);
-    box-shadow: 0 6px 18px rgb(0 0 0 / .18); font-size: 12px; display: grid; gap: 2px; pointer-events: none; }
-  .dc .tipbox .d { color: #ff6b4a; } .dc .tipbox .s { color: #1fd17f; }
-  .legend i.debt { background: #ff6b4a; } .legend i.save { background: #1fd17f; }
-  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; text-align: center; }
-  .facts span { display: block; font-size: 11px; color: var(--muted); } .facts b { display: block; font-size: 15px; margin-top: 2px; }
-  @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-  @keyframes rise-in { from { opacity: 0; transform: translateY(8px); } }
-  @keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
-  html.motion .view.anim .dc .l { stroke-dasharray: 1; animation: draw 1.6s cubic-bezier(.3, .7, .2, 1) both .2s; }
-  html.motion .view.anim .dc .a { animation: rise-in 1s ease-out both .5s; }
-  html.motion .dc .now { animation: glow 2s ease-in-out infinite; }
-  html.motion .dc .cross { animation: none; } html.motion .dc .cross circle, html.motion .dc .cross text { transform-box: fill-box; transform-origin: center; animation: beat 1.8s ease-in-out infinite; }
+  .dc-head { display: flex; justify-content: space-between; margin: -2px 0 6px; }
+  .dc-now span { display: block; font-size: 11px; color: var(--muted); } .dc-now b { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .dc-now.debt b { color: #ff6b4a; } .dc-now.save { text-align: right; } .dc-now.save b { color: #1fd17f; }
+  .dc .l.ahead { stroke-dasharray: 7 6; opacity: .85; }
+  .dc .now .core { stroke: var(--surface); stroke-width: 2; } .dc .now.debt circle { fill: #ff6b4a; } .dc .now.save circle { fill: #1fd17f; }
+  .dc .now .ring { opacity: 0; } .dc .scan { opacity: 0; }
+  @keyframes reveal { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @keyframes scan { 0% { opacity: 1; transform: translateX(0); } 92% { opacity: 1; } 100% { opacity: 0; transform: translateX(364px); } }
+  @keyframes flow { to { stroke-dashoffset: -26; } }
+  @keyframes ripple { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(3.4); opacity: 0; } }
+  @keyframes pop { 0% { transform: scale(0); } 70% { transform: scale(1.35); } 100% { transform: scale(1); } }
+  html.motion .view.anim .dc .rv { transform-box: fill-box; transform-origin: left; animation: reveal 1.8s cubic-bezier(.45, .05, .25, 1) both .15s; }
+  html.motion .view.anim .dc .scan { animation: scan 1.8s cubic-bezier(.45, .05, .25, 1) both .15s; }
+  html.motion .view.anim .dc .now .core { transform-box: fill-box; transform-origin: center; animation: pop .5s ease-out both 1.4s; }
+  html.motion .dc .l.ahead { animation: flow 1.6s linear infinite; animation-delay: var(--clock); }
+  html.motion .dc .now .ring { transform-box: fill-box; transform-origin: center; animation: ripple 2.4s ease-out infinite; animation-delay: var(--clock); }
   .lc-x { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
   .tip { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 12px 0; text-decoration: none; color: inherit; border-top: 1px solid var(--line); }
   .tip:first-of-type { border-top: 0; }
@@ -1436,31 +1437,33 @@ function health() {
 }
 // ₹ in short form for chart labels: ₹86.1L, ₹1.2Cr, ₹45k.
 const short_inr = v => { const a = Math.abs(v); return (v < 0 ? '−₹' : '₹') + (a >= 1e7 ? (a / 1e7).toFixed(1) + 'Cr' : a >= 1e5 ? (a / 1e5).toFixed(1) + 'L' : a >= 1e3 ? Math.round(a / 1e3) + 'k' : Math.round(a)); };
-// Savings vs debt on one scale: shaded areas, the past solid, the future fainter beyond a "today" line, a glowing
-// dot today and a star where savings pass debt. Slide a finger (or the mouse) along it to read any month.
-function dualChart({ start, now, N, debt, save, cross }) {
-  const W = 340, H = 190, top = 14, bot = 24, max = Math.max(1, ...debt.filter(v => v != null), ...save.filter(v => v != null)) * 1.08;
-  const X = i => (i / Math.max(1, N)) * W, Y = v => H - bot - (v / max) * (H - top - bot);
-  const path = (arr, from, to) => { let d = ''; for (let i = from; i <= to; i++) if (arr[i] != null) d += `${d ? 'L' : 'M'}${X(i).toFixed(1)},${Y(arr[i]).toFixed(1)}`; return d; };
-  const area = (arr, from, to) => { const d = path(arr, from, to); if (!d) return '';
-    const first = arr.findIndex((v, i) => i >= from && v != null), last = to - [...arr.slice(from, to + 1)].reverse().findIndex(v => v != null);
-    return `${d}L${X(last).toFixed(1)},${Y(0).toFixed(1)}L${X(first).toFixed(1)},${Y(0).toFixed(1)}Z`; };
-  const grid = [0.25, 0.5, 0.75, 1].map(f => `<line class="g" x1="0" x2="${W}" y1="${Y(max / 1.08 * f).toFixed(1)}" y2="${Y(max / 1.08 * f).toFixed(1)}"/>` +
-    `<text x="2" y="${(Y(max / 1.08 * f) - 3).toFixed(1)}">${short_inr(max / 1.08 * f)}</text>`).join('');
-  const ticks = [0, now, N].filter((m, i, a) => a.indexOf(m) === i).map(m => `<text class="x" x="${X(m).toFixed(1)}" y="${H - 6}" text-anchor="${m === 0 ? 'start' : m === N ? 'end' : 'middle'}">${m === now ? 'Today' : monthName(addM(start, m), 'short')}</text>`).join('');
-  const dot = (arr, cls) => arr[now] != null ? `<circle class="now ${cls}" cx="${X(now).toFixed(1)}" cy="${Y(arr[now]).toFixed(1)}" r="5"/>` : '';
-  const star = cross > now ? `<g class="cross" transform="translate(${X(cross).toFixed(1)},${Y(debt[cross]).toFixed(1)})"><circle r="11"/><text text-anchor="middle" dy="5">★</text></g>` : '';
+// Savings vs debt on one scale. Opening the page sweeps the chart in from the left behind a glowing scanner; the
+// months ahead are flowing dashed lines (they're a projection); today's dots pulse. Slide along it to read a month.
+function dualChart({ start, now, N, debt, save }) {
+  const W = 340, H = 200, top = 16, bot = 24, max = Math.max(1, ...debt.filter(v => v != null), ...save.filter(v => v != null)) * 1.08;
+  const X = i => (i / Math.max(1, N)) * W, Y = v => H - bot - (v / max) * (H - top - bot), f = n => n.toFixed(1);
+  const path = (arr, from, to) => { let d = ''; for (let i = from; i <= to; i++) if (arr[i] != null) d += `${d ? 'L' : 'M'}${f(X(i))},${f(Y(arr[i]))}`; return d; };
+  const area = arr => { const d = path(arr, 0, N); if (!d) return '';
+    const first = arr.findIndex(v => v != null), last = N - [...arr].reverse().findIndex(v => v != null);
+    return `${d}L${f(X(last))},${f(Y(0))}L${f(X(first))},${f(Y(0))}Z`; };
+  const grid = [0.25, 0.5, 0.75, 1].map(k => `<line class="g" x1="0" x2="${W}" y1="${f(Y(max / 1.08 * k))}" y2="${f(Y(max / 1.08 * k))}"/>` +
+    `<text x="2" y="${f(Y(max / 1.08 * k) - 3)}">${short_inr(max / 1.08 * k)}</text>`).join('');
+  const ticks = [0, now, N].filter((m, i, x) => x.indexOf(m) === i).map(m => `<text class="x" x="${f(X(m))}" y="${H - 6}" text-anchor="${m === 0 ? 'start' : m === N ? 'end' : 'middle'}">${m === now ? 'Today' : monthName(addM(start, m), 'short')}</text>`).join('');
+  const dot = (arr, cls) => arr[now] == null ? '' : `<g class="now ${cls}" transform="translate(${f(X(now))},${f(Y(arr[now]))})"><circle class="ring" r="5"/><circle class="core" r="4.5"/></g>`;
+  const line = (arr, cls) => `<path class="l ${cls} past" d="${path(arr, 0, now)}"/><path class="l ${cls} ahead" d="${path(arr, now, N)}"/>`;
   const data = esc(JSON.stringify({ start, N, debt: debt.map(v => v == null ? null : Math.round(v)), save: save.map(v => v == null ? null : Math.round(v)) }));
-  return `<div class="dc" data-chart="${data}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Savings and debt over time, from ${esc(monthName(start, 'short'))} to ${esc(monthName(addM(start, N), 'short'))}">` +
-    '<defs><linearGradient id="gDebt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".45"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient>' +
-    '<linearGradient id="gSave" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1fd17f" stop-opacity=".45"/><stop offset="1" stop-color="#1fd17f" stop-opacity="0"/></linearGradient>' +
-    '<linearGradient id="gFade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity=".35"/></linearGradient>' +
-    `<mask id="mFuture"><rect x="0" y="0" width="${X(now).toFixed(1)}" height="${H}" fill="#fff"/><rect x="${X(now).toFixed(1)}" y="0" width="${(W - X(now)).toFixed(1)}" height="${H}" fill="url(#gFade)"/></mask></defs>` +
-    grid + `<g mask="url(#mFuture)"><path class="a debt" d="${area(debt, 0, N)}"/><path class="a save" d="${area(save, 0, N)}"/>` +
-    `<path class="l debt" pathLength="1" d="${path(debt, 0, N)}"/><path class="l save" pathLength="1" d="${path(save, 0, N)}"/></g>` +
-    `<line class="today" x1="${X(now).toFixed(1)}" x2="${X(now).toFixed(1)}" y1="${top}" y2="${H - bot}"/>${dot(debt, 'debt')}${dot(save, 'save')}${star}${ticks}` +
+  const head = (cls, label, v) => `<div class="dc-now ${cls}"><span>${label}</span><b data-count="${Math.round(v * 100)}" data-fmt="inr">${short_inr(v)}</b></div>`;
+  return `<div class="dc" data-chart="${data}"><div class="dc-head">${head('debt', 'Debt today', debt[now] || 0)}${head('save', 'Savings today', save[now] || 0)}</div>` +
+    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Savings and debt over time, from ${esc(monthName(start, 'short'))} to ${esc(monthName(addM(start, N), 'short'))}">` +
+    '<defs><linearGradient id="gDebt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".42"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient>' +
+    '<linearGradient id="gSave" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1fd17f" stop-opacity=".42"/><stop offset="1" stop-color="#1fd17f" stop-opacity="0"/></linearGradient>' +
+    '<linearGradient id="gScan" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="var(--accent)" stop-opacity="0"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".55"/></linearGradient>' +
+    `<clipPath id="cReveal"><rect class="rv" x="0" y="0" width="${W}" height="${H}"/></clipPath></defs>` +
+    `${grid}<g clip-path="url(#cReveal)"><path class="a debt" d="${area(debt)}"/><path class="a save" d="${area(save)}"/>${line(debt, 'debt')}${line(save, 'save')}</g>` +
+    `<rect class="scan" x="-24" y="${top}" width="24" height="${H - top - bot}" fill="url(#gScan)"/>` +
+    `<line class="today" x1="${f(X(now))}" x2="${f(X(now))}" y1="${top}" y2="${H - bot}"/>${dot(debt, 'debt')}${dot(save, 'save')}${ticks}` +
     `<line class="cursor" x1="0" x2="0" y1="${top}" y2="${H - bot}" hidden/></svg><div class="tipbox" hidden></div>` +
-    '<p class="legend"><span><i class="debt"></i>Debt</span><span><i class="save"></i>Savings</span><span>★ savings pass debt</span></p></div>';
+    '<p class="legend"><span><i class="debt"></i>Debt</span><span><i class="save"></i>Savings</span><span class="muted">dashed: projected</span></p></div>';
 }
 // Reading a month off the chart by touch or mouse.
 document.addEventListener('pointermove', e => chartTip(e));
@@ -1505,7 +1508,7 @@ function healthPage(rt, P) {
   debt[now] = H.debt / 100; save[now] = H.saved / 100;
   for (let k = 1; k <= ahead; k++) { debt[now + k] = H.P.curve[k - 1] ?? 0; save[now + k] = H.saved / 100 + monthlySave * k; }
   const cross = debt.findIndex((d, i) => i >= now && d != null && save[i] != null && save[i] >= d && d >= 0);
-  const chart = H.debt || H.saved ? dualChart({ start, now, N, debt, save, cross }) : empty('Add your loans and savings on the Debt tab');
+  const chart = H.debt || H.saved ? dualChart({ start, now, N, debt, save }) : empty('Add your loans and savings on the Debt tab');
   return { title: 'Money health', sub: 'Where you stand', html:
     (H.score != null ? `<section class="hero"><div class="label">Your money health</div><div class="total">${H.rating}<small> · ${H.score}/100</small></div>` +
       `<div class="meter"><i style="width:${H.score}%"></i></div><div class="kpis"><div><span>Savings</span><b>${rupees(H.saved)}</b></div><div><span>Debt</span><b>${rupees(H.debt)}</b></div></div></section>`
@@ -2000,7 +2003,7 @@ function countUp() {
   const step = now => {
     const k = Math.min(1, (now - t0) / 700), e = 1 - (1 - k) ** 3, d = Math.min(1, (now - t0) / 900), roll = Math.floor((now - t0) / 60);
     for (const el of els) {
-      if (!dec.includes(el)) { el.textContent = fmt(Math.round(+el.dataset.count * e)); continue; }
+      if (!dec.includes(el)) { const v = Math.round(+el.dataset.count * e); el.textContent = el.dataset.fmt === 'inr' ? short_inr(v / 100) : fmt(v); continue; }
       if (roll === rolled && d < 1) continue;  // new random digits every 60 ms
       const s = fmt(+el.dataset.count), done = Math.floor(d * s.replace(/\D/g, '').length);
       let i = 0;
