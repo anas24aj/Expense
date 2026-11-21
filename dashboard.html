@@ -18,6 +18,7 @@
     --good: #0f7b3e; --bad: #b42318; --warn: #a15c00; --warn-soft: #fdf1dc;
     --hero-from: #1c5cab; --hero-to: #2a78d6; --hero-text: #ffffff; --hero-muted: #cde2fb;
     --clock: 0s; --sheen: rgb(255 255 255 / .25);
+    --save: #16b673; --save-ink: #0b8050; --debt: #ff6a4d; --debt-ink: #cf3d22;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -27,6 +28,7 @@
       --accent: #5598e7; --accent-soft: #1d3150; --bar: #3987e5; --bar-dim: #24456f; --bar-2: #34c392;
       --good: #4ade80; --bad: #f87171; --warn: #f5b84a; --warn-soft: #3a2a0c;
       --hero-from: #104281; --hero-to: #1c5cab; --hero-text: #ffffff; --hero-muted: #b7d3f6;
+      --save: #2fd08a; --save-ink: #4fdc9c; --debt: #ff6f55; --debt-ink: #ff8b74;
       --sheen: rgb(255 255 255 / .12); --card-line: color-mix(in srgb, var(--accent) 25%, var(--line));
     }
   }
@@ -351,30 +353,50 @@
   .lc .base { stroke: var(--muted); stroke-dasharray: 4 4; } .legend i.base { background: var(--muted); }
   .lc .save, .legend i.save { stroke: var(--bar-2); background: var(--bar-2); } .lc .net, .legend i.net { stroke: var(--accent); background: var(--accent); }
   .lc-zero { margin: 2px 0 0; }
-  .dc { position: relative; touch-action: pan-y; }
+  /* Savings vs debt: a diverging net-worth chart. Savings rise above ₹0, debt hangs below it, the ink line is net worth. */
+  .dc { position: relative; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .dc-head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 2px 0 12px; }
+  .dc-head > div { min-width: 0; } .dc-head .net { text-align: right; }
+  .dc-head span { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; } .dc-head .net span { justify-content: flex-end; }
+  .dc-head b { display: block; margin-top: 2px; font-size: 19px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dc-head .save b { color: var(--save-ink); } .dc-head .debt b { color: var(--debt-ink); }
+  .dc i.k { flex: none; width: 8px; height: 8px; border-radius: 50%; } .dc i.k.save { background: var(--save); } .dc i.k.debt { background: var(--debt); }
+  .dc i.k.net { width: 14px; height: 3px; border-radius: 2px; background: var(--text); }
+  .dc-plot { position: relative; }
   .dc svg { display: block; width: 100%; height: auto; overflow: visible; }
-  .dc .g { stroke: var(--line); stroke-dasharray: 2 4; } .dc text { fill: var(--muted); font-size: 9px; } .dc text.x { font-size: 10px; }
-  .dc .a.debt { fill: url(#gDebt); } .dc .a.save { fill: url(#gSave); }
-  .dc .l { fill: none; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
-  .dc .l.debt { stroke: #ff6b4a; filter: drop-shadow(0 2px 6px rgb(255 107 74 / .45)); } .dc .l.save { stroke: #1fd17f; filter: drop-shadow(0 2px 6px rgb(31 209 127 / .45)); }
-  .dc .a { transition: opacity .3s; }
-  .dc .today { stroke: var(--text-2); stroke-dasharray: 3 3; opacity: .6; }
-  .dc-head { display: flex; justify-content: space-between; margin: -2px 0 6px; }
-  .dc-now span { display: block; font-size: 11px; color: var(--muted); } .dc-now b { font-size: 20px; font-variant-numeric: tabular-nums; }
-  .dc-now.debt b { color: #ff6b4a; } .dc-now.save { text-align: right; } .dc-now.save b { color: #1fd17f; }
-  .dc .l.ahead { stroke-dasharray: 7 6; opacity: .85; }
-  .dc .now .core { stroke: var(--surface); stroke-width: 2; } .dc .now.debt circle { fill: #ff6b4a; } .dc .now.save circle { fill: #1fd17f; }
-  .dc .now .ring { opacity: 0; } .dc .scan { opacity: 0; }
-  @keyframes reveal { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-  @keyframes scan { 0% { opacity: 1; transform: translateX(0); } 92% { opacity: 1; } 100% { opacity: 0; transform: translateX(364px); } }
-  @keyframes flow { to { stroke-dashoffset: -26; } }
-  @keyframes ripple { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(3.4); opacity: 0; } }
-  @keyframes pop { 0% { transform: scale(0); } 70% { transform: scale(1.35); } 100% { transform: scale(1); } }
-  html.motion .view.anim .dc .rv { transform-box: fill-box; transform-origin: left; animation: reveal 1.8s cubic-bezier(.45, .05, .25, 1) both .15s; }
-  html.motion .view.anim .dc .scan { animation: scan 1.8s cubic-bezier(.45, .05, .25, 1) both .15s; }
-  html.motion .view.anim .dc .now .core { transform-box: fill-box; transform-origin: center; animation: pop .5s ease-out both 1.4s; }
-  html.motion .dc .l.ahead { animation: flow 1.6s linear infinite; animation-delay: var(--clock); }
-  html.motion .dc .now .ring { transform-box: fill-box; transform-origin: center; animation: ripple 2.4s ease-out infinite; animation-delay: var(--clock); }
+  .dc .g { stroke: var(--line); } .dc .z { stroke: var(--text-2); stroke-opacity: .45; }
+  .dc text { fill: var(--muted); font-size: 10px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .dc .a.save { fill: url(#dcSave); } .dc .a.debt { fill: url(#dcDebt); } .dc .a.ahead { opacity: .7; } .dc .hatch { fill: url(#dcHatch); }
+  .dc #dcHatch line { stroke: var(--surface); stroke-width: 1.5; stroke-opacity: .5; }
+  .dc .rim { fill: none; stroke-width: 1.5; stroke-linejoin: round; } .dc .rim.save { stroke: var(--save); } .dc .rim.debt { stroke: var(--debt); } .dc .rim.ahead { stroke-opacity: .55; }
+  .dc .halo, .dc .nl { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  .dc .halo { stroke: var(--surface); stroke-width: 7; stroke-opacity: .85; }
+  .dc .nl { stroke: var(--text); stroke-width: 2.75; } .dc .nl.ahead { stroke-dasharray: 5 5; }
+  .dc .tm line { stroke: var(--text-2); stroke-opacity: .55; stroke-dasharray: 2 3; }
+  .dc .tm rect { fill: var(--text); } .dc .tm text { fill: var(--surface); font-weight: 700; letter-spacing: .02em; }
+  .dc .dot { fill: var(--text); stroke: var(--surface); stroke-width: 2.5; } .dc .pulse { fill: var(--text); opacity: 0; }
+  .dc .cursor { stroke: var(--text); stroke-opacity: .5; } .dc .cdot { fill: var(--surface); stroke: var(--text); stroke-width: 2.5; }
+  .dc .tipbox { position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; display: grid; gap: 2px; min-width: 124px; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 90%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    box-shadow: 0 10px 28px -10px rgb(0 0 0 / .3); font-size: 12px; line-height: 1.35; }
+  .dc .tipbox b { font-size: 12px; margin-bottom: 2px; } .dc .tipbox i.k { margin: 0 1px; } .dc .tipbox i.k.net { width: 10px; margin: 0; } .dc .tipbox span { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .dc .tipbox em { margin-left: auto; padding-left: 10px; font-style: normal; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+  .dc-note { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); }
+  .dc-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .dc-facts > div { min-width: 0; padding: 0 10px; border-left: 1px solid var(--line); } .dc-facts > div:first-child { padding-left: 0; border-left: 0; }
+  .dc-facts span { display: block; font-size: 11.5px; line-height: 1.3; color: var(--muted); } .dc-facts b { display: block; margin-top: 4px; font-size: 14px; font-variant-numeric: tabular-nums; } .dc-facts small { font-size: 11px; font-weight: 500; color: var(--muted); }
+  @keyframes dc-rise { from { transform: scaleY(0); } }
+  @keyframes dc-wipe { from { transform: scaleX(0); } }
+  @keyframes dc-settle { from { opacity: 0; transform: translateY(-8px); } }
+  @keyframes dc-pop { 0% { transform: scale(0); } 60% { transform: scale(1.3); } }
+  @keyframes dc-pulse { from { transform: scale(1); opacity: .3; } to { transform: scale(3.2); opacity: 0; } }
+  html.motion .view.anim .dc .grow { transform-box: view-box; transform-origin: 0 var(--y0); animation: dc-rise .9s cubic-bezier(.2, .8, .2, 1) both .2s; }
+  html.motion .view.anim .dc .grow.debt { animation-delay: .32s; }
+  html.motion .view.anim .dc .wipe { transform-box: view-box; transform-origin: 0 0; animation: dc-wipe 1.2s cubic-bezier(.65, 0, .35, 1) both .5s; }
+  html.motion .view.anim .dc .tm { animation: dc-settle .5s cubic-bezier(.2, .8, .2, 1) both 1.3s; }
+  html.motion .view.anim .dc .tdot { animation: fade .2s both 1.45s; }
+  html.motion .view.anim .dc .dot { transform-box: fill-box; transform-origin: center; animation: dc-pop .45s ease-out both 1.45s; }
+  html.motion .dc .pulse { transform-box: fill-box; transform-origin: center; animation: dc-pulse 2.8s ease-out infinite; animation-delay: var(--clock); }
   .lc-x { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
   .tip { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 12px 0; text-decoration: none; color: inherit; border-top: 1px solid var(--line); }
   .tip:first-of-type { border-top: 0; }
@@ -1437,48 +1459,71 @@ function health() {
 }
 // ₹ in short form for chart labels: ₹86.1L, ₹1.2Cr, ₹45k.
 const short_inr = v => { const a = Math.abs(v); return (v < 0 ? '−₹' : '₹') + (a >= 1e7 ? (a / 1e7).toFixed(1) + 'Cr' : a >= 1e5 ? (a / 1e5).toFixed(1) + 'L' : a >= 1e3 ? Math.round(a / 1e3) + 'k' : Math.round(a)); };
-// Savings vs debt on one scale. Opening the page sweeps the chart in from the left behind a glowing scanner; the
-// months ahead are flowing dashed lines (they're a projection); today's dots pulse. Slide along it to read a month.
-function dualChart({ start, now, N, debt, save }) {
-  const W = 340, H = 200, top = 16, bot = 24, max = Math.max(1, ...debt.filter(v => v != null), ...save.filter(v => v != null)) * 1.08;
-  const X = i => (i / Math.max(1, N)) * W, Y = v => H - bot - (v / max) * (H - top - bot), f = n => n.toFixed(1);
-  const path = (arr, from, to) => { let d = ''; for (let i = from; i <= to; i++) if (arr[i] != null) d += `${d ? 'L' : 'M'}${f(X(i))},${f(Y(arr[i]))}`; return d; };
-  const area = arr => { const d = path(arr, 0, N); if (!d) return '';
-    const first = arr.findIndex(v => v != null), last = N - [...arr].reverse().findIndex(v => v != null);
-    return `${d}L${f(X(last))},${f(Y(0))}L${f(X(first))},${f(Y(0))}Z`; };
-  const grid = [0.25, 0.5, 0.75, 1].map(k => `<line class="g" x1="0" x2="${W}" y1="${f(Y(max / 1.08 * k))}" y2="${f(Y(max / 1.08 * k))}"/>` +
-    `<text x="2" y="${f(Y(max / 1.08 * k) - 3)}">${short_inr(max / 1.08 * k)}</text>`).join('');
-  const ticks = [0, now, N].filter((m, i, x) => x.indexOf(m) === i).map(m => `<text class="x" x="${f(X(m))}" y="${H - 6}" text-anchor="${m === 0 ? 'start' : m === N ? 'end' : 'middle'}">${m === now ? 'Today' : monthName(addM(start, m), 'short')}</text>`).join('');
-  const dot = (arr, cls) => arr[now] == null ? '' : `<g class="now ${cls}" transform="translate(${f(X(now))},${f(Y(arr[now]))})"><circle class="ring" r="5"/><circle class="core" r="4.5"/></g>`;
-  const line = (arr, cls) => `<path class="l ${cls} past" d="${path(arr, 0, now)}"/><path class="l ${cls} ahead" d="${path(arr, now, N)}"/>`;
-  const data = esc(JSON.stringify({ start, N, debt: debt.map(v => v == null ? null : Math.round(v)), save: save.map(v => v == null ? null : Math.round(v)) }));
-  const head = (cls, label, v) => `<div class="dc-now ${cls}"><span>${label}</span><b data-count="${Math.round(v * 100)}" data-fmt="inr">${short_inr(v)}</b></div>`;
-  return `<div class="dc" data-chart="${data}"><div class="dc-head">${head('debt', 'Debt today', debt[now] || 0)}${head('save', 'Savings today', save[now] || 0)}</div>` +
-    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Savings and debt over time, from ${esc(monthName(start, 'short'))} to ${esc(monthName(addM(start, N), 'short'))}">` +
-    '<defs><linearGradient id="gDebt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".42"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient>' +
-    '<linearGradient id="gSave" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1fd17f" stop-opacity=".42"/><stop offset="1" stop-color="#1fd17f" stop-opacity="0"/></linearGradient>' +
-    '<linearGradient id="gScan" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="var(--accent)" stop-opacity="0"/><stop offset="1" stop-color="var(--accent)" stop-opacity=".55"/></linearGradient>' +
-    `<clipPath id="cReveal"><rect class="rv" x="0" y="0" width="${W}" height="${H}"/></clipPath></defs>` +
-    `${grid}<g clip-path="url(#cReveal)"><path class="a debt" d="${area(debt)}"/><path class="a save" d="${area(save)}"/>${line(debt, 'debt')}${line(save, 'save')}</g>` +
-    `<rect class="scan" x="-24" y="${top}" width="24" height="${H - top - bot}" fill="url(#gScan)"/>` +
-    `<line class="today" x1="${f(X(now))}" x2="${f(X(now))}" y1="${top}" y2="${H - bot}"/>${dot(debt, 'debt')}${dot(save, 'save')}${ticks}` +
-    `<line class="cursor" x1="0" x2="0" y1="${top}" y2="${H - bot}" hidden/></svg><div class="tipbox" hidden></div>` +
-    '<p class="legend"><span><i class="debt"></i>Debt</span><span><i class="save"></i>Savings</span><span class="muted">dashed: projected</span></p></div>';
+// Savings vs debt as one diverging chart: savings grow up from ₹0, debt hangs below it, and the ink line is net worth
+// (savings − debt) climbing through zero. Recorded months are solid; months ahead (your plan) are striped and lighter.
+// Opening the page grows both areas out of the zero line and draws net worth in; slide along it to read a month.
+const niceStep = x => { const p = 10 ** Math.floor(Math.log10(x)), m = x / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p; };
+function dualChart({ start, now, N, debt, save, facts = [] }) {
+  const W = 340, PW = 298, H = 212, top = 24, bot = 22, n = Math.max(1, N), f = v => v.toFixed(1);
+  const net = debt.map((d, i) => d == null || save[i] == null ? null : save[i] - d);
+  const hi = Math.max(0, ...save.filter(v => v != null)), lo = Math.max(0, ...debt.filter(v => v != null));
+  const step = niceStep(Math.max(hi, lo, 1) / 2), up = Math.ceil(hi / step) * step || step / 2, down = Math.ceil(lo / step) * step || step / 2;
+  const X = i => i / n * PW, Y = v => top + (up - v) / (up + down) * (H - top - bot), y0 = Y(0), nx = X(now);
+  const pts = (arr, a, b) => { const p = []; for (let i = a; i <= b; i++) if (arr[i] != null) p.push([X(i), Y(arr[i])]); return p; };
+  const line = p => p.map(([x, y], k) => `${k ? 'L' : 'M'}${f(x)},${f(y)}`).join('');
+  const area = p => p.length ? `${line(p)}L${f(p.at(-1)[0])},${f(y0)}L${f(p[0][0])},${f(y0)}Z` : '';
+  const neg = debt.map(v => v == null ? null : -v);
+  const band = (arr, cls) => { const past = pts(arr, 0, now), ahead = pts(arr, now, N);
+    return `<g class="grow ${cls}"><path class="a ${cls}" d="${area(past)}"/><path class="a ${cls} ahead" d="${area(ahead)}"/><path class="hatch" d="${area(ahead)}"/>` +
+      `<path class="rim ${cls}" d="${line(past)}"/><path class="rim ${cls} ahead" d="${line(ahead)}"/></g>`; };
+  const grid = []; for (let v = -down; v <= up + 1e-6; v += step) grid.push(`<line class="${Math.abs(v) < 1e-6 ? 'z' : 'g'}" x1="0" x2="${PW + 4}" y1="${f(Y(v))}" y2="${f(Y(v))}"/>`);
+  const ylab = [up, 0, -down].map(v => `<text x="${W}" y="${f(Y(v) + 3.5)}" text-anchor="end">${v ? short_inr(v).replace('.0', '') : '₹0'}</text>`).join('');
+  // x-axis: year starts, at most 4 of them; a short span falls back to its first and last month
+  let years = []; for (let i = 1; i <= N; i++) if (addM(start, i).endsWith('-01')) years.push(i);
+  const every = Math.ceil(years.length / 4); years = years.filter((_, k) => (years.length - 1 - k) % every === 0).filter(i => X(i) > 14 && X(i) < PW - 14);
+  const xlab = years.length >= 2 ? years.map(i => `<text x="${f(X(i))}" y="${H - 5}" text-anchor="middle">${addM(start, i).slice(0, 4)}</text>`).join('')
+    : `<text x="0" y="${H - 5}">${esc(monthName(start, 'short'))}</text><text x="${PW}" y="${H - 5}" text-anchor="end">${esc(monthName(addM(start, N), 'short'))}</text>`;
+  const ticks = years.map(i => `<line class="g" x1="${f(X(i))}" x2="${f(X(i))}" y1="${H - bot}" y2="${H - bot + 3}"/>`).join('');
+  const px = Math.min(Math.max(0, nx - 21), PW - 42);
+  const today = `<g class="tm"><line x1="${f(nx)}" x2="${f(nx)}" y1="${top - 4}" y2="${H - bot}"/><rect x="${f(px)}" y="2" width="42" height="17" rx="8.5"/><text x="${f(px + 21)}" y="14" text-anchor="middle">Today</text></g>`;
+  const dot = net[now] == null ? '' : `<g class="tdot"><circle class="pulse" cx="${f(nx)}" cy="${f(Y(net[now]))}" r="5"/><circle class="dot" cx="${f(nx)}" cy="${f(Y(net[now]))}" r="5"/></g>`;
+  const netPath = `<path class="halo" d="${line(pts(net, 0, N))}"/><path class="nl" d="${line(pts(net, 0, now))}"/><path class="nl ahead" d="${line(pts(net, now, N))}"/>`;
+  const R = v => v == null ? null : Math.round(v);
+  const data = esc(JSON.stringify({ start, N, W, PW, save: save.map(R), debt: debt.map(R), net: net.map(R), y: net.map(v => v == null ? null : +f(Y(v))) }));
+  const last = net.findLastIndex(v => v != null), end = last >= 0 ? net[last] : null;
+  const label = `Savings ${short_inr(save[now] || 0)}, debt ${short_inr(debt[now] || 0)}, net worth ${short_inr(net[now] ?? 0)} today` +
+    (end != null ? `; by ${monthName(addM(start, last), 'short')} net worth is projected at ${short_inr(end)}` : '') + '. Recorded from ' + monthName(start, 'short') + ', projected after today.';
+  const stat = (cls, name, v) => `<div class="${cls}"><span><i class="k ${cls}"></i>${name}</span><b data-count="${Math.round(v * 100)}" data-fmt="inr">${short_inr(v)}</b></div>`;
+  return `<div class="dc" data-chart="${data}"><div class="dc-head">${stat('save', 'Savings', save[now] || 0)}${stat('debt', 'Debt', debt[now] || 0)}${stat('net', 'Net worth', net[now] ?? 0)}</div>` +
+    `<div class="dc-plot"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}" style="--y0:${f(y0)}px">` +
+    `<defs><linearGradient id="dcSave" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${top}" y2="${f(y0)}"><stop offset="0" stop-color="var(--save)" stop-opacity=".6"/><stop offset="1" stop-color="var(--save)" stop-opacity=".1"/></linearGradient>` +
+    `<linearGradient id="dcDebt" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="${f(y0)}" y2="${H - bot}"><stop offset="0" stop-color="var(--debt)" stop-opacity=".1"/><stop offset="1" stop-color="var(--debt)" stop-opacity=".55"/></linearGradient>` +
+    `<pattern id="dcHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6"/></pattern>` +
+    `<clipPath id="dcWipe"><rect class="wipe" x="-8" y="0" width="${W + 8}" height="${H}"/></clipPath></defs>` +
+    `${grid.join('')}${band(save, 'save')}${band(neg, 'debt')}<line class="z" x1="0" x2="${PW + 4}" y1="${f(y0)}" y2="${f(y0)}"/>` +
+    `${ylab}${xlab}${ticks}${today}<g clip-path="url(#dcWipe)">${netPath}</g>${dot}` +
+    `<line class="cursor" x1="0" x2="0" y1="${top - 4}" y2="${H - bot}" hidden/><circle class="cdot" r="4.5" hidden/></svg><div class="tipbox" hidden></div></div>` +
+    '<p class="dc-note">Striped: projected by your plan · slide to read a month</p>' +
+    (facts.length ? `<div class="dc-facts">${facts.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>` : '') + '</div>';
 }
-// Reading a month off the chart by touch or mouse.
+// Reading a month off the chart by touch or mouse: a cursor, a dot on net worth and a small label beside the finger.
 document.addEventListener('pointermove', e => chartTip(e));
 document.addEventListener('pointerdown', e => chartTip(e));
 function chartTip(e) {
-  const box = e.target.closest?.('.dc');
-  document.querySelectorAll('.dc .tipbox').forEach(t => { if (!box || !box.contains(t)) t.hidden = true; });
+  const box = e.target.closest?.('.dc-plot');
+  document.querySelectorAll('.dc .tipbox').forEach(t => { if (!box || !box.contains(t)) { t.hidden = true; t.parentNode.querySelectorAll('.cursor, .cdot').forEach(el => el.setAttribute('hidden', '')); } });
   if (!box) return;
-  const c = JSON.parse(box.dataset.chart), svg = box.querySelector('svg'), r = svg.getBoundingClientRect();
-  const i = Math.max(0, Math.min(c.N, Math.round((e.clientX - r.left) / r.width * c.N)));
-  const tip = box.querySelector('.tipbox'), cur = box.querySelector('.cursor'), x = (i / Math.max(1, c.N) * 340).toFixed(1);
-  cur.setAttribute('x1', x); cur.setAttribute('x2', x); cur.hidden = false;
+  const c = JSON.parse(box.parentNode.dataset.chart), svg = box.querySelector('svg'), r = svg.getBoundingClientRect(), k = r.width / c.W;
+  const i = Math.max(0, Math.min(c.N, Math.round((e.clientX - r.left) / (c.PW * k) * c.N))), x = i / Math.max(1, c.N) * c.PW;
+  const tip = box.querySelector('.tipbox'), cur = box.querySelector('.cursor'), dot = box.querySelector('.cdot');
+  cur.setAttribute('x1', x); cur.setAttribute('x2', x); cur.removeAttribute('hidden');  // SVG elements have no .hidden property
+  dot.toggleAttribute('hidden', c.y[i] == null); if (c.y[i] != null) { dot.setAttribute('cx', x); dot.setAttribute('cy', c.y[i]); }
+  const v = a => a[i] == null ? '—' : short_inr(a[i]);
+  tip.innerHTML = `<b>${esc(monthName(addM(c.start, i), 'short'))}</b><span><i class="k save"></i>Savings<em>${v(c.save)}</em></span>` +
+    `<span><i class="k debt"></i>Debt<em>${v(c.debt)}</em></span><span><i class="k net"></i>Net worth<em>${v(c.net)}</em></span>`;
   tip.hidden = false;
-  tip.innerHTML = `<b>${esc(monthName(addM(c.start, i), 'short'))}</b><span class="d">Debt ${c.debt[i] == null ? '—' : short_inr(c.debt[i])}</span><span class="s">Savings ${c.save[i] == null ? '—' : short_inr(c.save[i])}</span>`;
-  tip.style.left = `${Math.min(Math.max(0, (i / Math.max(1, c.N)) * r.width - 60), r.width - 130)}px`;
+  const px = x * k, w = tip.offsetWidth, room = box.clientWidth;  // beside the finger, flipping sides so it never leaves the card
+  tip.style.left = `${Math.max(0, Math.min(room - w, px > room / 2 ? px - w - 12 : px + 12))}px`;
 }
 // A small line chart: past points solid, the future dashed; x = months from the first point.
 function lineChart(series, months, labels) {
@@ -1508,17 +1553,16 @@ function healthPage(rt, P) {
   debt[now] = H.debt / 100; save[now] = H.saved / 100;
   for (let k = 1; k <= ahead; k++) { debt[now + k] = H.P.curve[k - 1] ?? 0; save[now + k] = H.saved / 100 + monthlySave * k; }
   const cross = debt.findIndex((d, i) => i >= now && d != null && save[i] != null && save[i] >= d && d >= 0);
-  const chart = H.debt || H.saved ? dualChart({ start, now, N, debt, save }) : empty('Add your loans and savings on the Debt tab');
+  const facts = [['Debt-free', H.debt ? whenMonths(H.P.months) : '—'], ['Net positive', cross > 0 ? monthName(addM(start, cross), 'short') : cross === 0 ? 'already' : 'beyond 10 years'],
+    ['Saving', monthlySave ? `${short_inr(monthlySave)}<small>/mo</small>` : '<a href="#/plan">set on Plan</a>']];
+  const chart = H.debt || H.saved ? dualChart({ start, now, N, debt, save, facts }) : empty('Add your loans and savings on the Debt tab');
   return { title: 'Money health', sub: 'Where you stand', html:
     (H.score != null ? `<section class="hero"><div class="label">Your money health</div><div class="total">${H.rating}<small> · ${H.score}/100</small></div>` +
       `<div class="meter"><i style="width:${H.score}%"></i></div><div class="kpis"><div><span>Savings</span><b>${rupees(H.saved)}</b></div><div><span>Debt</span><b>${rupees(H.debt)}</b></div></div></section>`
       : `<section class="card">${empty('Not enough to judge yet', 'Add your loans and savings on the Debt tab; the score needs a few months of transactions.')}</section>`) +
     (H.checks.length ? `<section class="card"><h2>The checks<span>tap for what to do</span></h2>${H.checks.map(c => `<a class="tip" href="${c.label === 'Debt-free' ? '#/plan' : c.label === 'Safety buffer' ? '#/debt' : '#/categories'}">` +
       `<span class="ic" aria-hidden="true">${c.icon}</span><span><b>${c.label} <span class="hv" style="color:${color[c.tone]}">${esc(c.value)}</span></b><small>${c.text}</small></span></a>`).join('')}</section>` : '') +
-    card('Savings vs debt', 'in ₹ · slide to explore', chart) +
-    `<section class="card facts"><div><span>Debt-free</span><b>${H.debt ? whenMonths(H.P.months) : '—'}</b></div>` +
-    `<div><span>Net worth turns positive</span><b>${cross > 0 ? monthName(addM(start, cross), 'short') : cross === 0 ? 'already' : 'beyond 10 years'}</b></div>` +
-    `<div><span>Saving a month</span><b>${monthlySave ? rupees(Math.round(monthlySave * 100)) : '<a href="#/plan">set on Plan</a>'}</b></div></section>` +
+    card('Savings vs debt', 'in ₹', chart) +
     card('Money in and out', `SAR, last 12 months`, `<p class="legend"><span><i style="background:var(--bar)"></i>Spent</span><span><i style="background:var(--bar-2)"></i>Received</span></p>` +
       monthBars(state.all, cur, P, { received: true })) +
     '<p class="version">Checked against common guidelines from your own numbers, not financial advice.</p>' };
