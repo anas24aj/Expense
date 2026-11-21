@@ -351,6 +351,29 @@
   .lc .base { stroke: var(--muted); stroke-dasharray: 4 4; } .legend i.base { background: var(--muted); }
   .lc .save, .legend i.save { stroke: var(--bar-2); background: var(--bar-2); } .lc .net, .legend i.net { stroke: var(--accent); background: var(--accent); }
   .lc-zero { margin: 2px 0 0; }
+  .dc { position: relative; touch-action: pan-y; }
+  .dc svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .dc .g { stroke: var(--line); stroke-dasharray: 2 4; } .dc text { fill: var(--muted); font-size: 9px; } .dc text.x { font-size: 10px; }
+  .dc .a.debt { fill: url(#gDebt); } .dc .a.save { fill: url(#gSave); }
+  .dc .l { fill: none; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+  .dc .l.debt { stroke: #ff6b4a; filter: drop-shadow(0 2px 6px rgb(255 107 74 / .45)); } .dc .l.save { stroke: #1fd17f; filter: drop-shadow(0 2px 6px rgb(31 209 127 / .45)); }
+  .dc .today { stroke: var(--text-2); stroke-dasharray: 3 3; opacity: .6; }
+  .dc .now { stroke: var(--surface); stroke-width: 2; } .dc .now.debt { fill: #ff6b4a; } .dc .now.save { fill: #1fd17f; }
+  .dc .cross circle { fill: #ffc531; filter: drop-shadow(0 0 6px #ffc531); } .dc .cross text { fill: #5b3b00; font-size: 13px; font-weight: 700; }
+  .dc .cursor { stroke: var(--accent); stroke-width: 1.5; }
+  .dc .tipbox { position: absolute; top: 0; width: 130px; padding: 6px 8px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line);
+    box-shadow: 0 6px 18px rgb(0 0 0 / .18); font-size: 12px; display: grid; gap: 2px; pointer-events: none; }
+  .dc .tipbox .d { color: #ff6b4a; } .dc .tipbox .s { color: #1fd17f; }
+  .legend i.debt { background: #ff6b4a; } .legend i.save { background: #1fd17f; }
+  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; text-align: center; }
+  .facts span { display: block; font-size: 11px; color: var(--muted); } .facts b { display: block; font-size: 15px; margin-top: 2px; }
+  @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(8px); } }
+  @keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+  html.motion .view.anim .dc .l { stroke-dasharray: 1; animation: draw 1.6s cubic-bezier(.3, .7, .2, 1) both .2s; }
+  html.motion .view.anim .dc .a { animation: rise-in 1s ease-out both .5s; }
+  html.motion .dc .now { animation: glow 2s ease-in-out infinite; }
+  html.motion .dc .cross { animation: none; } html.motion .dc .cross circle, html.motion .dc .cross text { transform-box: fill-box; transform-origin: center; animation: beat 1.8s ease-in-out infinite; }
   .lc-x { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
   .tip { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 12px 0; text-decoration: none; color: inherit; border-top: 1px solid var(--line); }
   .tip:first-of-type { border-top: 0; }
@@ -1411,6 +1434,49 @@ function health() {
   const pts = { good: 100, fair: 60, poor: 20 }, score = checks.length ? Math.round(checks.reduce((a, c) => a + pts[c.tone], 0) / checks.length) : null;
   return { checks, score, rating: score == null ? '' : score >= 75 ? 'Good' : score >= 50 ? 'Fair' : 'Needs work', debt, saved, P, base: M.plans.as_is, planned: !!planned, opt };
 }
+// ₹ in short form for chart labels: ₹86.1L, ₹1.2Cr, ₹45k.
+const short_inr = v => { const a = Math.abs(v); return (v < 0 ? '−₹' : '₹') + (a >= 1e7 ? (a / 1e7).toFixed(1) + 'Cr' : a >= 1e5 ? (a / 1e5).toFixed(1) + 'L' : a >= 1e3 ? Math.round(a / 1e3) + 'k' : Math.round(a)); };
+// Savings vs debt on one scale: shaded areas, the past solid, the future fainter beyond a "today" line, a glowing
+// dot today and a star where savings pass debt. Slide a finger (or the mouse) along it to read any month.
+function dualChart({ start, now, N, debt, save, cross }) {
+  const W = 340, H = 190, top = 14, bot = 24, max = Math.max(1, ...debt.filter(v => v != null), ...save.filter(v => v != null)) * 1.08;
+  const X = i => (i / Math.max(1, N)) * W, Y = v => H - bot - (v / max) * (H - top - bot);
+  const path = (arr, from, to) => { let d = ''; for (let i = from; i <= to; i++) if (arr[i] != null) d += `${d ? 'L' : 'M'}${X(i).toFixed(1)},${Y(arr[i]).toFixed(1)}`; return d; };
+  const area = (arr, from, to) => { const d = path(arr, from, to); if (!d) return '';
+    const first = arr.findIndex((v, i) => i >= from && v != null), last = to - [...arr.slice(from, to + 1)].reverse().findIndex(v => v != null);
+    return `${d}L${X(last).toFixed(1)},${Y(0).toFixed(1)}L${X(first).toFixed(1)},${Y(0).toFixed(1)}Z`; };
+  const grid = [0.25, 0.5, 0.75, 1].map(f => `<line class="g" x1="0" x2="${W}" y1="${Y(max / 1.08 * f).toFixed(1)}" y2="${Y(max / 1.08 * f).toFixed(1)}"/>` +
+    `<text x="2" y="${(Y(max / 1.08 * f) - 3).toFixed(1)}">${short_inr(max / 1.08 * f)}</text>`).join('');
+  const ticks = [0, now, N].filter((m, i, a) => a.indexOf(m) === i).map(m => `<text class="x" x="${X(m).toFixed(1)}" y="${H - 6}" text-anchor="${m === 0 ? 'start' : m === N ? 'end' : 'middle'}">${m === now ? 'Today' : monthName(addM(start, m), 'short')}</text>`).join('');
+  const dot = (arr, cls) => arr[now] != null ? `<circle class="now ${cls}" cx="${X(now).toFixed(1)}" cy="${Y(arr[now]).toFixed(1)}" r="5"/>` : '';
+  const star = cross > now ? `<g class="cross" transform="translate(${X(cross).toFixed(1)},${Y(debt[cross]).toFixed(1)})"><circle r="11"/><text text-anchor="middle" dy="5">★</text></g>` : '';
+  const data = esc(JSON.stringify({ start, N, debt: debt.map(v => v == null ? null : Math.round(v)), save: save.map(v => v == null ? null : Math.round(v)) }));
+  return `<div class="dc" data-chart="${data}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Savings and debt over time, from ${esc(monthName(start, 'short'))} to ${esc(monthName(addM(start, N), 'short'))}">` +
+    '<defs><linearGradient id="gDebt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".45"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient>' +
+    '<linearGradient id="gSave" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1fd17f" stop-opacity=".45"/><stop offset="1" stop-color="#1fd17f" stop-opacity="0"/></linearGradient>' +
+    '<linearGradient id="gFade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity=".35"/></linearGradient>' +
+    `<mask id="mFuture"><rect x="0" y="0" width="${X(now).toFixed(1)}" height="${H}" fill="#fff"/><rect x="${X(now).toFixed(1)}" y="0" width="${(W - X(now)).toFixed(1)}" height="${H}" fill="url(#gFade)"/></mask></defs>` +
+    grid + `<g mask="url(#mFuture)"><path class="a debt" d="${area(debt, 0, N)}"/><path class="a save" d="${area(save, 0, N)}"/>` +
+    `<path class="l debt" pathLength="1" d="${path(debt, 0, N)}"/><path class="l save" pathLength="1" d="${path(save, 0, N)}"/></g>` +
+    `<line class="today" x1="${X(now).toFixed(1)}" x2="${X(now).toFixed(1)}" y1="${top}" y2="${H - bot}"/>${dot(debt, 'debt')}${dot(save, 'save')}${star}${ticks}` +
+    `<line class="cursor" x1="0" x2="0" y1="${top}" y2="${H - bot}" hidden/></svg><div class="tipbox" hidden></div>` +
+    '<p class="legend"><span><i class="debt"></i>Debt</span><span><i class="save"></i>Savings</span><span>★ savings pass debt</span></p></div>';
+}
+// Reading a month off the chart by touch or mouse.
+document.addEventListener('pointermove', e => chartTip(e));
+document.addEventListener('pointerdown', e => chartTip(e));
+function chartTip(e) {
+  const box = e.target.closest?.('.dc');
+  document.querySelectorAll('.dc .tipbox').forEach(t => { if (!box || !box.contains(t)) t.hidden = true; });
+  if (!box) return;
+  const c = JSON.parse(box.dataset.chart), svg = box.querySelector('svg'), r = svg.getBoundingClientRect();
+  const i = Math.max(0, Math.min(c.N, Math.round((e.clientX - r.left) / r.width * c.N)));
+  const tip = box.querySelector('.tipbox'), cur = box.querySelector('.cursor'), x = (i / Math.max(1, c.N) * 340).toFixed(1);
+  cur.setAttribute('x1', x); cur.setAttribute('x2', x); cur.hidden = false;
+  tip.hidden = false;
+  tip.innerHTML = `<b>${esc(monthName(addM(c.start, i), 'short'))}</b><span class="d">Debt ${c.debt[i] == null ? '—' : short_inr(c.debt[i])}</span><span class="s">Savings ${c.save[i] == null ? '—' : short_inr(c.save[i])}</span>`;
+  tip.style.left = `${Math.min(Math.max(0, (i / Math.max(1, c.N)) * r.width - 60), r.width - 130)}px`;
+}
 // A small line chart: past points solid, the future dashed; x = months from the first point.
 function lineChart(series, months, labels) {
   const vals = series.flatMap(s => s.points.map(p => p[1])), W = 320, H = 150;
@@ -1429,25 +1495,27 @@ function healthPage(rt, P) {
   const H = health(), cur = today().slice(0, 7), hist = state.money.history || [];
   const color = { good: 'var(--good)', fair: 'var(--warn)', poor: 'var(--bad)' };
   const tag = H.rating === 'Good' ? 'good' : H.rating === 'Fair' ? 'fair' : 'poor';
-  // Debt: the months recorded so far, then the plan from now (yours, and EMIs only) for up to 10 years.
-  const start = hist.length ? hist[0].month : cur, past = hist.map(h => [monthsBetween(start, h.month), h.debt_minor / 100]);
-  const now = monthsBetween(start, cur), ahead = Math.min(120, Math.max(12, (H.P.months ?? 120)));
-  const fut = (plan, n) => [[now, H.debt / 100], ...plan.curve.slice(0, n).map((v, i) => [now + i + 1, v])];
-  const debtChart = H.debt ? lineChart([{ label: 'So far', cls: 'past', points: past.length > 1 ? past : [] },
-    ...(H.planned ? [{ label: 'EMIs only', cls: 'base', points: fut(H.base, ahead) }] : []),
-    { label: H.planned ? `Your ${H.opt.label} plan` : 'At today\'s EMIs', cls: 'plan', points: fut(H.P, ahead) }], now + ahead,
-    [monthName(start, 'short'), 'now', monthName(addM(cur, ahead), 'short')].filter((l, i) => i !== 1 || now > 0)) : empty('No debts on the Debt tab');
-  const saveChart = hist.length > 1 ? lineChart([{ label: 'Savings', cls: 'save', points: hist.map(h => [monthsBetween(start, h.month), h.savings_minor / 100]) },
-    { label: 'Net worth (savings − debt)', cls: 'net', points: hist.map(h => [monthsBetween(start, h.month), (h.savings_minor - h.debt_minor) / 100]) }],
-    monthsBetween(start, cur), [monthName(start, 'short'), monthName(cur, 'short')])
-    : `<p class="muted small">This graph fills in month by month: the app keeps your savings and debt totals each month from now on (first: ${esc(monthName(hist[0]?.month || cur, 'short'))}).</p>`;
+  // One chart, one scale: debt and savings so far (the monthly record), then ahead: debt by your plan, savings growing
+  // by the Savings part of your salary split. Where savings pass debt, net worth turns positive.
+  const start = hist.length ? hist[0].month : cur, now = monthsBetween(start, cur);
+  const ahead = Math.min(120, Math.max(24, H.P.months ?? 120)), N = now + ahead;
+  const monthlySave = Math.max(0, toInr((split().savings || 0) * 100, 'SAR')) / 100;
+  const debt = Array(N + 1).fill(null), save = Array(N + 1).fill(null);
+  for (const h of hist) { const i = monthsBetween(start, h.month); debt[i] = h.debt_minor / 100; save[i] = h.savings_minor / 100; }
+  debt[now] = H.debt / 100; save[now] = H.saved / 100;
+  for (let k = 1; k <= ahead; k++) { debt[now + k] = H.P.curve[k - 1] ?? 0; save[now + k] = H.saved / 100 + monthlySave * k; }
+  const cross = debt.findIndex((d, i) => i >= now && d != null && save[i] != null && save[i] >= d && d >= 0);
+  const chart = H.debt || H.saved ? dualChart({ start, now, N, debt, save, cross }) : empty('Add your loans and savings on the Debt tab');
   return { title: 'Money health', sub: 'Where you stand', html:
     (H.score != null ? `<section class="hero"><div class="label">Your money health</div><div class="total">${H.rating}<small> · ${H.score}/100</small></div>` +
       `<div class="meter"><i style="width:${H.score}%"></i></div><div class="kpis"><div><span>Savings</span><b>${rupees(H.saved)}</b></div><div><span>Debt</span><b>${rupees(H.debt)}</b></div></div></section>`
       : `<section class="card">${empty('Not enough to judge yet', 'Add your loans and savings on the Debt tab; the score needs a few months of transactions.')}</section>`) +
     (H.checks.length ? `<section class="card"><h2>The checks<span>tap for what to do</span></h2>${H.checks.map(c => `<a class="tip" href="${c.label === 'Debt-free' ? '#/plan' : c.label === 'Safety buffer' ? '#/debt' : '#/categories'}">` +
       `<span class="ic" aria-hidden="true">${c.icon}</span><span><b>${c.label} <span class="hv" style="color:${color[c.tone]}">${esc(c.value)}</span></b><small>${c.text}</small></span></a>`).join('')}</section>` : '') +
-    card('Debt over time', 'in ₹', debtChart) + card('Savings and net worth', 'in ₹', saveChart) +
+    card('Savings vs debt', 'in ₹ · slide to explore', chart) +
+    `<section class="card facts"><div><span>Debt-free</span><b>${H.debt ? whenMonths(H.P.months) : '—'}</b></div>` +
+    `<div><span>Net worth turns positive</span><b>${cross > 0 ? monthName(addM(start, cross), 'short') : cross === 0 ? 'already' : 'beyond 10 years'}</b></div>` +
+    `<div><span>Saving a month</span><b>${monthlySave ? rupees(Math.round(monthlySave * 100)) : '<a href="#/plan">set on Plan</a>'}</b></div></section>` +
     card('Money in and out', `SAR, last 12 months`, `<p class="legend"><span><i style="background:var(--bar)"></i>Spent</span><span><i style="background:var(--bar-2)"></i>Received</span></p>` +
       monthBars(state.all, cur, P, { received: true })) +
     '<p class="version">Checked against common guidelines from your own numbers, not financial advice.</p>' };
