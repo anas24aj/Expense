@@ -1133,7 +1133,7 @@ function defaultSplit() {
   const emis = (M?.holdings || []).filter(h => isDebt(h) && h.kind === 'loan' && h.balance_now > 0).reduce((a, h) => a + (h.currency === 'SAR' ? h.emi_minor : sarOf(h.emi_minor)), 0);
   const subs = subscriptions().reduce((a, r) => a + r.monthly, 0);
   // Your usual spending already includes the subscriptions: living is the rest, so nothing is counted twice.
-  return { emis: Math.round(emis / 10000) * 100, subs: Math.round(subs / 10000) * 100, living: avg ? Math.max(0, Math.round((avg.spent - subs) / 10000) * 100) : 0,
+  return { emis: Math.round(emis / 10000) * 100, subs: Math.round(subs / 1000) * 10, living: avg ? Math.max(0, Math.round((avg.spent - subs) / 10000) * 100) : 0,
     savings: Math.round(sal * 0.1 / 100) * 100 };
 }
 const split = () => ({ others: [], ...defaultSplit(), ...(state.settings?.allocations || {}) });  // SAR, whole riyals
