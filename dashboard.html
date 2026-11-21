@@ -311,6 +311,20 @@
   .extra { display: grid; gap: 6px; font-size: 14px; color: var(--text-2); }
   .extra .row2 { display: flex; align-items: center; gap: 8px; }
   .extra input { width: 9em; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+  .setup h3 { font-size: 15px; margin: 16px 0 8px; }
+  .setup label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
+  .setup input { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+  .setup .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .setup .actions { display: flex; gap: 16px; align-items: center; }
+  .alloc { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  .alloc .ic { width: 32px; height: 32px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; }
+  .alloc .nm b { display: block; font-weight: 600; } .alloc .nm small { display: block; font-size: 12px; color: var(--muted); }
+  .alloc .v { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .alloc.done .nm b, .alloc.done .v { color: var(--muted); text-decoration: line-through; }
+  .btn.small { min-height: 36px; padding: 4px 12px; font-size: 13px; }
+  .opt { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 12px; }
+  .opt.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .opt b { display: block; } .opt small { display: block; color: var(--muted); font-size: 12px; } .opt .stats { grid-template-columns: repeat(3, 1fr); margin: 8px 0; }
   .step h2 { margin-top: 2px; } .step p { margin: 6px 0 12px; color: var(--text-2); }
   .step label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
   .step input { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
@@ -831,7 +845,7 @@ function setData(sum, all) {
   state.sum = sum; state.currency = sum.currency; state.all = prep(all);
   state.earliest = state.all.reduce((a, t) => t._d < a ? t._d : a, today());
   $('friend-names').innerHTML = [...new Set(state.all.map(t => t.friend).filter(Boolean))].map(n => `<option value="${esc(n)}">`).join('');
-  if (!state.moneyAt || Date.now() - state.moneyAt > 60000) { loadMoney(); loadRate(); loadPlan(); }  // EMI alerts, net worth and the check-in banner on Overview need them
+  if (!state.moneyAt || Date.now() - state.moneyAt > 60000) { loadMoney(); loadRate(); loadPlan(); loadSettings(); }  // EMI alerts, net worth and the check-in banner on Overview need them
 }
 // Keep the screen current without a manual refresh: ask "anything new?" when the app comes back to the
 // foreground and every 30 s while it's on screen (never in the background), and reload only when there is.
@@ -1058,14 +1072,17 @@ function planSteps() {
   if (untracked.length) steps.push({ key: 'balances', done: settled(act('balances', 'all')), title: 'Check what you still owe', doneText: 'checked',
     ask: 'These aren’t updated by SMS or auto-debit. Open each bank app and type the outstanding amount.',
     inputs: untracked.map(h => [`bal${h.id}`, h.name, (h.balance_now / 100).toFixed(0)]), buttons: [['balances-save', 'Save balances'], ['balances-ok', 'They’re right']] });
-  const avg = monthly(), target = [...loans].sort((a, b) => b.rate_bp - a.rate_bp)[0];
-  if (target && avg && avg.spare > 0) {
+  // The debt your chosen strategy pays first: highest rate, or smallest balance (in ₹ so SAR and INR compare).
+  const snow = state.settings?.debt_choice?.strategy === 'snowball';
+  const avg = monthly(), target = [...loans].sort((a, b) => snow ? toInr(a.balance_now, a.currency) - toInr(b.balance_now, b.currency) : b.rate_bp - a.rate_bp)[0];
+  if (target && ((avg && avg.spare > 0) || chosen()?.sar)) {
     // In the debt's own currency: half of the usual leftover, rounded (₹1,000s for INR, SAR 100s for SAR).
     const c = target.currency, unit = c === 'INR' ? 1000 : 100, sym = c === 'INR' ? '₹' : 'SAR';
-    const a = act('extra', target.id), suggest = Math.max(unit, Math.round((c === 'INR' ? toInr(avg.spare, 'SAR') : avg.spare) / 2 / 100 / unit) * unit);
+    const opt = chosen(), base = opt ? opt.sar * 100 : avg.spare / 2;  // your chosen option, else half the usual leftover (SAR minor)
+    const a = act('extra', target.id), suggest = Math.max(unit, Math.round((c === 'INR' ? toInr(base, 'SAR') : base) / 100 / unit) * unit);
     const per = M.prepay[target.id], saves1 = per ? Math.round(per.interest * toInr(suggest * 100, c) / (M.lump * 100)) : 0;
     if (!a) steps.push({ key: 'extra', done: false, title: `Pay extra toward ${target.name}`, inputs: [['extra-amt', `Extra this month (${sym})`, suggest]],
-      ask: `It has the highest rate (${target.rate_bp / 100}%). ${cash(suggest * 100, c)} is half of what's usually left over (SAR ${fmt(avg.spare)} a month) and saves about ${rupees(saves1)} in interest.`,
+      ask: `${snow ? `It's your smallest debt (${cash(target.balance_now, c)}), so it closes first.` : `It has the highest rate (${target.rate_bp / 100}%).`} ${cash(suggest * 100, c)} is ${opt ? `your ${opt.label} plan` : `half of what's usually left over (SAR ${fmt(avg.spare)} a month)`} and saves about ${rupees(saves1)} in interest.`,
       buttons: [['extra-plan', 'I’ll pay this', target.id], ['extra-skip', 'Not this month', target.id]] });
     else steps.push({ key: 'extra', done: settled(a), title: `Extra ${cash(a.target_minor, c)} toward ${target.name}`,
       doneText: a.status === 'done' ? `paid ${cash(a.actual_minor, c)}` : 'skipped', ask: `Did you pay it? Enter what you paid; it comes off ${target.kind === 'card' ? 'what you owe' : 'the loan'}.`,
@@ -1083,9 +1100,119 @@ function planSteps() {
     buttons: [['savings-save', 'Save'], ['savings-ok', 'No change']] });
   return steps;
 }
+/* ---------- Salary: how it's split, and the options for closing the debt faster ---------- */
+async function loadSettings() {
+  try { const r = await fetch('/api/settings'); if (r.ok) { state.settings = await r.json(); loadOptions(); if (/^#\/(plan|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], .step input:focus, .setup input:focus')) render(); } } catch {}
+}
+const saveSetting = (key, value) => post('/api/settings', { key, value }).then(x => { state.settings = x; loadOptions(); });
+const sarOf = inrMinor => Math.round(inrMinor / state.rate);  // INR minor -> SAR minor
+// What the split starts from before you change it: your EMIs, your usual spending, 10 % to savings.
+function defaultSplit() {
+  const M = state.money, avg = monthly(), sal = state.settings?.salary?.amount || 0;
+  const emis = (M?.holdings || []).filter(h => isDebt(h) && h.kind === 'loan' && h.balance_now > 0).reduce((a, h) => a + (h.currency === 'SAR' ? h.emi_minor : sarOf(h.emi_minor)), 0);
+  return { emis: Math.round(emis / 10000) * 100, living: avg ? Math.round(avg.spent / 10000) * 100 : 0, savings: Math.round(sal * 0.1 / 100) * 100 };
+}
+const split = () => ({ ...defaultSplit(), ...(state.settings?.allocations || {}) });  // SAR, whole riyals
+// The four ways to go faster: SAR a month on top of the EMIs. All-in = everything the split leaves free.
+function debtOptions() {
+  const sal = state.settings?.salary?.amount || 0, sp = split(), free = Math.max(0, sal - sp.emis - sp.living - sp.savings);
+  const r = x => Math.round(x / 100) * 100;
+  return [['steady', 'Steady', r(sal * .10)], ['balanced', 'Balanced', r(sal * .20)], ['fast', 'Fast', r(sal * .35)], ['allin', 'All-in', r(free)]]
+    .map(([key, label, sar]) => ({ key, label, sar, inr: Math.round(sar * state.rate / 1000) * 1000 }));
+}
+async function loadOptions() {
+  if (!state.settings?.salary) return;
+  const opts = debtOptions(), key = opts.map(o => o.inr).join(',') + '|' + state.rate;
+  if (state.optionsKey === key) return;
+  state.optionsKey = key;
+  try { const r = await fetch(`/api/money?${moneyQs()}&options=${opts.map(o => o.inr).join(',')}`); if (r.ok) { state.optionData = await r.json(); if (location.hash.startsWith('#/plan')) render(); } } catch {}
+}
+const chosen = () => { const c = state.settings?.debt_choice; return c && debtOptions().find(o => o.key === c.option); };
+// This month's salary SMS, if it came: the biggest SAR credit marked Salary or Income this month.
+function salaryIn() {
+  const cur = today().slice(0, 7), sal = state.settings?.salary?.amount || 0;
+  return state.all.filter(t => t._m === cur && t.direction === 'credit' && INCOME.has(t.category) && t.currency === 'SAR' && (!sal || t._c >= sal * 100 * .5))
+    .sort((a, b) => b._c - a._c)[0];
+}
+function salarySection() {
+  const S = state.settings || {}, sal = S.salary, editing = state.editSalary || !sal;
+  if (editing) {
+    const sp = split();
+    return `<section class="card setup"><h2>${sal ? 'Change your salary plan' : 'Set up your salary plan'}</h2>` +
+      '<p class="muted small">Asked once. The app uses it to suggest how to split each salary and how fast you can close your debts.</p>' +
+      `<div class="two"><label>Monthly salary (SAR)<input type="text" inputmode="decimal" id="sal-amt" value="${sal?.amount || ''}" placeholder="e.g. 18000"></label>` +
+      `<label>Arrives on day<input type="text" inputmode="numeric" id="sal-day" value="${sal?.day || ''}" placeholder="1-31"></label></div>` +
+      '<h3>How to split it each month (SAR)</h3>' +
+      `<label>Loan EMIs (India)<input type="text" inputmode="decimal" id="al-emis" value="${sp.emis}"></label>` +
+      `<label>Living expenses<input type="text" inputmode="decimal" id="al-living" value="${sp.living}"></label>` +
+      `<label>Savings<input type="text" inputmode="decimal" id="al-savings" value="${sp.savings}"></label>` +
+      '<p class="muted small">Filled in from your EMIs and your usual spending; change any of them. Extra toward debt comes from the option you choose below, and the rest is free to spend.</p>' +
+      `<div class="actions"><button type="button" class="btn" data-salary="save">Save</button>${sal ? '<button type="button" class="link" data-salary="cancel">Cancel</button>' : ''}</div></section>`;
+  }
+  const sp = split(), opt = chosen(), got = salaryIn(), cur = today().slice(0, 7);
+  const total = got ? got._c / 100 : sal.amount, extra = opt ? opt.sar : 0;
+  const rows = [['emis', '🏠', 'Loan EMIs (India)', sp.emis], ['living', '🛒', 'Living expenses', sp.living], ['extra', '🎯', `Extra toward debt${opt ? ` (${opt.label})` : ''}`, extra],
+    ['savings', '🏦', 'Savings', sp.savings]];
+  const free = total - rows.reduce((a, r) => a + r[3], 0);
+  const line = ([k, ic, name, amt]) => { const done = act('alloc', k)?.status === 'done';
+    return `<div class="alloc${done ? ' done' : ''}"><span class="ic" aria-hidden="true">${ic}</span><span class="nm"><b>${esc(name)}</b>` +
+      `${k === 'emis' ? `<small>≈ ${rupees(Math.round(amt * 100 * state.rate))}, taken automatically</small>` : ''}</span><span class="v">SAR ${fmt(amt * 100)}</span>` +
+      (got && amt > 0 ? `<button type="button" class="${done ? 'link' : 'btn small'}" data-alloc="${k}" data-amt="${amt}">${done ? '✓ Moved' : 'Moved'}</button>` : '') + '</div>'; };
+  return `<section class="card"><h2>${esc(monthName(cur, 'short'))} salary<span>${got ? `arrived ${shortDay(got._d)}` : `expected on day ${sal.day}`}</span></h2>` +
+    `<div class="big"><b>SAR ${fmt(total * 100)}</b></div>${rows.map(line).join('')}` +
+    `<div class="alloc"><span class="ic" aria-hidden="true">🎉</span><span class="nm"><b>Free to spend</b></span><span class="v ${free < 0 ? 'up' : ''}">SAR ${fmt(free * 100)}</span></div>` +
+    (free < 0 ? '<p class="small up">The split is more than the salary: lower living expenses, savings or the debt option.</p>' : '') +
+    (got ? '<p class="muted small">Tap Moved as you send each part where it goes.</p>' : '') +
+    `<button type="button" class="link" data-salary="edit">Change salary or split</button></section>`;
+}
+function optionsSection() {
+  if (!state.settings?.salary) return '';
+  const M = state.money, O = state.optionData, debts = (M?.holdings || []).filter(h => isDebt(h) && h.balance_now > 0);
+  if (!debts.length) return card('Close your debt faster', '', empty('No debts yet', 'Add your loans and cards on the Debt tab.'));
+  if (!O) { loadOptions(); return card('Close your debt faster', '', empty('Working out the options…')); }
+  const strat = state.settings.debt_choice?.strategy || 'avalanche', base = O.plans.as_is, pick = state.settings.debt_choice?.option;
+  const opts = debtOptions();
+  const body = opts.map((o, i) => { const p = O.options[i]?.[strat]; if (!p) return '';
+    const sooner = base.months && p.months != null ? base.months - p.months : null, me = pick === o.key;
+    return `<div class="opt${me ? ' on' : ''}"><div><b>${o.label}${me ? ' · ✓ your plan' : ''}</b><small>SAR ${fmt(o.sar * 100)} a month extra ≈ ${rupees(o.inr * 100)}</small></div>` +
+      `<dl class="stats"><div><dt>Debt-free</dt><dd>${whenMonths(p.months)}</dd></div><div><dt>Sooner by</dt><dd>${sooner != null ? plural(sooner, 'month') : '–'}</dd></div>` +
+      `<div><dt>Interest saved</dt><dd>${rupees(Math.max(0, base.interest - p.interest))}</dd></div></dl>` +
+      (me ? '' : `<button type="button" class="btn small" data-choose="${o.key}">Choose ${o.label}</button>`) + '</div>'; }).join('');
+  return `<section class="card"><h2>Close your debt faster<span>EMIs only: debt-free ${whenMonths(base.months)}</span></h2>` +
+    `<div class="seg" role="group" aria-label="Which debt first">${[['avalanche', 'Highest rate first'], ['snowball', 'Smallest first']].map(([k, l]) =>
+      `<button type="button" data-strategy="${k}" aria-pressed="${strat === k}">${l}</button>`).join('')}</div>` +
+    `<p class="muted small">${strat === 'avalanche' ? 'Pays the least interest: extra goes to the costliest debt first.' : 'Quick wins: extra goes to the smallest debt first, so debts close sooner one by one.'}</p>${body}</section>`;
+}
+// Savings follows the salary at 10 % while you type it, until you change savings yourself.
+document.addEventListener('input', e => {
+  if (e.target.id === 'al-savings') e.target.dataset.touched = '1';
+  if (e.target.id === 'sal-amt' && $('al-savings') && !$('al-savings').dataset.touched)
+    $('al-savings').value = Math.round((+e.target.value.replace(/[^\d.]/g, '') || 0) * 0.1 / 100) * 100;
+});
+document.addEventListener('click', async e => {
+  const t = e.target.closest('[data-salary], [data-choose], [data-strategy], [data-alloc]');
+  if (!t) return;
+  const num = id => +(($(id)?.value || '').replace(/[^\d.]/g, '')) || 0;
+  try {
+    if (t.dataset.salary === 'edit') { state.editSalary = true; render(); return; }
+    if (t.dataset.salary === 'cancel') { state.editSalary = false; render(); return; }
+    if (t.dataset.salary === 'save') {
+      const amount = num('sal-amt'), day = Math.min(31, Math.max(1, Math.round(num('sal-day')) || 1));
+      if (!amount) { $('sal-amt').focus(); return; }
+      t.disabled = true;
+      await saveSetting('salary', { amount, day, currency: 'SAR' });
+      await saveSetting('allocations', { emis: num('al-emis'), living: num('al-living'), savings: num('al-savings') });
+      state.editSalary = false; toast('Saved. Now choose how fast to close your debts.');
+    }
+    if (t.dataset.choose) { t.disabled = true; await saveSetting('debt_choice', { option: t.dataset.choose, strategy: state.settings.debt_choice?.strategy || 'avalanche' }); toast('Chosen. The monthly check-in will follow it.'); }
+    if (t.dataset.strategy) await saveSetting('debt_choice', { option: state.settings.debt_choice?.option || null, strategy: t.dataset.strategy });
+    if (t.dataset.alloc) { t.disabled = true; const done = act('alloc', t.dataset.alloc)?.status === 'done'; await planAct('alloc', t.dataset.alloc, done ? 'skipped' : 'done', t.dataset.amt, t.dataset.amt); }
+    render();
+  } catch (err) { toast(`Could not save: ${err.message}`); t.disabled = false; }
+});
 function planPage() {
   loadRate();
-  if (!state.money || !state.plan) { if (!state.moneyAt) { loadMoney(); loadPlan(); } return { title: 'Plan', html: `<section class="card">${empty('Loading…')}</section>` }; }
+  if (!state.money || !state.plan || !state.settings) { if (!state.moneyAt) { loadMoney(); loadPlan(); loadSettings(); } return { title: 'Plan', html: `<section class="card">${empty('Loading…')}</section>` }; }
   const steps = planSteps(), done = steps.filter(s => s.done).length, next = steps.find(s => !s.done), cur = today().slice(0, 7);
   const field = ([id, label, value]) => `<label>${esc(label)}<input type="text" inputmode="decimal" id="${id}" value="${esc(value)}"></label>`;
   const stepCard = next ? `<section class="card step" data-key="${next.key}"><p class="muted small">Step ${steps.indexOf(next) + 1} of ${steps.length}</p>` +
@@ -1113,7 +1240,8 @@ function planPage() {
   return { title: 'Plan', sub: `${monthName(cur)} check-in`, html:
     `<section class="hero"><div class="label">${esc(monthName(cur))} check-in</div><div class="total">${done}<small> of ${steps.length} done</small></div>` +
     `<div class="meter"><i style="width:${steps.length ? done / steps.length * 100 : 0}%"></i></div></section>` +
-    stepCard + (list ? `<section class="card"><h2>Done this month</h2><ul class="donelist">${list}</ul></section>` : '') +
+    salarySection() + (state.settings?.salary ? optionsSection() : '') +
+    (state.settings?.salary ? stepCard : '') + (list ? `<section class="card"><h2>Done this month</h2><ul class="donelist">${list}</ul></section>` : '') +
     (now ? card('This month so far', '', now) : '') +
     (review ? card(`${monthName(prev)} review`, '', `<ul class="donelist">${review}</ul>`) : '') +
     '<p class="version">A guide worked out from your own numbers, not financial advice.</p>' };
@@ -1297,9 +1425,11 @@ function overview(rt, P, X) {
     `<div><dt>Regular payments, next 14 days</dt><dd>${money(soon.reduce((a, x) => a + x.r.A, 0))}</dd><dt>${plural(soon.length, 'payment')}</dt></div></dl>` +
     (soon.length ? upcomingRows(soon.slice(0, 3)) : ''), '#/forecast') : '';
   const emis = emisDue().map(({ h, inDays }) => `<a class="banner" href="#/debt"><span>${inDays < 0 ? 'EMI overdue' : inDays ? `EMI due in ${plural(inDays, 'day')}` : 'EMI due today'} · ${esc(h.name)} ${h.currency === 'INR' ? rupees(h.emi_minor) : money(h.emi_minor)}</span>${go1}</a>`).join('');
-  const left = state.plan ? planSteps().filter(s => !s.done).length : 0;
+  const left = state.plan ? planSteps().filter(s => !s.done).length : 0, got = state.settings?.salary && salaryIn();
+  const toMove = got ? ['emis', 'living', 'extra', 'savings'].filter(k => act('alloc', k)?.status !== 'done').length : 0;
+  const salaryBanner = got && toMove ? `<a class="banner" href="#/plan"><span>Salary arrived · split SAR ${fmt(got._c)}</span>${go1}</a>` : '';
   const checkin = left ? `<a class="banner" href="#/plan"><span>${esc(monthName(today().slice(0, 7), 'short'))} check-in · ${plural(left, 'step')} left</span>${go1}</a>` : '';
-  return { html: chips(P) + hero + checkin + emis + todayCard + coming +
+  return { html: chips(P) + hero + salaryBanner + checkin + emis + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +

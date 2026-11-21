@@ -358,7 +358,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()
@@ -597,6 +597,23 @@ class AppTest(unittest.TestCase):
         self.call('POST', '/api/import', json.dumps(batch).encode())
         cards = [h for h in json.loads(self.call('GET', '/api/money', query='rate=25')[1])['holdings'] if h['kind'] == 'card']
         self.assertEqual([(h['balance_minor'], h['emi_minor'], h['as_of']) for h in cards], [(1120000, 790000, '2026-12-18')])
+
+    def test_salary_settings_and_debt_options(self):
+        salary = {'amount': 18000, 'day': 27, 'currency': 'SAR'}
+        status, out = self.call('POST', '/api/settings', json.dumps({'key': 'salary', 'value': salary}).encode())
+        self.assertEqual((status, json.loads(out)['salary']), (200, salary))
+        self.call('POST', '/api/settings', json.dumps({'key': 'debt_choice', 'value': {'option': 'fast', 'strategy': 'avalanche'}}).encode())
+        got = json.loads(self.call('GET', '/api/settings')[1])
+        self.assertEqual(sorted(got), ['debt_choice', 'salary'])
+        self.assertEqual(self.call('POST', '/api/settings', json.dumps({'key': 'password', 'value': 1}).encode())[0], 400)
+        self.assertEqual(self.call('POST', '/api/settings', b'{"key": "salary", "value": "' + b'x' * 20000 + b'"}')[0], 400)  # too big
+        loan = {'kind': 'loan', 'name': 'Car', 'currency': 'INR', 'balance': '500000', 'rate': '10', 'emi': '15000', 'due_day': 5}
+        self.call('POST', '/api/money', json.dumps(loan).encode())
+        opts = json.loads(self.call('GET', '/api/money', query='options=0,10000,40000')[1])['options']
+        self.assertEqual([o['extra'] for o in opts], [0, 10000, 40000])
+        months = [o['avalanche']['months'] for o in opts]
+        self.assertTrue(months[0] > months[1] > months[2])  # more extra, sooner
+        self.assertGreater(opts[0]['avalanche']['interest'], opts[2]['avalanche']['interest'])
 
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),

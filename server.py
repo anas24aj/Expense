@@ -68,7 +68,10 @@ PAYMENTS_SCHEMA = '''CREATE TABLE IF NOT EXISTS loan_payments (id {id} PRIMARY K
 ACTIONS_SCHEMA = '''CREATE TABLE IF NOT EXISTS plan_actions (month TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
   target_minor BIGINT NOT NULL DEFAULT 0, actual_minor BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL, at TEXT NOT NULL,
   PRIMARY KEY (month, kind, ref))'''
-PLAN_KINDS = {'balances', 'emi', 'extra', 'limit', 'savings'}
+PLAN_KINDS = {'balances', 'emi', 'extra', 'limit', 'savings', 'alloc'}
+# Your answers to the Plan tab's setup: the salary, how you split it, and the debt option you chose.
+SETTINGS_SCHEMA = 'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+SETTING_KEYS = {'salary', 'allocations', 'debt_choice'}
 PLAN_STATUS = {'planned', 'done', 'skipped'}
 PLAN_MONTHS = 600  # 50 years: a loan whose EMI doesn't cover its interest never ends
 # SMS of transactions you deleted, so the phone sending them again (or an import) doesn't bring them back.
@@ -118,7 +121,7 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         if url not in DB._schema_ready:  # once per process, not per request
             self.run(schema)
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
@@ -440,7 +443,7 @@ def auto_emis(h, taken, today):
     return out
 
 
-def money(db, currency='INR', extra=0, every=None, rate=None, today=None):
+def money(db, currency='INR', extra=0, every=None, rate=None, today=None, options=()):
     """Loans and credit cards (with today's balance after the SMS since it was entered) and savings, plus payoff
     plans for all of them in `currency` (the others converted at `rate`, INR per SAR): as they are, and with
     `extra` a month by each strategy. A card's balance goes up with each purchase SMS and down with each payment."""
@@ -493,7 +496,9 @@ def money(db, currency='INR', extra=0, every=None, rate=None, today=None):
             after = plan([{**l, 'balance_now': max(0, l['balance_now'] - lump)} if l is h else l for l in loans], 0)  # in `currency`
             prepay[h['id']] = {'interest': as_is['interest'] - after['interest'],
                                'months': (as_is['payoff'].get(h['id']) or PLAN_MONTHS) - (after['payoff'].get(h['id']) or PLAN_MONTHS)}
-    return {'holdings': items, 'currency': currency, 'rate': rate, 'extra': extra / 100, 'lump': lump / 100, 'prepay': prepay,
+    # Ways to close the debt faster: each extra a month, by both strategies (for the Plan tab to choose from).
+    choices = [{'extra': e / 100, 'avalanche': plan(loans, e, 'avalanche'), 'snowball': plan(loans, e, 'snowball')} for e in options]
+    return {'holdings': items, 'currency': currency, 'rate': rate, 'extra': extra / 100, 'lump': lump / 100, 'prepay': prepay, 'options': choices,
             'plans': {'as_is': as_is, 'avalanche': plan(loans, extra, 'avalanche'), 'snowball': plan(loans, extra, 'snowball')}}
 
 
@@ -955,6 +960,14 @@ def _app(environ, start_response):
             unpaid = int(read_json(environ, MAX_BODY)['id'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/settings'):
+        try:
+            setting = read_json(environ, MAX_BODY)
+            if setting['key'] not in SETTING_KEYS:
+                raise ValueError(f'key must be one of {sorted(SETTING_KEYS)}')
+            setting = (setting['key'], json.dumps(setting['value']))
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/plan'):
         try:
             action = read_action(environ)
@@ -970,7 +983,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -1012,6 +1025,10 @@ def _app(environ, start_response):
         if path == '/api/rate':
             rate = inr_per_sar()
             return respond('200 OK' if rate else '503 Service Unavailable', rate or {'error': 'no exchange-rate service answered'})
+        if path == '/api/settings':
+            if method == 'POST':
+                db.run('INSERT INTO settings (key, value) VALUES (:k, :v) ON CONFLICT (key) DO UPDATE SET value = excluded.value', k=setting[0], v=setting[1])
+            return respond('200 OK', {r['key']: json.loads(r['value']) for r in db.run('SELECT key, value FROM settings')})
         if path == '/api/plan':
             if method == 'POST':
                 save_action(db, action)
@@ -1044,7 +1061,11 @@ def _app(environ, start_response):
                 rate = float(query.get('rate') or 0)
             except ValueError:
                 rate = 0
-            return respond('200 OK', money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11)), rate=rate if 10 < rate < 100 else None))
+            try:
+                options = [max(0, min(int(Decimal(x) * 100), 10 ** 11)) for x in (query.get('options') or '').split(',') if x.strip()][:6]
+            except ArithmeticError:
+                options = []
+            return respond('200 OK', money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11)), rate=rate if 10 < rate < 100 else None, options=options))
         if path == '/api/friend/settle':
             settle_friend(db, square, query.get('currency') or 'SAR')
             return respond('200 OK', {'saved': True, **refreshed(db, query)})
