@@ -508,14 +508,16 @@ def money(db, currency='INR', extra=0, every=None, rate=None, today=None, option
 
 
 # Open exchange-rate services, no key needed. SAR is pegged at 3.75 to the dollar, so the dollar rate works too.
-RATE_SOURCES = [('open.er-api.com', 'https://open.er-api.com/v6/latest/SAR', lambda d: d['rates']['INR']),
-                ('frankfurter.dev', 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=INR', lambda d: d['rates']['INR'] / 3.75)]
+# Each gives (₹ per SAR, ₹ per USD).
+RATE_SOURCES = [('open.er-api.com', 'https://open.er-api.com/v6/latest/SAR', lambda d: (d['rates']['INR'], d['rates']['INR'] / d['rates']['USD'])),
+                ('frankfurter.dev', 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=INR', lambda d: (d['rates']['INR'] / 3.75, d['rates']['INR']))]
 RATE_TTL = 6 * 3600
 _rate = {}
 
 
 def inr_per_sar(now=None):
-    """Today's ₹ per SAR from the first service that answers, kept for 6 hours. None if none answers."""
+    """Today's ₹ per SAR (rate) and ₹ per USD (usd) from the first service that answers, kept for 6 hours.
+    None if none answers."""
     now = now or time.time()
     if _rate.get('value') and now - _rate['at'] < RATE_TTL:
         return _rate['value']
@@ -524,9 +526,9 @@ def inr_per_sar(now=None):
     for name, url, pick in RATE_SOURCES:
         try:
             with urlopen(url, timeout=5) as r:
-                value = round(float(pick(json.load(r))), 4)
-            if 10 < value < 100:  # a wildly wrong number is worse than none
-                _rate.update(at=now, value={'rate': value, 'source': name, 'at': datetime.now(timezone.utc).isoformat(timespec='minutes')})
+                sar, usd = (round(float(v), 4) for v in pick(json.load(r)))
+            if 10 < sar < 100 and 30 < usd < 300:  # a wildly wrong number is worse than none
+                _rate.update(at=now, value={'rate': sar, 'usd': usd, 'source': name, 'at': datetime.now(timezone.utc).isoformat(timespec='minutes')})
                 return _rate['value']
         except (OSError, ValueError, KeyError, TypeError):
             continue
@@ -571,7 +573,7 @@ def card_statement(db, body, received_at):
 
 def snapshot(db, m, month=None):
     """Keep this month's totals (INR) for the history graphs; later looks in the same month replace it."""
-    inr = lambda h, v: v if h['currency'] == 'INR' else round(v * (m['rate'] or 24.9))
+    inr = lambda h, v: v if h['currency'] == 'INR' else round(v * (m.get('usd') or (m['rate'] or 24.9) * 3.75)) if h['currency'] == 'USD' else round(v * (m['rate'] or 24.9))
     debt = sum(inr(h, h['balance_now']) for h in m['holdings'] if h['kind'] in DEBTS)
     saved = sum(inr(h, h['balance_now']) for h in m['holdings'] if h['kind'] == 'saving')
     month = month or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
@@ -853,7 +855,9 @@ def read_holding(environ):
          'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat()),
          'auto': 1 if msg.get('auto') in (True, 1, '1', 'on', 'true') else 0}
     datetime.strptime(h['as_of'], '%Y-%m-%d')
-    if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR') or not 0 < len(h['name']) <= 40
+    if h['currency'] == 'USD' and h['kind'] != 'saving':
+        raise ValueError('USD is for savings and investments (like US stocks)')
+    if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR', 'USD') or not 0 < len(h['name']) <= 40
             or not 0 <= h['balance_minor'] < 10 ** 13 or not 0 <= h['rate_bp'] <= 6000 or not 0 <= h['emi_minor'] < 10 ** 11
             or not 0 <= h['due_day'] <= 31 or len(h['pattern']) > 40):
         raise ValueError('check the name (1-40 letters), amounts, rate (0-60 %) and due day (1-31)')
@@ -1084,6 +1088,11 @@ def _app(environ, start_response):
             except ArithmeticError:
                 options = []
             result = money(db, query.get('currency') or 'INR', max(0, min(extra, 10 ** 11)), rate=rate if 10 < rate < 100 else None, options=options)
+            try:
+                usd = float(query.get('usd') or 0)
+            except ValueError:
+                usd = 0
+            result['usd'] = usd if 30 < usd < 300 else None  # for savings held in dollars
             if result['currency'] == 'INR' and result['rate'] or not any(h['currency'] == 'SAR' for h in result['holdings']):
                 snapshot(db, result)
             result['history'] = db.run('SELECT * FROM snapshots ORDER BY month')

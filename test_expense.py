@@ -524,10 +524,10 @@ class AppTest(unittest.TestCase):
         real, server.urlopen = server.urlopen, fake
         try:
             status, out = self.call('GET', '/api/rate')
-            self.assertEqual((status, json.loads(out)['rate'], json.loads(out)['source']), (200, 24.9, 'frankfurter.dev'))
+            self.assertEqual((status, json.loads(out)['rate'], json.loads(out)['usd'], json.loads(out)['source']), (200, 24.9, 93.375, 'frankfurter.dev'))
             self.assertEqual(self.call('GET', '/api/rate')[0], 200)  # kept: no second lookup (the fake has no answers left)
             server._rate.clear()
-            server.urlopen = lambda url, timeout: Reply(b'{"rates": {"INR": 0.04}}')  # upside down: refused
+            server.urlopen = lambda url, timeout: Reply(b'{"rates": {"INR": 0.04, "USD": 0.27}}')  # upside down: refused
             self.assertEqual(self.call('GET', '/api/rate')[0], 503)
         finally:
             server.urlopen = real
@@ -626,6 +626,14 @@ class AppTest(unittest.TestCase):
         self.assertTrue(p['months'] and p['curve'][-1] == 0 and len(p['curve']) == p['months'])
         h = json.loads(self.call('GET', '/api/money', query='rate=25')[1])['history']
         self.assertEqual([(x['debt_minor'], x['savings_minor']) for x in h], [(69089900, 0)])  # one snapshot a month, replaced
+
+    def test_us_stocks_in_dollars(self):
+        stocks = {'kind': 'saving', 'name': 'US stocks', 'currency': 'USD', 'balance': '12000'}
+        m = json.loads(self.call('POST', '/api/money', json.dumps(stocks).encode(), query='rate=25&usd=93.75')[1])
+        self.assertEqual((m['holdings'][0]['currency'], m['usd']), ('USD', 93.75))
+        h = json.loads(self.call('GET', '/api/money', query='rate=25&usd=93.75')[1])['history']
+        self.assertEqual(h[-1]['savings_minor'], 12000 * 9375)  # counted in ₹ at the dollar rate
+        self.assertEqual(self.call('POST', '/api/money', json.dumps({**stocks, 'kind': 'loan'}).encode())[0], 400)  # dollars: savings only
 
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),
