@@ -337,6 +337,14 @@ class StoreMixin:
             server.set_category(db, 999999, 'Food', True)
 
 
+class DirectConnectionTest(unittest.TestCase):
+    def test_neon_pooler_address_becomes_direct(self):
+        pooled = 'postgresql://neondb_owner:pw@ep-cool-cat-a1b2c3-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
+        self.assertEqual(server.direct(pooled), 'postgresql://neondb_owner:pw@ep-cool-cat-a1b2c3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require')
+        self.assertEqual(server.direct('postgresql://postgres@localhost:5433/x'), 'postgresql://postgres@localhost:5433/x')
+        self.assertEqual(server.direct(''), '')
+
+
 class HealthTest(unittest.TestCase):
     def test_region_advice(self):
         from types import SimpleNamespace as NS

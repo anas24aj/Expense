@@ -99,6 +99,16 @@ TRANSFER = re.compile(r'\b(?:transfer(?:red)?|trf|xfer|neft|imps|rtgs|upi|iban|s
 PAIR_WINDOW_SECONDS = 60 * 60
 
 
+def direct(url):
+    """Neon's direct address instead of its connection pooler ('ep-x-pooler.…' → 'ep-x.…'). pg8000 sends a query in two
+    steps, and a pooler in transaction mode can hand the second step to another server ('unnamed prepared statement
+    does not exist'). Neon on Vercel also sets DATABASE_URL_UNPOOLED, which is preferred when present."""
+    u = urlparse(url)
+    if u.hostname and '-pooler.' in u.hostname:
+        return url.replace(u.hostname, u.hostname.replace('-pooler.', '.'), 1)
+    return url
+
+
 class DB:
     """Postgres when DATABASE_URL is set (Neon on Vercel), else a local SQLite file. Both take :name parameters."""
     _schema_ready = set()
@@ -108,7 +118,7 @@ class DB:
     POOL_SIZE = 3
 
     def __init__(self, url=None):
-        url = url if url is not None else os.environ.get('DATABASE_URL', '')
+        url = direct(url if url is not None else os.environ.get('DATABASE_URL_UNPOOLED') or os.environ.get('DATABASE_URL', ''))
         self.url, self.reused = url, False
         if url.startswith(('postgres://', 'postgresql://')):
             try:
@@ -180,11 +190,14 @@ class DB:
 
     def run(self, sql, **params):
         if self.pg:
-            from pg8000.exceptions import InterfaceError
+            from pg8000.exceptions import DatabaseError, InterfaceError
             try:
                 rows = self.conn.run(sql, **params) or []
-            except (InterfaceError, OSError):
-                if not self.reused:
+            except (InterfaceError, OSError, DatabaseError) as e:
+                # 26000 'unnamed prepared statement does not exist': a connection pooler sent the two halves of the
+                # query to different servers. Reconnect and run it again, like a stale connection.
+                pooled = isinstance(e, DatabaseError) and isinstance(e.args[0], dict) and e.args[0].get('C') == '26000'
+                if isinstance(e, DatabaseError) and not pooled or not (self.reused or pooled):
                     raise
                 # A kept connection went stale (Neon drops them when it sleeps): reconnect once and retry.
                 # Every statement here is safe to repeat (inserts are ON CONFLICT DO NOTHING / upserts).
