@@ -319,7 +319,9 @@
   .setup .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
   .setup .actions { display: flex; gap: 16px; align-items: center; }
   .setup .sub-list { margin: -6px 0 12px; }
-  .setup .other { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .setup .other { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 64px 28px; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .setup .amt { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 8px; }
+  .setup select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
   .setup .other .link { min-height: 44px; padding: 0; text-align: center; }
   .alloc { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
   .alloc .ic { width: 32px; height: 32px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; }
@@ -1136,7 +1138,25 @@ function defaultSplit() {
   return { emis: Math.round(emis / 10000) * 100, subs: Math.round(subs / 1000) * 10, living: avg ? Math.max(0, Math.round((avg.spent - subs) / 10000) * 100) : 0,
     savings: Math.round(sal * 0.1 / 100) * 100 };
 }
-const split = () => ({ others: [], ...defaultSplit(), ...(state.settings?.allocations || {}) });  // SAR, whole riyals
+// The split as you entered it: each amount in SAR or ₹ (cur), parents/maid rows each with their own currency.
+// Before you save, EMIs are suggested in ₹ (they're paid in India) and the rest in SAR. Older saves are all SAR.
+const SPLIT_KEYS = ['emis', 'subs', 'living', 'savings'];
+function rawSplit() {
+  const saved = state.settings?.allocations, d = defaultSplit();
+  if (!saved) {
+    const inr = (state.money?.holdings || []).filter(h => h.kind === 'loan' && h.balance_now > 0 && h.currency === 'INR').reduce((a, h) => a + h.emi_minor, 0);
+    return { ...d, emis: inr ? Math.round(inr / 10000) * 100 : d.emis, cur: inr ? { emis: 'INR' } : {}, others: [] };
+  }
+  return { ...d, others: [], ...saved, cur: { ...(saved.cur || {}) } };
+}
+const toSar = (v, c) => c === 'INR' ? Math.round((+v || 0) / state.rate) : (+v || 0);  // whole riyals
+// The same split in SAR, for every calculation; each part keeps what you typed (entered, cur) for display.
+function split() {
+  const r = rawSplit(), out = { raw: r, cur: r.cur };
+  for (const k of SPLIT_KEYS) out[k] = toSar(r[k], r.cur[k]);
+  out.others = (r.others || []).map(o => ({ name: o.name, amount: toSar(o.amount, o.cur), entered: +o.amount || 0, cur: o.cur || 'SAR' }));
+  return out;
+}
 // Your own regular payments from the salary (parents, maid…): [{name, amount}], and their total.
 const othersTotal = sp => (sp.others || []).reduce((a, o) => a + (+o.amount || 0), 0);
 // The four ways to go faster: SAR a month on top of the EMIs. All-in = everything the split leaves free.
@@ -1164,22 +1184,23 @@ function salarySection() {
   const S = state.settings || {}, sal = S.salary, editing = state.editSalary || !sal;
   if (editing) {
     // The form draws from a draft while you add or remove rows, so nothing typed is lost.
-    const sp = split(), subs = subscriptions(), d = state.draft || { amount: sal?.amount || '', day: sal?.day || '', emis: sp.emis, subs: sp.subs, living: sp.living, savings: sp.savings,
-      others: sp.others.length ? sp.others : [{ name: '', amount: '' }, { name: '', amount: '' }] };
+    const r = rawSplit(), subs = subscriptions(), d = state.draft || { amount: sal?.amount || '', day: sal?.day || '',
+      ...Object.fromEntries(SPLIT_KEYS.map(k => [k, r[k]])), cur: r.cur,
+      others: r.others?.length ? r.others : [{ name: '', amount: '', cur: 'INR' }, { name: '', amount: '', cur: 'SAR' }] };
+    const curSel = (id, c) => `<select id="${id}" aria-label="Currency">${[['SAR', 'SAR'], ['INR', '₹']].map(([v, l]) => `<option value="${v}" ${(c || 'SAR') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+    const amountField = (k, label) => `<label>${label}<span class="amt"><input type="text" inputmode="decimal" id="al-${k}" value="${esc(d[k])}">${curSel(`cur-${k}`, d.cur?.[k])}</span></label>`;
     const other = (o, i) => `<div class="other"><input type="text" id="ot-name-${i}" maxlength="30" value="${esc(o.name)}" placeholder="${['e.g. Parents', 'e.g. Maid'][i] || 'Name'}" aria-label="Payment name">` +
-      `<input type="text" inputmode="decimal" id="ot-amt-${i}" value="${esc(o.amount)}" placeholder="SAR" aria-label="Amount in SAR">` +
+      `<input type="text" inputmode="decimal" id="ot-amt-${i}" value="${esc(o.amount)}" placeholder="Amount" aria-label="Amount">${curSel(`ot-cur-${i}`, o.cur)}` +
       `<button type="button" class="link" data-other-remove="${i}" aria-label="Remove">✕</button></div>`;
     return `<section class="card setup"><h2>${sal ? 'Change your salary plan' : 'Set up your salary plan'}</h2>` +
       '<p class="muted small">Asked once. The app uses it to suggest how to split each salary and how fast you can close your debts.</p>' +
       `<div class="two"><label>Monthly salary (SAR)<input type="text" inputmode="decimal" id="sal-amt" value="${esc(d.amount)}" placeholder="e.g. 18000"></label>` +
       `<label>Arrives on day<input type="text" inputmode="numeric" id="sal-day" value="${esc(d.day)}" placeholder="1-31"></label></div>` +
-      '<h3>How to split it each month (SAR)</h3>' +
-      `<label>Loan EMIs (India)<input type="text" inputmode="decimal" id="al-emis" value="${esc(d.emis)}"></label>` +
-      `<label>Subscriptions &amp; bills<input type="text" inputmode="decimal" id="al-subs" value="${esc(d.subs)}"></label>` +
+      `<h3>How to split it each month</h3><p class="muted small">Type each amount in SAR or ₹, as you pay it. Everything is worked out in SAR at 1 SAR = ₹${state.rate}.</p>` +
+      amountField('emis', 'Loan EMIs (India)') + amountField('subs', 'Subscriptions &amp; bills') +
       (subs.length ? `<p class="muted small sub-list">Found: ${subs.slice(0, 6).map(r => `${esc(r.merchant)} ${fmt(r.monthly)}`).join(' · ')}${subs.length > 6 ? '…' : ''} <a href="#/recurring">See all</a></p>`
         : '<p class="muted small sub-list">None found yet: they show up after 3 payments at a steady amount. Type your phone, internet, streaming and insurance total.</p>') +
-      `<label>Living expenses<input type="text" inputmode="decimal" id="al-living" value="${esc(d.living)}"></label>` +
-      `<label>Savings<input type="text" inputmode="decimal" id="al-savings" value="${esc(d.savings)}"></label>` +
+      amountField('living', 'Living expenses') + amountField('savings', 'Savings') +
       '<h3>Your regular payments</h3><p class="muted small">Money you send every month: parents, maid, school fees…</p>' +
       d.others.map(other).join('') + (d.others.length < 10 ? '<button type="button" class="link" data-other-add>+ Add a payment</button>' : '') +
       '<p class="muted small">EMIs, subscriptions and living expenses are filled in from your data; change any of them. Extra toward debt comes from the option you choose below, and the rest is free to spend.</p>' +
@@ -1187,12 +1208,16 @@ function salarySection() {
   }
   const sp = split(), opt = chosen(), got = salaryIn(), cur = today().slice(0, 7);
   const total = got ? got._c / 100 : sal.amount, extra = opt ? opt.sar : 0;
-  const rows = [['emis', '🏠', 'Loan EMIs (India)', sp.emis], ['subs', '🔁', 'Subscriptions & bills', sp.subs], ['living', '🛒', 'Living expenses', sp.living], ...sp.others.map(o => [`o:${o.name}`, '💝', o.name, +o.amount]),
-    ['extra', '🎯', `Extra toward debt${opt ? ` (${opt.label})` : ''}`, extra], ['savings', '🏦', 'Savings', sp.savings]];
+  // [key, icon, name, SAR, what you typed if it was in ₹]
+  const inr = k => sp.cur[k] === 'INR' ? +sp.raw[k] || 0 : null;
+  const rows = [['emis', '🏠', 'Loan EMIs (India)', sp.emis, inr('emis')], ['subs', '🔁', 'Subscriptions & bills', sp.subs, inr('subs')], ['living', '🛒', 'Living expenses', sp.living, inr('living')],
+    ...sp.others.map(o => [`o:${o.name}`, '💝', o.name, o.amount, o.cur === 'INR' ? o.entered : null]),
+    ['extra', '🎯', `Extra toward debt${opt ? ` (${opt.label})` : ''}`, extra, null], ['savings', '🏦', 'Savings', sp.savings, inr('savings')]];
   const free = total - rows.reduce((a, r) => a + r[3], 0);
-  const line = ([k, ic, name, amt]) => { const done = act('alloc', k)?.status === 'done';
+  const line = ([k, ic, name, amt, rs]) => { const done = act('alloc', k)?.status === 'done';
+    const note = rs != null ? `${rupees(rs * 100)}${k === 'emis' ? ', taken automatically' : ''}` : k === 'emis' ? `≈ ${rupees(Math.round(amt * 100 * state.rate))}, taken automatically` : '';
     return `<div class="alloc${done ? ' done' : ''}"><span class="ic" aria-hidden="true">${ic}</span><span class="nm"><b>${esc(name)}</b>` +
-      `${k === 'emis' ? `<small>≈ ${rupees(Math.round(amt * 100 * state.rate))}, taken automatically</small>` : ''}</span><span class="v">SAR ${fmt(amt * 100)}</span>` +
+      `${note ? `<small>${note}</small>` : ''}</span><span class="v">SAR ${fmt(amt * 100)}</span>` +
       (got && amt > 0 ? `<button type="button" class="${done ? 'link' : 'btn small'}" data-alloc="${k}" data-amt="${amt}">${done ? '✓ Moved' : 'Moved'}</button>` : '') + '</div>'; };
   return `<section class="card"><h2>${esc(monthName(cur, 'short'))} salary<span>${got ? `arrived ${shortDay(got._d)}` : `expected on day ${sal.day}`}</span></h2>` +
     `<div class="big"><b>SAR ${fmt(total * 100)}</b></div>${rows.map(line).join('')}` +
@@ -1230,20 +1255,22 @@ document.addEventListener('click', async e => {
   if (!t) return;
   const num = id => +(($(id)?.value || '').replace(/[^\d.]/g, '')) || 0;
   // What's in the form right now, rows included.
-  const draft = () => ({ amount: $('sal-amt').value, day: $('sal-day').value, emis: $('al-emis').value, subs: $('al-subs').value, living: $('al-living').value, savings: $('al-savings').value,
-    others: [...document.querySelectorAll('.setup .other')].map((_, i) => ({ name: $(`ot-name-${i}`).value, amount: $(`ot-amt-${i}`).value })) });
+  const draft = () => ({ amount: $('sal-amt').value, day: $('sal-day').value, ...Object.fromEntries(SPLIT_KEYS.map(k => [k, $(`al-${k}`).value])),
+    cur: Object.fromEntries(SPLIT_KEYS.map(k => [k, $(`cur-${k}`).value])),
+    others: [...document.querySelectorAll('.setup .other')].map((_, i) => ({ name: $(`ot-name-${i}`).value, amount: $(`ot-amt-${i}`).value, cur: $(`ot-cur-${i}`).value })) });
   try {
     if (t.dataset.salary === 'edit') { state.editSalary = true; state.draft = null; render(); return; }
     if (t.dataset.salary === 'cancel') { state.editSalary = false; state.draft = null; render(); return; }
-    if ('otherAdd' in t.dataset) { state.draft = draft(); state.draft.others.push({ name: '', amount: '' }); render(); $(`ot-name-${state.draft.others.length - 1}`)?.focus(); return; }
+    if ('otherAdd' in t.dataset) { state.draft = draft(); state.draft.others.push({ name: '', amount: '', cur: 'SAR' }); render(); $(`ot-name-${state.draft.others.length - 1}`)?.focus(); return; }
     if (t.dataset.otherRemove) { state.draft = draft(); state.draft.others.splice(+t.dataset.otherRemove, 1); render(); return; }
     if (t.dataset.salary === 'save') {
       const amount = num('sal-amt'), day = Math.min(31, Math.max(1, Math.round(num('sal-day')) || 1));
       if (!amount) { $('sal-amt').focus(); return; }
-      const others = draft().others.map(o => ({ name: o.name.trim().slice(0, 30), amount: +String(o.amount).replace(/[^\d.]/g, '') || 0 })).filter(o => o.name && o.amount > 0);
+      const D = draft(), others = D.others.map(o => ({ name: o.name.trim().slice(0, 30), amount: +String(o.amount).replace(/[^\d.]/g, '') || 0, cur: o.cur === 'INR' ? 'INR' : 'SAR' }))
+        .filter(o => o.name && o.amount > 0);
       t.disabled = true;
       await saveSetting('salary', { amount, day, currency: 'SAR' });
-      await saveSetting('allocations', { emis: num('al-emis'), subs: num('al-subs'), living: num('al-living'), savings: num('al-savings'), others });
+      await saveSetting('allocations', { ...Object.fromEntries(SPLIT_KEYS.map(k => [k, num(`al-${k}`)])), cur: D.cur, others });
       state.editSalary = false; state.draft = null; toast('Saved. Now choose how fast to close your debts.');
     }
     if (t.dataset.choose) { t.disabled = true; await saveSetting('debt_choice', { option: t.dataset.choose, strategy: state.settings.debt_choice?.strategy || 'avalanche' }); toast('Chosen. The monthly check-in will follow it.'); }
