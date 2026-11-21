@@ -974,25 +974,45 @@ const rupees = c => `₹${c < 0 ? '−' : ''}${inrFmt.format(Math.abs(c) / 100)}
 const toInr = (c, cur) => cur === 'INR' ? c : Math.round(c * state.rate);
 state.rate = +(ls.get('inrPerSar') || 0) || 24.9;  // INR per SAR until today's rate arrives (Nov 2026: 24.90)
 state.extra = +(ls.get('extraInr') || 0) || 0;
-async function loadMoney() {
-  state.moneyAt = Date.now();
-  try {
-    const r = await fetch(`/api/money?${moneyQs()}`);
-    if (!r.ok) return;
-    state.money = await r.json();
-    if (!document.querySelector('details.txn[open], form.holding:focus-within')) render();
-  } catch {}
+// Fetch one piece of data the Debt and Plan tabs need. A failure is remembered (and shown with a Try again
+// button) instead of leaving the page on "Loading…"; one request per piece at a time.
+state.err = {}; const inflight = {};
+function fetchInto(key, url, after) {
+  if (inflight[url]) return inflight[url];
+  return inflight[url] = (async () => {
+    try {
+      const r = await fetch(url);
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `the server answered ${r.status}`);
+      state[key] = await r.json(); delete state.err[key];
+      after?.();
+    } catch (e) { state.err[key] = e.message || 'no connection'; }
+    finally { inflight[url] = null; }
+    if (/^#\/(money|debt|plan|analysis|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus')) render();
+  })();
 }
+function loadMoney() { state.moneyAt = Date.now(); return fetchInto('money', `/api/money?${moneyQs()}`); }
+// What a page shows while its data is missing: a retry for anything that failed, else "Loading…" (and fetch it).
+function waitFor(title, needs) {
+  const missing = needs.filter(([k]) => !state[k]), failed = missing.filter(([k]) => state.err[k]);
+  if (failed.length) return { title, html: `<section class="card">${empty('Couldn’t load this page', esc(failed.map(([k]) => state.err[k]).join(' · ')))}` +
+    '<button type="button" class="btn" data-retry>Try again</button></section>' };
+  missing.forEach(([, load]) => load());
+  return { title, html: `<section class="card">${empty('Loading…')}</section>` };
+}
+document.addEventListener('click', e => { if (e.target.closest('[data-retry]')) { state.err = {}; render(); } });
 // Today's rate, looked up by the server from open services (open.er-api.com, else Frankfurter). A rate you type wins.
 async function loadRate() {
-  if (ls.get('rateMine') || Date.now() - +(ls.get('rateAt') || 0) < 6 * 3600e3) return;
+  // Once every 6 hours, and after a failed lookup not again for 30 minutes (it's asked on every redraw).
+  if (ls.get('rateMine') || inflight.rate || Date.now() - +(ls.get('rateAt') || 0) < 6 * 3600e3 || Date.now() - (state.rateFailAt || 0) < 18e5) return;
+  inflight.rate = true;
   try {
     const r = await fetch('/api/rate');
-    if (!r.ok) return;
+    if (!r.ok) { state.rateFailAt = Date.now(); return; }
     const j = await r.json();
     state.rate = j.rate; ls.set('inrPerSar', j.rate); ls.set('rateAt', Date.now()); ls.set('rateSource', j.source);
     if (/^#\/(money|debt|plan|analysis|overview)|^$/.test(location.hash)) render();
-  } catch {}
+  } catch { state.rateFailAt = Date.now(); } finally { inflight.rate = false; }
 }
 const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().slice(0, 7));
 // EMIs due in the next `days` days (or overdue this month) that no SMS has shown as paid yet.
@@ -1040,12 +1060,7 @@ function aboveUsual() {
 }
 
 /* ---------- Plan: a monthly check-in, one step at a time, and last month's review ---------- */
-async function loadPlan() {
-  try {
-    const r = await fetch(`/api/plan?month=${today().slice(0, 7)}`);
-    if (r.ok) { state.plan = await r.json(); if (/^#\/(plan|analysis|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], .step input:focus')) render(); }
-  } catch {}
-}
+const loadPlan = () => fetchInto('plan', `/api/plan?month=${today().slice(0, 7)}`);
 const act = (kind, ref) => state.plan?.actions.find(a => a.kind === kind && a.ref === String(ref));
 const settled = a => a && a.status !== 'planned';
 async function post(path, body, money) {
@@ -1103,9 +1118,7 @@ function planSteps() {
   return steps;
 }
 /* ---------- Salary: how it's split, and the options for closing the debt faster ---------- */
-async function loadSettings() {
-  try { const r = await fetch('/api/settings'); if (r.ok) { state.settings = await r.json(); loadOptions(); if (/^#\/(plan|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], .step input:focus, .setup input:focus')) render(); } } catch {}
-}
+const loadSettings = () => fetchInto('settings', '/api/settings', () => loadOptions());
 const saveSetting = (key, value) => post('/api/settings', { key, value }).then(x => { state.settings = x; loadOptions(); });
 const sarOf = inrMinor => Math.round(inrMinor / state.rate);  // INR minor -> SAR minor
 // What the split starts from before you change it: your EMIs, your usual spending, 10 % to savings.
@@ -1214,7 +1227,7 @@ document.addEventListener('click', async e => {
 });
 function planPage() {
   loadRate();
-  if (!state.money || !state.plan || !state.settings) { if (!state.moneyAt) { loadMoney(); loadPlan(); loadSettings(); } return { title: 'Plan', html: `<section class="card">${empty('Loading…')}</section>` }; }
+  if (!state.money || !state.plan || !state.settings) return waitFor('Plan', [['money', loadMoney], ['plan', loadPlan], ['settings', loadSettings]]);
   const steps = planSteps(), done = steps.filter(s => s.done).length, next = steps.find(s => !s.done), cur = today().slice(0, 7);
   const field = ([id, label, value]) => `<label>${esc(label)}<input type="text" inputmode="decimal" id="${id}" value="${esc(value)}"></label>`;
   const stepCard = next ? `<section class="card step" data-key="${next.key}"><p class="muted small">Step ${steps.indexOf(next) + 1} of ${steps.length}</p>` +
@@ -1283,7 +1296,7 @@ document.addEventListener('click', async e => {
 function moneyPage() {
   loadRate();
   const M = state.money;
-  if (!M) { if (!state.moneyAt) loadMoney(); return { title: 'Debt', html: `<section class="card">${empty('Loading…')}</section>` }; }
+  if (!M) return waitFor('Debt', [['money', loadMoney]]);
   const loans = M.holdings.filter(isDebt), saves = M.holdings.filter(h => h.kind === 'saving');
   const debt = loans.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0), saved = saves.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
   const P = M.plans, best = P.avalanche, d = +today().slice(8);

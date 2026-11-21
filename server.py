@@ -512,8 +512,10 @@ _rate = {}
 def inr_per_sar(now=None):
     """Today's ₹ per SAR from the first service that answers, kept for 6 hours. None if none answers."""
     now = now or time.time()
-    if _rate and now - _rate['at'] < RATE_TTL:
+    if _rate.get('value') and now - _rate['at'] < RATE_TTL:
         return _rate['value']
+    if now - _rate.get('failed_at', 0) < 600:  # every service just failed: don't make each request wait 10 s again
+        return None
     for name, url, pick in RATE_SOURCES:
         try:
             with urlopen(url, timeout=5) as r:
@@ -523,6 +525,7 @@ def inr_per_sar(now=None):
                 return _rate['value']
         except (OSError, ValueError, KeyError, TypeError):
             continue
+    _rate['failed_at'] = now
     return None
 
 
