@@ -512,7 +512,7 @@ class AppTest(unittest.TestCase):
 
     def test_exchange_rate_falls_back_and_rejects_nonsense(self):
         server._rate.clear()
-        answers = iter([OSError('down'), {'rates': {'INR': 93.375}}])  # first service down, the dollar rate answers
+        answers = iter([OSError('down'), {'rates': {'INR': 93.375}}, {'price': 3539.0}])  # first service down, the dollar rate answers; then gold
         class Reply(io.BytesIO):
             def __enter__(self): return self
             def __exit__(self, *a): pass
@@ -525,6 +525,7 @@ class AppTest(unittest.TestCase):
         try:
             status, out = self.call('GET', '/api/rate')
             self.assertEqual((status, json.loads(out)['rate'], json.loads(out)['usd'], json.loads(out)['source']), (200, 24.9, 93.375, 'frankfurter.dev'))
+            self.assertEqual(json.loads(out)['gold_usd_oz'], 3539.0)
             self.assertEqual(self.call('GET', '/api/rate')[0], 200)  # kept: no second lookup (the fake has no answers left)
             server._rate.clear()
             server.urlopen = lambda url, timeout: Reply(b'{"rates": {"INR": 0.04, "USD": 0.27}}')  # upside down: refused
@@ -634,6 +635,16 @@ class AppTest(unittest.TestCase):
         h = json.loads(self.call('GET', '/api/money', query='rate=25&usd=93.75')[1])['history']
         self.assertEqual(h[-1]['savings_minor'], 12000 * 9375)  # counted in ₹ at the dollar rate
         self.assertEqual(self.call('POST', '/api/money', json.dumps({**stocks, 'kind': 'loan'}).encode())[0], 400)  # dollars: savings only
+
+    def test_gold_by_grams_and_karat(self):
+        gold = {'kind': 'saving', 'name': 'Gold jewellery', 'currency': 'GOLD', 'balance': '50', 'rate': '22'}
+        m = json.loads(self.call('POST', '/api/money', json.dumps(gold).encode(), query='rate=25&usd=93.75&gold=10000')[1])
+        g = m['holdings'][0]
+        self.assertEqual((g['currency'], g['balance_minor'], g['rate_bp']), ('GOLD', 5000, 2200))  # 50 g, 22K
+        h = json.loads(self.call('GET', '/api/money', query='rate=25&usd=93.75&gold=10000')[1])['history']
+        self.assertEqual(h[-1]['savings_minor'], round(5000 * 2200 / 2400 * 10000))  # 50 g × 22/24 × ₹10,000 a gram
+        self.assertEqual(self.call('POST', '/api/money', json.dumps({**gold, 'rate': '23'}).encode())[0], 400)  # no 23K
+        self.assertEqual(self.call('POST', '/api/money', json.dumps({**gold, 'kind': 'loan'}).encode())[0], 400)
 
     def test_search_all_months(self):
         for body, at in ((SAMPLES[6][0], '2026-08-02T10:00:00+03:00'), (SAMPLES[7][0], '2026-10-05T10:00:00+03:00'),

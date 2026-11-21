@@ -512,6 +512,10 @@ def money(db, currency='INR', extra=0, every=None, rate=None, today=None, option
 RATE_SOURCES = [('open.er-api.com', 'https://open.er-api.com/v6/latest/SAR', lambda d: (d['rates']['INR'], d['rates']['INR'] / d['rates']['USD'])),
                 ('frankfurter.dev', 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=INR', lambda d: (d['rates']['INR'] / 3.75, d['rates']['INR']))]
 RATE_TTL = 6 * 3600
+# Gold, US dollars per troy ounce (no key needed). 31.1035 g to the ounce.
+GOLD_SOURCE = ('gold-api.com', 'https://api.gold-api.com/price/XAU', lambda d: d['price'])
+GRAMS_PER_OUNCE = 31.1035
+KARATS = {24, 22, 21, 18, 14}
 _rate = {}
 
 
@@ -529,6 +533,13 @@ def inr_per_sar(now=None):
                 sar, usd = (round(float(v), 4) for v in pick(json.load(r)))
             if 10 < sar < 100 and 30 < usd < 300:  # a wildly wrong number is worse than none
                 _rate.update(at=now, value={'rate': sar, 'usd': usd, 'source': name, 'at': datetime.now(timezone.utc).isoformat(timespec='minutes')})
+                try:  # gold is extra: the rates stand without it
+                    with urlopen(GOLD_SOURCE[1], timeout=5) as g:
+                        oz = float(GOLD_SOURCE[2](json.load(g)))
+                    if 500 < oz < 20000:
+                        _rate['value'].update(gold_usd_oz=round(oz, 2), gold_source=GOLD_SOURCE[0])
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
                 return _rate['value']
         except (OSError, ValueError, KeyError, TypeError):
             continue
@@ -573,7 +584,11 @@ def card_statement(db, body, received_at):
 
 def snapshot(db, m, month=None):
     """Keep this month's totals (INR) for the history graphs; later looks in the same month replace it."""
-    inr = lambda h, v: v if h['currency'] == 'INR' else round(v * (m.get('usd') or (m['rate'] or 24.9) * 3.75)) if h['currency'] == 'USD' else round(v * (m['rate'] or 24.9))
+    usd = m.get('usd') or (m['rate'] or 24.9) * 3.75
+    def inr(h, v):
+        if h['currency'] == 'GOLD':  # v = grams × 100; value = grams × purity × ₹ a gram of 24K
+            return round(v * h['rate_bp'] / 2400 * (m.get('gold_inr_g') or 0))
+        return v if h['currency'] == 'INR' else round(v * usd) if h['currency'] == 'USD' else round(v * (m['rate'] or 24.9))
     debt = sum(inr(h, h['balance_now']) for h in m['holdings'] if h['kind'] in DEBTS)
     saved = sum(inr(h, h['balance_now']) for h in m['holdings'] if h['kind'] == 'saving')
     month = month or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
@@ -855,9 +870,12 @@ def read_holding(environ):
          'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat()),
          'auto': 1 if msg.get('auto') in (True, 1, '1', 'on', 'true') else 0}
     datetime.strptime(h['as_of'], '%Y-%m-%d')
-    if h['currency'] == 'USD' and h['kind'] != 'saving':
-        raise ValueError('USD is for savings and investments (like US stocks)')
-    if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR', 'USD') or not 0 < len(h['name']) <= 40
+    if h['currency'] in ('USD', 'GOLD') and h['kind'] != 'saving':
+        raise ValueError('USD and gold are for savings and investments')
+    # Gold is kept in grams (balance) and karats (in the rate column, which savings don't otherwise use).
+    if h['currency'] == 'GOLD' and h['rate_bp'] // 100 not in KARATS:
+        raise ValueError(f'purity must be one of {sorted(KARATS)} karat')
+    if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR', 'USD', 'GOLD') or not 0 < len(h['name']) <= 40
             or not 0 <= h['balance_minor'] < 10 ** 13 or not 0 <= h['rate_bp'] <= 6000 or not 0 <= h['emi_minor'] < 10 ** 11
             or not 0 <= h['due_day'] <= 31 or len(h['pattern']) > 40):
         raise ValueError('check the name (1-40 letters), amounts, rate (0-60 %) and due day (1-31)')
@@ -1093,7 +1111,13 @@ def _app(environ, start_response):
             except ValueError:
                 usd = 0
             result['usd'] = usd if 30 < usd < 300 else None  # for savings held in dollars
-            if result['currency'] == 'INR' and result['rate'] or not any(h['currency'] == 'SAR' for h in result['holdings']):
+            try:
+                gold = float(query.get('gold') or 0)  # ₹ a gram of 24K gold, from the page
+            except ValueError:
+                gold = 0
+            result['gold_inr_g'] = gold if 1000 < gold < 100000 else None
+            priced = result['gold_inr_g'] or not any(h['currency'] == 'GOLD' for h in result['holdings'])  # else gold would count as 0
+            if priced and (result['currency'] == 'INR' and result['rate'] or not any(h['currency'] == 'SAR' for h in result['holdings'])):
                 snapshot(db, result)
             result['history'] = db.run('SELECT * FROM snapshots ORDER BY month')
             return respond('200 OK', result)

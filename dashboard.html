@@ -993,6 +993,11 @@ const rupees = c => `₹${c < 0 ? '−' : ''}${inrFmt.format(Math.abs(c) / 100)}
 const toInr = (c, cur) => cur === 'INR' ? c : Math.round(c * (cur === 'USD' ? state.usd : state.rate));
 state.rate = +(ls.get('inrPerSar') || 0) || 24.9;  // INR per SAR until today's rate arrives (Nov 2026: 24.90)
 state.usd = +(ls.get('inrPerUsd') || 0) || state.rate * 3.75;  // INR per USD (SAR is pegged at 3.75 to the dollar)
+state.goldUsdOz = +(ls.get('goldUsdOz') || 0) || 3539;  // gold, $ a troy ounce (Nov 2026), until today's price arrives
+// ₹ a gram of 24K gold: the price you typed, else today's ounce price in ₹ (31.1035 g to the troy ounce).
+const goldInrG = () => +(ls.get('goldMine') && ls.get('goldInrG')) || state.goldUsdOz / 31.1035 * state.usd;
+// What a loan, card or saving is worth in ₹ (minor). Gold: grams (balance ÷ 100) × purity/24 × the 24K price.
+const worth = h => h.currency === 'GOLD' ? Math.round(h.balance_now * h.rate_bp / 2400 * goldInrG()) : toInr(h.balance_now, h.currency);
 state.extra = +(ls.get('extraInr') || 0) || 0;
 // Fetch one piece of data the Debt and Plan tabs need. A failure is remembered (and shown with a Try again
 // button) instead of leaving the page on "Loading…"; one request per piece at a time.
@@ -1032,6 +1037,7 @@ async function loadRate() {
     const j = await r.json();
     state.rate = j.rate; ls.set('inrPerSar', j.rate); ls.set('rateAt', Date.now()); ls.set('rateSource', j.source);
     if (j.usd && !ls.get('usdMine')) { state.usd = j.usd; ls.set('inrPerUsd', j.usd); }
+    if (j.gold_usd_oz) { state.goldUsdOz = j.gold_usd_oz; ls.set('goldUsdOz', j.gold_usd_oz); ls.set('goldSource', j.gold_source || ''); }
     if (/^#\/(money|debt|plan|analysis|overview)|^$/.test(location.hash)) render();
   } catch { state.rateFailAt = Date.now(); } finally { inflight.rate = false; }
 }
@@ -1045,13 +1051,16 @@ function emisDue(days = 3) {
 }
 const whenMonths = n => n == null ? 'never at this EMI' : monthName(addM(today().slice(0, 7), n), 'short');
 const isDebt = h => h.kind === 'loan' || h.kind === 'card';
-const moneyQs = () => `currency=INR&extra=${state.extra}&rate=${state.rate}&usd=${state.usd}`;  // SAR debts join the INR plan at this rate; USD savings count at usd
+const moneyQs = () => `currency=INR&extra=${state.extra}&rate=${state.rate}&usd=${state.usd}&gold=${Math.round(goldInrG())}`;  // SAR debts join the INR plan at this rate; USD savings count at usd
 function holdingForm(h, kind) {
   const v = (k, d = '') => esc(h?.[k] ?? d), num = c => c == null ? '' : (c / 100).toString(), card = kind === 'card', debt = kind !== 'saving';
   return `<form class="fix holding" data-id="${h?.id || ''}" data-kind="${kind}">` +
     `<label>Name<input type="text" name="name" maxlength="40" required value="${v('name')}" placeholder="${card ? 'e.g. SNB credit card' : debt ? 'e.g. HDFC home loan' : 'e.g. Al Rajhi savings'}"></label>` +
-    `<div class="two"><label>Currency<select name="currency">${(debt ? ['INR', 'SAR'] : ['INR', 'SAR', 'USD']).map(c => `<option ${c === (h?.currency || (kind === 'loan' ? 'INR' : 'SAR')) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>` +
-    `<label>${card ? 'Owed now' : debt ? 'Outstanding' : 'Balance'}<input type="text" inputmode="decimal" name="balance" required value="${num(h?.balance_minor)}"></label></div>` +
+    `<div class="two"><label>${debt ? 'Currency' : 'Kind'}<select name="currency">${(debt ? ['INR', 'SAR'] : ['INR', 'SAR', 'USD', 'GOLD']).map(c =>
+      `<option value="${c}" ${c === (h?.currency || (kind === 'loan' ? 'INR' : 'SAR')) ? 'selected' : ''}>${c === 'GOLD' ? 'Gold' : c}</option>`).join('')}</select></label>` +
+    `<label><span class="bal-label">${card ? 'Owed now' : debt ? 'Outstanding' : h?.currency === 'GOLD' ? 'Weight (grams)' : 'Balance'}</span><input type="text" inputmode="decimal" name="balance" required value="${num(h?.balance_minor)}"></label></div>` +
+    (debt ? '' : `<label class="karat" ${h?.currency === 'GOLD' ? '' : 'hidden'}>Purity<select name="rate">${[24, 22, 21, 18, 14].map(k =>
+      `<option value="${k}" ${(h ? h.rate_bp / 100 : 22) === k ? 'selected' : ''}>${k}K${k === 22 ? ' (most jewellery)' : k === 24 ? ' (coins, bars)' : ''}</option>`).join('')}</select></label>`) +
     (debt ? `<div class="two"><label>Interest % a year${card ? ' (monthly % × 12)' : ''}<input type="text" inputmode="decimal" name="rate" required value="${h ? h.rate_bp / 100 : ''}"></label>` +
       `<label>${card ? 'You pay a month' : 'EMI a month'} <small class="muted">(optional)</small><input type="text" inputmode="decimal" name="emi" value="${h?.emi_minor ? num(h.emi_minor) : ''}" placeholder="none"></label></div>` +
       `<div class="two"><label>Due day<input type="text" inputmode="numeric" name="due_day" value="${h?.due_day || ''}" placeholder="1-31"></label>` +
@@ -1378,7 +1387,7 @@ function health() {
   const M = state.money, avg = monthly();
   if (!M) return null;
   const debts = M.holdings.filter(h => isDebt(h) && h.balance_now > 0), saves = M.holdings.filter(h => h.kind === 'saving');
-  const debt = debts.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0), saved = saves.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
+  const debt = debts.reduce((a, h) => a + worth(h), 0), saved = saves.reduce((a, h) => a + worth(h), 0);
   const emisInr = debts.reduce((a, h) => a + toInr(h.emi_minor, h.currency), 0), emisSar = sarOf(emisInr);
   const checks = [], tone = (v, good, fair, up = true) => (up ? v >= good : v <= good) ? 'good' : (up ? v >= fair : v <= fair) ? 'fair' : 'poor';
   if (avg && avg.received > 0) {
@@ -1449,7 +1458,7 @@ function moneyPage() {
   const M = state.money;
   if (!M) return waitFor('Debt', [['money', loadMoney]]);
   const loans = M.holdings.filter(isDebt), saves = M.holdings.filter(h => h.kind === 'saving');
-  const debt = loans.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0), saved = saves.reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
+  const debt = loans.reduce((a, h) => a + worth(h), 0), saved = saves.reduce((a, h) => a + worth(h), 0);
   const P = M.plans, best = P.avalanche, d = +today().slice(8);
   const loanRow = h => {
     const paid = paidThisMonth(h), cut = h.balance_minor ? 1 - h.balance_now / h.balance_minor : 0, E = h.kind === 'card' ? 'Payment' : 'EMI';
@@ -1463,8 +1472,10 @@ function moneyPage() {
       (h.charges?.length ? `<p class="muted small">Card purchases since ${shortDay(h.as_of)}: ${plural(h.charges.length, 'purchase')}, ${cash(Math.round(h.charges.reduce((a, c) => a + c.amount, 0) * 100), h.currency)}</p>` : '') +
       holdingForm(h, h.kind) + '</details>';
   };
-  const saveRow = h => `<details class="hold"><summary>${rk({ icon: h.currency === 'USD' || /stock|share|fund|etf/i.test(h.name) ? '📈' : '🏦', name: h.name,
-    sub: h.currency === 'INR' ? '' : `≈ ${rupees(toInr(h.balance_now, h.currency))}`, value: h.balance_now, valueText: cash(h.balance_now, h.currency) })}</summary>${holdingForm(h, 'saving')}</details>`;
+  const saveRow = h => `<details class="hold"><summary>${h.currency === 'GOLD'
+    ? rk({ icon: '🪙', name: h.name, sub: `${fmt(h.balance_now).replace(/\.00$/, '')} g · ${h.rate_bp / 100}K · ${rupees(Math.round(goldInrG() * h.rate_bp / 24))}/g`, value: worth(h), valueText: rupees(worth(h)) })
+    : rk({ icon: h.currency === 'USD' || /stock|share|fund|etf/i.test(h.name) ? '📈' : '🏦', name: h.name,
+      sub: h.currency === 'INR' ? '' : `≈ ${rupees(toInr(h.balance_now, h.currency))}`, value: h.balance_now, valueText: cash(h.balance_now, h.currency) })}</summary>${holdingForm(h, 'saving')}</details>`;
   const spare = monthly()?.spare ?? null;
   const strat = (key, label) => { const p = P[key], gain = P.as_is.interest - p.interest;
     return `<tr><th>${label}</th><td>${whenMonths(p.months)}</td><td>${rupees(p.interest)}</td><td>${p.months != null && gain > 0 ? `saves ${rupees(gain)}` : '–'}</td></tr>`; };
@@ -1474,7 +1485,7 @@ function moneyPage() {
     `<section class="hero"><div class="label">Net worth</div><div class="total"><small>₹</small><span>${inrFmt.format((saved - debt) / 100)}</span></div>` +
     `<div class="kpis"><div><span>Savings</span><b>${rupees(saved)}</b></div><div><span>Loans</span><b>${rupees(debt)}</b></div>` +
     `<div><span>Debt-free (plan)</span><b>${loans.length ? whenMonths(best.months) : '–'}</b></div><div><span>Interest still to pay</span><b>${loans.length ? rupees(best.interest) : '–'}</b></div></div>` +
-    `<p class="proj">1 SAR = ₹${state.rate}${saves.some(h => h.currency === 'USD') ? ` · 1 USD = ₹${Math.round(state.usd * 100) / 100}` : ''} ${ls.get('rateMine') ? '(your rate)' : ls.get('rateAt') ? `(today, ${esc(ls.get('rateSource') || '')})` : '(approximate: today’s rate unavailable)'}</p></section>` +
+    `<p class="proj">1 SAR = ₹${state.rate}${saves.some(h => h.currency === 'USD') ? ` · 1 USD = ₹${Math.round(state.usd * 100) / 100}` : ''}${saves.some(h => h.currency === 'GOLD') ? ` · gold ₹${inrFmt.format(Math.round(goldInrG()))}/g` : ''} ${ls.get('rateMine') ? '(your rate)' : ls.get('rateAt') ? `(today, ${esc(ls.get('rateSource') || '')})` : '(approximate: today’s rate unavailable)'}</p></section>` +
     card('Loans &amp; cards', rupees(debt), loans.map(loanRow).join('') + `<details class="hold add"><summary class="link">+ Add a loan</summary>${holdingForm(null, 'loan')}</details>` +
       `<details class="hold add"><summary class="link">+ Add a credit card</summary>${holdingForm(null, 'card')}</details>`) +
     (loans.length ? card('Payoff plan', loans.some(h => h.currency === 'SAR') ? 'all debts in ₹' : 'INR loans',
@@ -1488,6 +1499,8 @@ function moneyPage() {
     card('Savings', rupees(saved), saves.map(saveRow).join('') + `<details class="hold add"><summary class="link">+ Add savings</summary>${holdingForm(null, 'saving')}</details>`) +
     card('Exchange rates', '', `<div class="two rates"><label class="extra">₹ per 1 SAR <span class="row2"><input type="text" inputmode="decimal" id="rate" value="${state.rate}"></span></label>` +
       `<label class="extra">₹ per 1 USD <span class="row2"><input type="text" inputmode="decimal" id="rate-usd" value="${Math.round(state.usd * 100) / 100}"></span></label></div>` +
+      `<label class="extra">₹ per gram, 24K gold <span class="row2"><input type="text" inputmode="decimal" id="rate-gold" value="${Math.round(goldInrG())}"></span></label>` +
+      `<p class="muted small">Gold: ${ls.get('goldMine') ? 'your price' : `today's price from ${esc(ls.get('goldSource') || 'gold-api.com')} ($${state.goldUsdOz} an ounce)`}; 22K is 22/24 of it, 18K 18/24. Type your jeweller's 24K rate to use that instead.</p>` +
       `<p class="muted small">Looked up every few hours from open exchange-rate services (open.er-api.com, or Frankfurter). Type your own to keep it; clear it to go back to today’s rate.</p>`) };
 }
 const friendNote = t => `${t.friend} · ${t.direction === 'credit' ? 'paid you back'
@@ -1614,7 +1627,7 @@ function overview(rt, P, X) {
       ln(`#/large?${q}`, 'Large transactions', 'Far above the usual', String(large.length)) +
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
-      ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * toInr(h.balance_now, h.currency), 0)) : '') +
+      ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * worth(h), 0)) : '') +
       ln('#/friends', 'Friends', 'Bought for friends, paid back', fmt(friendBalances().reduce((a, e) => a + Math.max(0, e.owed), 0)))) };
 }
 function catRows(groups, total, X, P, f = {}) {
@@ -1987,6 +2000,11 @@ document.addEventListener('click', e => {
 });
 // Listen on the document so rows in every list work.
 document.addEventListener('change', e => {
+  if (e.target.name === 'currency' && e.target.form?.dataset.kind === 'saving') {
+    const gold = e.target.value === 'GOLD', f = e.target.form;
+    f.querySelector('.karat').hidden = !gold;
+    f.querySelector('.bal-label').textContent = gold ? 'Weight (grams)' : 'Balance';
+  }
   if (e.target.name === 'category') e.target.form.querySelector('[name=custom]').parentElement.hidden = e.target.value !== '__new';
   if (e.target.id === 'day-pick' && okDay(e.target.value) && e.target.value <= today()) go(`#/day/${e.target.value}`, true);
   if (e.target.name === 'split') e.target.form.theirs.parentElement.hidden = e.target.value !== 'custom';
@@ -2128,6 +2146,11 @@ document.addEventListener('input', e => {
   }
 });
 document.addEventListener('change', e => {
+  if (e.target.id === 'rate-gold') {
+    const g = parseFloat(e.target.value);
+    if (g > 0) { ls.set('goldInrG', g); ls.set('goldMine', '1'); } else { ls.del('goldMine'); ls.del('rateAt'); loadRate(); }
+    loadMoney(); render(); return;
+  }
   if (e.target.id === 'rate-usd') {
     const u = parseFloat(e.target.value);
     if (u > 0) { state.usd = u; ls.set('inrPerUsd', u); ls.set('usdMine', '1'); }
