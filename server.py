@@ -385,8 +385,9 @@ def own_transfers(rows, overrides):
 
 # Words that make a debit and a credit in two of your accounts days apart (or in two currencies) one movement of money:
 # transfers, remittances home, wallet top-ups, card bills and loan repayments.
-LINK_WORDS = re.compile(r'\b(?:remit\w*|inward|outward|international|swift|foreign|nre|nro|western union|moneygram|tahweel|enjaz|'
-                        r'barq|stc ?pay|rajhi|wallet|top ?-?up|load(?:ed)?|card ?payment|cc ?payment|payment (?:received|thank)|'
+# Generic words only (no bank or app names), so it works the same whatever banks you use.
+LINK_WORDS = re.compile(r'\b(?:remit\w*|inward|outward|international|swift|foreign|nre|nro|'
+                        r'wallet|top ?-?up|load(?:ed)?|card ?payment|cc ?payment|payment (?:received|thank)|'
                         r'repayment|emi|loan|by transfer|to transfer)\b|حوالة|تحويل|سداد', re.I)
 # Credit/debit amount ratio for money changing currency on the way (₹ per SAR, ₹ per $, $ per SAR), with room for fees and
 # the rates of the last few years.

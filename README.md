@@ -32,7 +32,7 @@ The copy is yours: it doesn't pick up later changes to this repository by itself
    | Name | Value |
    |---|---|
    | `EXPENSE_TOKEN` | Your login password, also used by the phone. At least 6 characters; longer is safer. After 10 wrong tries, that device is locked out for 15 minutes. |
-   | `EXPENSE_TZ` | Optional. Defaults to `Asia/Riyadh`; set it to `Asia/Kolkata` only if you move. This decides where one month ends and the next begins. |
+   | `EXPENSE_TZ` | Optional. Your time zone, e.g. `Asia/Kolkata` in India or `Asia/Dubai`; defaults to `Asia/Riyadh`. This decides where one day and month end and the next begin. |
 
 5. Go to **Deployments → ⋯ → Redeploy** so the new variables take effect.
 6. Open `https://<your-project>.vercel.app` and sign in on the login page with your `EXPENSE_TOKEN` as the password. You stay signed in for 30 days on that device, until you tap **Sign out**. Changing `EXPENSE_TOKEN` signs out every device.
