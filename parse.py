@@ -13,13 +13,15 @@ _NUM = r'(\d[\d,]*(?:\.\d{1,2})?)'
 # (a date like '22/2/26' read as 22.00).
 CUR_FIRST = re.compile(rf'(?<![A-Za-z]){_CUR}[ \t]*:?[ \t]*{_NUM}', re.I)
 NUM_FIRST = re.compile(rf'(?<![\w.]){_NUM}[ \t]*{_CUR}(?![A-Za-z])', re.I)
+# 'Amount: INR 175,000.00 (SAR 6,945.28)': the bracketed amount is what left your account, in its currency.
+BRACKETED = re.compile(rf'\(\s*{_CUR}[ \t]*:?[ \t]*{_NUM}\s*\)', re.I)
 AMOUNT_LINE = re.compile(r'(?:\bamount\b|\bamt\b|مبلغ)[^\n]*', re.I)  # 'Amount: 57.5 SAR' beats balances and dates
 # 'Avbl Limit: INR 314721.04', 'Available balance Rs 5,000': what's left, never what was spent.
 LEFT_OVER = re.compile(r'\b(?:avl|avbl|avail|available|aval)\.?\s*(?:credit\s+)?(?:limit|lmt|bal(?:ance)?)\b[^\n]*?(?=\s+(?:if|call|to|on)\b|[\n.;]|$)'
                        r'|\b(?:bal(?:ance)?|limit)\s*(?:is|:)\s*' + _CUR + r'?\s*[\d,]+(?:\.\d+)?', re.I)
 
 # Arabic words are matched as substrings because Arabic attaches prefixes ("بال", "و") to words.
-DEBIT = re.compile(r'\b(?:debited|spent|paid|sent|withdrawn|withdrawal|purchase|outgoing|pos)\b|شراء|خصم|سحب|صادرة|سداد|دفع', re.I)
+DEBIT = re.compile(r'\b(?:debited|spent|paid|sent|withdrawn|withdrawal|purchase|outgoing|pos|international transfer)\b|شراء|خصم|سحب|صادرة|سداد|دفع', re.I)
 CREDIT = re.compile(r'\b(?:credited|received|deposited|deposit|incoming|refunded|refund|reversal|reversed|reverse)\b|إيداع|ايداع|واردة|استرداد|مسترد|راتب', re.I)
 # Messages that mention money but are not a completed transaction.
 SKIP = re.compile(
@@ -34,8 +36,9 @@ MERCHANT = [
     re.compile(r'\bVPA\s+([\w.\-]+@[\w.\-]+)', re.I),
     re.compile(r'\b(?:at|to|towards|trf to|info|لدى|إلى|الى)(?:\s*:\s*|\s+)([\w&@.\-* ]{2,40}?)' + _END, re.I),
     re.compile(r'\b(?:from|من)(?:\s*:\s*|\s+)([\w&@.\-* ]{2,40}?)' + _END, re.I),
+    re.compile(r';\s*([A-Za-z][\w&.\- ]{1,40}?)\s+credited\b'),  # 'A/c XX1234 debited by Rs 15,000; ANIL K credited'
 ]
-NOT_MERCHANT = re.compile(r'^(?:(?:your|a/?c|ac|acct|account|card|bank|the|you)\b|حساب|بطاق)', re.I)
+NOT_MERCHANT = re.compile(r'^(?:(?:your|a/?c|ac|acct|account|card|bank|the|you|mobile)\b|حساب|بطاق)', re.I)
 MAX_SMS = 1000  # bank SMS are far shorter; also keeps the UNIQUE(body) index under Postgres' key size limit
 
 
@@ -46,8 +49,8 @@ def parse(body):
         return None
     currency = number = amount = None
     labelled = AMOUNT_LINE.search(body)
-    for text in ((labelled.group(0),) if labelled else ()) + (LEFT_OVER.sub(' ', body),):
-        if amount := CUR_FIRST.search(text):
+    for k, text in enumerate(((labelled.group(0),) if labelled else ()) + (LEFT_OVER.sub(' ', body),)):
+        if amount := (labelled and k == 0 and BRACKETED.search(text)) or CUR_FIRST.search(text):
             currency, number = amount.group(1), amount.group(2)
         elif amount := NUM_FIRST.search(text):
             number, currency = amount.group(1), amount.group(2)
@@ -74,7 +77,7 @@ def parse(body):
 
 ACCOUNT = re.compile(
     r'(?:\b(card|mada|visa|master\s?card|credit card|debit card|a/?c|acct|account|by(?=\s*:))\b|(بطاقة|حساب))'
-    r'[^\d\n]{0,15}?[x*•.]*(\d{4})(?!\d)', re.I)
+    r'[^\d\n]{0,15}?[x*•.]*\d*?(\d{3,4})(?!\d)', re.I)
 
 
 def account_of(body):

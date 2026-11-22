@@ -183,7 +183,7 @@ class StoreMixin:
         # Undo the SBI import: its rows go, and the journey stops at SBI's door.
         sid = next(r['id'] for r in server.statements(db)['statements'] if r['account'] == 'SBI')
         server.delete_statement(db, sid)
-        self.assertEqual([a for _, a, _ in path(server.trail(db)['journeys'][0])], ['Al Rajhi', 'HDFC'])
+        self.assertEqual([(w, a) for w, a, _ in path(server.trail(db)['journeys'][0])], [('sent', 'Al Rajhi'), ('arrived', 'HDFC'), ('paid', 'HDFC')])
         self.assertEqual(server.import_statement(db, 'SBI', 'bank', 'INR', '', 'sbi.pdf', pdf(SBI))['new'], 2)  # can come back
 
     def test_one_transfer_home_split_to_each_loan_account(self):
@@ -205,6 +205,25 @@ class StoreMixin:
         self.assertEqual(tree(j), ('D360', [('VM-IDFCFB'.replace('VM-', ''), [
             ('IDFCFB', [('SBIINB', [('SBIINB', [('SBI home loan', [])])])]),
             ('IDFCFB', [('CNRBNK', [('CNRBNK', [('Canara car loan', [])])])])])]))
+
+    def test_real_d360_to_idfc_and_on(self):
+        db = self.db
+        db.run("INSERT INTO holdings (kind, name, currency, balance_minor, emi_minor, as_of) VALUES ('loan', 'Canara home loan', 'INR', 100000000, 1481334, '2026-01-01')")
+        for sender, body, at in (
+                ('D360', 'International transfer\nAmount: INR 175,000.00 (SAR 6,945.28)\nTo: ravi kumar\n10001234567\nCountry:India\nThrough:THUNES\nOn: 2026-10-26 16:26', '2026-10-26T16:26:00+03:00'),
+                ('JD-IDFCFB-S', 'Your a/c no. XXXXXXXX234 is credited by Rs. 175000.00 on 26-Oct-26 by a/c linked to mobile XXXXXXXXX123 (IMPS Ref no 600000000001 ). Team IDFC FIRST Bank', '2026-10-26T19:05:00+05:30'),
+                ('JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 15,000.00 on 26/10/26; ANIL  KUMAR credited. RRN 300000000002. Available balance Rs. 82,978.82. Team IDFC FIRST Bank', '2026-10-26T19:12:00+05:30'),
+                ('JD-IDFCFB-S', 'Your A/C XXXXX951234 is debited by INR 14,813.34 on 26/10/26 19:18. New Bal :INR 65,243.48. Call us for dispute. Team IDFC FIRST Bank', '2026-10-26T19:18:00+05:30')):
+            self.assertTrue(server.store_sms(db, sender, body, at), body)
+        every = server.transactions(db)
+        self.assertEqual({t['account'] for t in every}, {'D360', 'IDFCFB · Account •1234'})  # •234, •1234, •951234: one account
+        sent = next(t for t in every if t['account'] == 'D360')
+        self.assertEqual((sent['amount'], sent['currency'], sent['category']), (6945.28, 'SAR', server.OWN_TRANSFER))
+        [j] = server.trail(db)['journeys']
+        tree = lambda n: (n['way'], n['account'], n['amount'], [tree(k) for k in n['then']])
+        self.assertEqual(tree(j), ('sent', 'D360', 6945.28, [('arrived', 'IDFCFB · Account •1234', 175000.0, [
+            ('paid', 'IDFCFB · Account •1234', 15000.0, []),
+            ('sent', 'IDFCFB · Account •1234', 14813.34, [('loan', 'Canara home loan', 14813.34, [])])])]))
 
     def test_sms_sar_transfer_meets_the_inr_credit(self):
         db = self.db

@@ -305,8 +305,18 @@ def transactions(db, month=None, currency=None):
     rows = db.run('SELECT * FROM transactions ORDER BY received_at DESC, id DESC')
     own = own_transfers(rows, overrides)
     named = {a['digits']: a['name'] for a in db.run("SELECT name, digits FROM accounts WHERE digits != ''")}
-    acct = {r['id']: r['sender'] if r['statement_id'] else named.get(account_of(r['body'])[-4:]) or account_label(r['sender'], r['body'])
+    mine = lambda d: next((n for k, n in named.items() if d and k.endswith(d)), None)  # '234' shown, '1234' given
+    acct = {r['id']: r['sender'] if r['statement_id'] else mine(account_of(r['body']).partition('•')[2]) or account_label(r['sender'], r['body'])
             for r in rows}
+    # One bank shows '•234' in one SMS and '•1234' in the next: the same account, under its longer ending.
+    ends = defaultdict(set)
+    for a in set(acct.values()):
+        head, dot, d = a.rpartition('•')
+        if dot:
+            ends[head].add(d)
+    longer = lambda a: next(iter([f'{a.rpartition("•")[0]}•{x}' for x in ends[a.rpartition('•')[0]]
+                                  if len(x) > len(a.rpartition('•')[2]) and x.endswith(a.rpartition('•')[2])][:1]), a)
+    acct = {k: longer(v) if '•' in v else v for k, v in acct.items()}
     linked = links(rows, acct, overrides)
     own |= set(linked)
     result = []
@@ -380,7 +390,9 @@ LINK_WORDS = re.compile(r'\b(?:remit\w*|inward|outward|international|swift|forei
                         r'repayment|emi|loan|by transfer|to transfer)\b|حوالة|تحويل|سداد', re.I)
 # Credit/debit amount ratio for money changing currency on the way (₹ per SAR, ₹ per $, $ per SAR), with room for fees and
 # the rates of the last few years.
-FX_RATIO = {('SAR', 'INR'): (20.0, 24.5), ('USD', 'INR'): (78.0, 92.0), ('SAR', 'USD'): (0.255, 0.27)}
+# 'A/c XX1234 debited by Rs 15,000; ANIL K credited. RRN …': money sent to another account (a person's, or yours).
+P2P = re.compile(r'\bdebited\b[^\n]*\bcredited\b|\brrn\b', re.I)
+FX_RATIO = {('SAR', 'INR'): (20.0, 27.0), ('USD', 'INR'): (78.0, 100.0), ('SAR', 'USD'): (0.255, 0.27)}
 LINK_DAYS = 4
 
 
@@ -416,7 +428,7 @@ def links(rows, acct, overrides):
                         continue
                 elif not lo_hi[0] <= c['amount_minor'] / d['amount_minor'] <= lo_hi[1]:
                     continue
-                words = [bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body'])) for r in (d, c)]
+                words = [bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body']) or P2P.search(r['body'])) for r in (d, c)]
                 if not (all(words) if lo_hi is None and not (d['statement_id'] or c['statement_id']) else any(words)):
                     continue  # two SMS: both must say transfer, as own_transfers asks
                 if best is None or gap < best[0]:
@@ -503,9 +515,10 @@ def trail(db, first=None, last=None):
     every = transactions(db)
     by_id = {t['id']: t for t in every}
     kinds = {a['name']: a['kind'] for a in db.run('SELECT name, kind FROM accounts')}
-    loans = [h for h in db.run('SELECT id, name, kind, currency, pattern FROM holdings') if h['kind'] in DEBTS and h['pattern'].strip()]
-    loan_of = lambda t: next((h['name'] for h in loans if t['direction'] == 'debit' and h['currency'] == t['currency']
-                              and h['pattern'].strip().lower() in t['body'].lower()), None)
+    loans = [h for h in db.run('SELECT id, name, kind, currency, pattern, emi_minor FROM holdings') if h['kind'] in DEBTS]
+    loan_of = lambda t: next((h['name'] for h in loans if t['direction'] == 'debit' and h['currency'] == t['currency'] and (
+        h['pattern'].strip() and h['pattern'].strip().lower() in t['body'].lower()  # its account digits in the SMS
+        or h['emi_minor'] and round(t['amount'] * 100) == h['emi_minor'])), None)  # or exactly its EMI
     inside = lambda t: (not first or t['received_at'][:10] >= first) and (not last or t['received_at'][:10] <= last)
     kind_of = lambda name: kinds.get(name) or ('wallet' if WALLETS.search(name) else 'bnpl' if BNPL.search(name)
                                                else 'card' if 'Card' in name else 'bank')
@@ -535,7 +548,7 @@ def trail(db, first=None, last=None):
     # Journeys: after money arrives in an account, the next transfer/loan payment out of it.
     out_of = defaultdict(list)
     for t in sorted(every, key=lambda t: t['received_at']):
-        if t['direction'] == 'debit' and (t['linked'] in by_id or loan_of(t)):
+        if t['direction'] == 'debit' and (t['category'] not in NOT_COUNTED or t['linked'] in by_id):
             out_of[t['account']].append(t)
     # A credit's money goes on in every transfer/loan payment out of that account in the next FOLLOW_DAYS, as long as
     # together they're no more than what arrived: one big transfer home, split out to each loan's account.
@@ -548,7 +561,7 @@ def trail(db, first=None, last=None):
                 continue
             if gap > FOLLOW_DAYS:
                 break
-            if d['amount'] <= room:
+            if d['amount'] <= room and (d['amount'] >= 0.05 * c['amount'] or d['linked'] in by_id or loan_of(d)):  # not each coffee
                 nxt[c['id']].append(d)
                 used.add(d['id'])
                 room -= d['amount']
@@ -564,6 +577,8 @@ def trail(db, first=None, last=None):
             node['then'] = [{**hop(c, 'arrived', False), 'then': [follow(d, True, depth + 1) for d in nxt[c['id']]]}]
         elif name := loan_of(t):
             node['then'] = [{**hop(t, 'loan', False), 'account': name, 'kind': 'loan', 'desc': ''}]
+        elif likely:  # money that left your accounts: to a person or a shop
+            node['way'] = 'paid'
         return node
     flat = lambda n: [n] + [m for k in n['then'] for m in flat(k)]
     journeys = [follow(d, False) for d in sorted((t for t in every if t['direction'] == 'debit' and t['id'] not in used and t['linked'] in by_id),
