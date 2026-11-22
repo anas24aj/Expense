@@ -177,15 +177,34 @@ class StoreMixin:
         self.assertEqual(set(flows), {('Al Rajhi', 'HDFC'), ('HDFC', 'SBI'), ('SBI', 'SBI home loan')})
         self.assertEqual((flows['Al Rajhi', 'HDFC']['sent'], flows['Al Rajhi', 'HDFC']['got']), ({'SAR': 5000.0}, {'INR': 112500.0}))
         self.assertEqual(len(t['journeys']), 1)
-        j = t['journeys'][0]
-        self.assertEqual([h['account'] for h in j['hops']], ['Al Rajhi', 'HDFC', 'HDFC', 'SBI', 'SBI'])
-        self.assertEqual((j['end'], j['end_kind']), ('SBI home loan', 'loan'))
-        self.assertEqual([h['likely'] for h in j['hops']], [False, False, True, False, True])
+        path = lambda n: [(n['way'], n['account'], n['likely'])] + (path(n['then'][0]) if n['then'] else [])
+        self.assertEqual(path(t['journeys'][0]), [('sent', 'Al Rajhi', False), ('arrived', 'HDFC', False), ('sent', 'HDFC', True),
+                                                  ('arrived', 'SBI', False), ('sent', 'SBI', True), ('loan', 'SBI home loan', False)])
         # Undo the SBI import: its rows go, and the journey stops at SBI's door.
         sid = next(r['id'] for r in server.statements(db)['statements'] if r['account'] == 'SBI')
         server.delete_statement(db, sid)
-        self.assertEqual([h['account'] for h in server.trail(db)['journeys'][0]['hops']], ['Al Rajhi', 'HDFC'])
+        self.assertEqual([a for _, a, _ in path(server.trail(db)['journeys'][0])], ['Al Rajhi', 'HDFC'])
         self.assertEqual(server.import_statement(db, 'SBI', 'bank', 'INR', '', 'sbi.pdf', pdf(SBI))['new'], 2)  # can come back
+
+    def test_one_transfer_home_split_to_each_loan_account(self):
+        db = self.db
+        for name, pattern in (('SBI home loan', '3876'), ('Canara car loan', '9123')):
+            db.run("INSERT INTO holdings (kind, name, currency, balance_minor, pattern, as_of) VALUES ('loan', :n, 'INR', 100000000, :p, '2025-01-01')", n=name, p=pattern)
+        for sender, body, at in (
+                ('D360', 'Outgoing international transfer\nAmount: SAR 10,000.00\nTo: IDFC FIRST BANK India', '2025-02-01T20:00:00+03:00'),
+                ('VM-IDFCFB', 'INR 2,25,000.00 credited to A/c XX4444 by inward remittance on 03-02-25', '2025-02-03T10:00:00+05:30'),
+                ('VM-IDFCFB', 'INR 1,00,000.00 debited from A/c XX4444 by IMPS to SBI A/c XX2222 on 04-02-25', '2025-02-04T10:00:00+05:30'),
+                ('VM-IDFCFB', 'INR 60,000.00 debited from A/c XX4444 by NEFT to CANARA A/c XX3333 on 04-02-25', '2025-02-04T10:05:00+05:30'),
+                ('VM-SBIINB', 'Your A/c XX2222 credited INR 1,00,000.00 by IMPS from IDFC on 04-02-25', '2025-02-04T10:01:00+05:30'),
+                ('VM-CNRBNK', 'A/c XX3333 credited with INR 60,000.00 by NEFT from IDFC on 04-02-25', '2025-02-04T10:30:00+05:30'),
+                ('VM-SBIINB', 'INR 52,000.00 debited from A/c XX2222 towards EMI of loan A/c XX3876 on 05-02-25', '2025-02-05T09:00:00+05:30'),
+                ('VM-CNRBNK', 'INR 41,000.00 debited from A/c XX3333 for EMI loan A/c 9123 on 05-02-25', '2025-02-05T09:00:00+05:30')):
+            self.assertTrue(server.store_sms(db, sender, body, at), body)
+        [j] = server.trail(db)['journeys']
+        tree = lambda n: (n['account'].split(' · ')[0], [tree(k) for k in n['then']])
+        self.assertEqual(tree(j), ('D360', [('VM-IDFCFB'.replace('VM-', ''), [
+            ('IDFCFB', [('SBIINB', [('SBIINB', [('SBI home loan', [])])])]),
+            ('IDFCFB', [('CNRBNK', [('CNRBNK', [('Canara car loan', [])])])])])]))
 
     def test_sms_sar_transfer_meets_the_inr_credit(self):
         db = self.db

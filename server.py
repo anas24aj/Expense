@@ -387,8 +387,8 @@ LINK_DAYS = 4
 def links(rows, acct, overrides):
     """{debit id: credit id, credit id: debit id} for money that left one of your accounts and arrived in another:
     the same amount (or the same at an exchange rate) within LINK_DAYS, with transfer words on either side.
-    Pairs of two SMS in the same currency are left to own_transfers (an hour apart at most), so a UPI payment and
-    an unrelated refund of the same amount days later don't pair. Nearest in time first; each row pairs once."""
+    Two SMS in the same currency must be an hour apart at most (as in own_transfers), so a UPI payment and an
+    unrelated refund of the same amount days later don't pair. Nearest in time first; each row pairs once."""
     day = {r['id']: date.fromisoformat(r['received_at'][:10]) for r in rows}
     credits = defaultdict(list)  # currency -> [(day, id)] sorted
     for r in rows:
@@ -411,12 +411,14 @@ def links(rows, acct, overrides):
                 if cid in paired or acct[cid] == acct[d['id']]:
                     continue
                 if lo_hi is None:
-                    if c['amount_minor'] != d['amount_minor'] or not (d['statement_id'] or c['statement_id']):
+                    if c['amount_minor'] != d['amount_minor'] or not (d['statement_id'] or c['statement_id']) and abs(
+                            (datetime.fromisoformat(c['received_at']) - datetime.fromisoformat(d['received_at'])).total_seconds()) > PAIR_WINDOW_SECONDS:
                         continue
                 elif not lo_hi[0] <= c['amount_minor'] / d['amount_minor'] <= lo_hi[1]:
                     continue
-                if not (LINK_WORDS.search(d['body']) or LINK_WORDS.search(c['body']) or TRANSFER.search(d['body']) or TRANSFER.search(c['body'])):
-                    continue
+                words = [bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body'])) for r in (d, c)]
+                if not (all(words) if lo_hi is None and not (d['statement_id'] or c['statement_id']) else any(words)):
+                    continue  # two SMS: both must say transfer, as own_transfers asks
                 if best is None or gap < best[0]:
                     best = (gap, cid)
                 break  # the nearest in this currency
@@ -535,36 +537,38 @@ def trail(db, first=None, last=None):
     for t in sorted(every, key=lambda t: t['received_at']):
         if t['direction'] == 'debit' and (t['linked'] in by_id or loan_of(t)):
             out_of[t['account']].append(t)
-    nxt, used = {}, set()
+    # A credit's money goes on in every transfer/loan payment out of that account in the next FOLLOW_DAYS, as long as
+    # together they're no more than what arrived: one big transfer home, split out to each loan's account.
+    nxt, used = defaultdict(list), set()
     for c in sorted((t for t in every if t['direction'] == 'credit' and t['linked'] in by_id), key=lambda t: t['received_at']):
-        day = date.fromisoformat(c['received_at'][:10])
+        day, room = date.fromisoformat(c['received_at'][:10]), 1.02 * c['amount']
         for d in out_of[c['account']]:
             gap = (date.fromisoformat(d['received_at'][:10]) - day).days
             if gap < 0 or d['id'] in used or d['currency'] != c['currency']:
                 continue
             if gap > FOLLOW_DAYS:
                 break
-            if 0.3 * c['amount'] <= d['amount'] <= 1.02 * c['amount']:
-                nxt[c['id']] = d
+            if d['amount'] <= room:
+                nxt[c['id']].append(d)
                 used.add(d['id'])
-                break
-    hop = lambda t, likely: {'id': t['id'], 'account': t['account'], 'kind': kind_of(t['account']), 'day': t['received_at'][:10],
-                             'amount': t['amount'], 'currency': t['currency'], 'desc': t['merchant'] or wording(t['body'])[len(WORDING):][:60], 'likely': likely}
-    journeys = []
-    for d in sorted((t for t in every if t['direction'] == 'debit' and t['id'] not in used and (t['linked'] in by_id)), key=lambda t: t['received_at']):
-        hops, end, t, likely = [], None, d, False
-        while t is not None and len(hops) < 12:
-            hops.append(hop(t, likely))
-            if t['linked'] in by_id:
-                c = by_id[t['linked']]
-                hops.append(hop(c, False))
-                t, likely = nxt.get(c['id']), True
-            else:
-                end = loan_of(t)
-                t = None
-        last_hop = hops[-1]
-        journeys.append({'hops': hops, 'end': end or last_hop['account'], 'end_kind': 'loan' if end else last_hop['kind']})
-    journeys = [j for j in journeys if inside(by_id[j['hops'][0]['id']]) or inside(by_id[j['hops'][-1]['id']])]
+                room -= d['amount']
+    hop = lambda t, way, likely: {'id': t['id'], 'account': t['account'], 'kind': kind_of(t['account']), 'day': t['received_at'][:10], 'way': way,
+                                  'amount': t['amount'], 'currency': t['currency'], 'desc': t['merchant'] or wording(t['body'])[len(WORDING):][:60],
+                                  'likely': likely, 'then': []}
+
+    def follow(t, likely, depth=0):
+        """A journey as a tree: sent → arrived → (each onward transfer, or the loan it paid)."""
+        node = hop(t, 'sent', likely)
+        if t['linked'] in by_id and depth < 6:
+            c = by_id[t['linked']]
+            node['then'] = [{**hop(c, 'arrived', False), 'then': [follow(d, True, depth + 1) for d in nxt[c['id']]]}]
+        elif name := loan_of(t):
+            node['then'] = [{**hop(t, 'loan', False), 'account': name, 'kind': 'loan', 'desc': ''}]
+        return node
+    flat = lambda n: [n] + [m for k in n['then'] for m in flat(k)]
+    journeys = [follow(d, False) for d in sorted((t for t in every if t['direction'] == 'debit' and t['id'] not in used and t['linked'] in by_id),
+                                                 key=lambda t: t['received_at'])]
+    journeys = [j for j in journeys if any(inside(by_id[n['id']]) for n in flat(j))]
     plain = lambda d: {k: round(v, 2) for k, v in d.items()}
     return {'accounts': sorted(({**a, 'in': plain(a['in']), 'out': plain(a['out'])} for a in accounts.values()), key=lambda a: -a['count']),
             'flows': sorted(({**f, 'sent': plain(f['sent']), 'got': plain(f['got'])} for f in flows.values()), key=lambda f: (-f['count'], f['from'])),

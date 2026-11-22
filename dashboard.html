@@ -150,6 +150,10 @@
   .jr li small { grid-column: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .jr li .v { grid-row: 1; grid-column: 2; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
   .jr li.end b { color: var(--good, #0f7b3e); }
+  .jr li.split { display: block; padding-bottom: 4px; }
+  .jr li.split::before { background: var(--muted); }
+  .jr .jr.sub { margin: 6px 0 0 -6px; padding: 8px 0 0 12px; border-left: 2px dashed var(--line); }
+  .jr .jr.sub + .jr.sub { border-top: 0; margin-top: 2px; }
   .ln .nm { flex: 1; min-width: 0; }
   .ln .nm b { display: block; font-weight: 600; }
   .ln .nm small { display: block; font-size: 12px; color: var(--muted); }
@@ -1667,11 +1671,13 @@ function trailPage(rt, P) {
   const flows = T.flows.map(f => rk({ icon: f.kind === 'loan' ? '🏠' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
     sub: `${plural(f.count, f.kind === 'loan' ? 'payment' : 'transfer')} · last ${esc(dayLabel(f.last))}`,
     valueText: esc(curs(f.sent)), vsub: Object.keys(f.got).join() !== Object.keys(f.sent).join() ? `→ ${esc(curs(f.got))}` : '' })).join('');
-  const journey = j => `<ol class="jr">${j.hops.map((h, i) => {
-    const arrive = i % 2 === 1 || i === j.hops.length - 1 && j.end_kind !== 'loan';
-    return `<li class="${j.hops[i + 1]?.likely ? 'likely' : ''}"><b>${KIND_ICON[h.kind] || '🏦'} ${esc(h.account)}</b><span class="v">${esc(inCur(h.amount, h.currency))}</span>` +
-      `<small>${arrive ? 'arrived' : 'sent'} ${esc(dayLabel(h.day))}${h.likely ? ' · probably the same money' : ''}${h.desc ? ' · ' + esc(h.desc) : ''}</small></li>`;
-  }).join('')}${j.end_kind === 'loan' ? `<li class="end"><b>🏠 ${esc(j.end)}</b><small>loan payment</small></li>` : ''}</ol>`;
+  // A journey is a tree: one line while the money goes one way, indented branches where it splits.
+  const step = n => n.way === 'loan' ? `<li class="end"><b>🏠 ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span><small>loan payment ${esc(dayLabel(n.day))}</small></li>`
+    : `<li class="${n.then.length === 1 && n.then[0].likely ? 'likely' : ''}"><b>${KIND_ICON[n.kind] || '🏦'} ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span>` +
+      `<small>${n.way} ${esc(dayLabel(n.day))}${n.likely ? ' · probably the same money' : ''}${n.desc ? ' · ' + esc(n.desc) : ''}</small></li>`;
+  const steps = n => step(n) + (n.then.length === 1 ? steps(n.then[0]) : n.then.length ? `<li class="split"><small>split ${n.then.length} ways · probably the same money</small>` +
+    n.then.map(k => `<ol class="jr sub">${steps(k)}</ol>`).join('') + '</li>' : '');
+  const journey = j => `<ol class="jr">${steps(j)}</ol>`;
   const accts = T.accounts.map(a => rk({ href: link('account', a.name, {}, P), icon: KIND_ICON[a.kind] || '🏦', nameHtml: splitAcct(a.name),
     sub: `${plural(a.count, 'transaction')} · in ${esc(curs(a.in))}`, valueText: esc(curs(a.out)), vsub: 'out' })).join('');
   return { title: 'Money trail', sub: 'Between your accounts', html: chips(P) +
