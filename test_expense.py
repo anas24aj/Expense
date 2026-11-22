@@ -255,6 +255,27 @@ class StoreMixin:
         with self.assertRaises(KeyError):
             server.link_by_hand(db, canara['id'], canara['candidates'][0]['id'])  # backwards
 
+    def test_money_to_parents_on_the_trail(self):
+        db = self.db
+        server.DB.run(db, "INSERT INTO settings (key, value) VALUES ('allocations', :v)",
+                      v=json.dumps({'others': [{'name': 'Parents', 'amount': 15000, 'cur': 'INR'}, {'name': 'Maid', 'amount': 1500, 'cur': 'SAR'}]}))
+        for sender, body, at in (
+                ('D360', 'International transfer\nAmount: INR 175,000.00 (SAR 6,945.28)\nTo: ravi kumar\nCountry:India', '2026-10-26T16:26:00+03:00'),
+                ('JD-IDFCFB-S', 'Your a/c no. XXXXXXXX234 is credited by Rs. 175000.00 on 26-Oct-26 (IMPS Ref no 600000000001 ).', '2026-10-26T19:05:00+05:30'),
+                ('JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 15,000.00 on 26/10/26; ANIL  KUMAR credited. RRN 300000000002.', '2026-10-26T19:12:00+05:30'),
+                ('JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 9,000.00 on 27/10/26; SITA DEVI credited. RRN 300000000005.', '2026-10-27T09:00:00+05:30')):
+            server.store_sms(db, sender, body, at)
+        t = server.trail(db)
+        flows = {(f['to'], f['kind']): f for f in t['flows']}
+        self.assertEqual(flows['Parents', 'payee']['proof'][0]['why'], 'exactly your monthly Parents payment')
+        self.assertEqual(t['journeys'][0]['then'][0]['then'][0]['then'][0]['account'], 'Parents')
+        self.assertEqual([u['amount'] for u in t['unmatched']], [9000.0])  # not the 15,000: that's Parents
+        # The 9,000 also went to your parents: say so, and it joins them.
+        server.set_category(db, t['unmatched'][0]['id'], 'Parents', False)
+        t = server.trail(db)
+        self.assertEqual(next(f for f in t['flows'] if f['to'] == 'Parents')['count'], 2)
+        self.assertEqual(t['unmatched'], [])
+
     def test_card_purchase_never_meets_an_advert_credit(self):
         db = self.db
         server.store_sms(db, 'SAB', 'Online Purchase\nAmount: SAR 48.00\nCard: *2080\nAt: Amazon sa', '2026-10-22T10:00:00+03:00')

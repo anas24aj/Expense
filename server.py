@@ -560,6 +560,21 @@ def trail(db, first=None, last=None):
                 return h['name'], "exactly the loan's EMI"
         return None
     loan_of = lambda t: (why_loan(t) or (None,))[0]
+    # Your regular payments from the Plan tab (Parents, Maid…): a payment of exactly that amount, or one you gave
+    # that name as its category, went to them.
+    found = db.run("SELECT value FROM settings WHERE key = 'allocations'")
+    regular = [(o['name'].strip(), round(float(o.get('amount') or 0) * 100), o.get('cur') or 'SAR')
+               for o in (json.loads(found[0]['value']).get('others') or [] if found else []) if str(o.get('name') or '').strip()]
+
+    def why_payee(t):
+        if t['direction'] != 'debit' or t['linked'] in by_id or why_loan(t):
+            return None
+        for name, minor, cur in regular:
+            if t['category'].lower() == name.lower():
+                return name, f'you marked it {name}'
+            if not t['fixed'] and minor and cur == t['currency'] and round(t['amount'] * 100) == minor:
+                return name, f'exactly your monthly {name} payment'
+        return None
     inside = lambda t: (not first or t['received_at'][:10] >= first) and (not last or t['received_at'][:10] <= last)
     kind_of = lambda name: kinds.get(name) or ('wallet' if WALLETS.search(name) else 'bnpl' if BNPL.search(name)
                                                else 'card' if 'Card' in name else 'bank')
@@ -593,6 +608,8 @@ def trail(db, first=None, last=None):
                      f"arrived {when}" + (f" at {c['amount'] / t['amount']:.2f} {c['currency']} per {t['currency']}" if c['currency'] != t['currency'] else ', same amount'))
             elif found := why_loan(t):
                 flow(t['account'], found[0], 'loan', t, t, found[1])
+            elif found := why_payee(t):
+                flow(t['account'], found[0], 'payee', t, t, found[1])
     # Journeys: after money arrives in an account, the next transfer/loan payment out of it.
     out_of = defaultdict(list)
     for t in sorted(every, key=lambda t: t['received_at']):
@@ -625,6 +642,8 @@ def trail(db, first=None, last=None):
             node['then'] = [{**hop(c, 'arrived', False), 'then': [follow(d, True, depth + 1) for d in nxt[c['id']]]}]
         elif name := loan_of(t):
             node['then'] = [{**hop(t, 'loan', False), 'account': name, 'kind': 'loan', 'desc': ''}]
+        elif found := why_payee(t):
+            node['then'] = [{**hop(t, 'payee', False), 'account': found[0], 'kind': 'payee', 'desc': ''}]
         elif likely:  # money that left your accounts: to a person or a shop
             node['way'] = 'paid'
         return node
@@ -636,7 +655,7 @@ def trail(db, first=None, last=None):
     return {'accounts': sorted(({**a, 'in': plain(a['in']), 'out': plain(a['out'])} for a in accounts.values()), key=lambda a: -a['count']),
             'flows': sorted(({**f, 'sent': plain(f['sent']), 'got': plain(f['got']), 'proof': f['proof'][::-1][:20]} for f in flows.values()),
                             key=lambda f: (-f['count'], f['from'])),
-            'journeys': journeys[::-1][:60], 'unmatched': unmatched(every, inside)}
+            'journeys': journeys[::-1][:60], 'unmatched': unmatched([t for t in every if not (why_loan(t) or why_payee(t))], inside)}
 
 
 def unmatched(every, inside):
