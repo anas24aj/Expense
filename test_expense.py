@@ -304,6 +304,12 @@ class StoreMixin:
         server.store_sms(db, 'VM-SBIINB', 'A/c XX7777 credited INR 13,000.00 by IMPS from R KUMAR', '2026-11-04T12:00:00+05:30')
         self.assertEqual([t['linked'] for t in server.transactions(db)], [None] * 3)  # two places it could have gone: you link it
 
+    def test_salary_transfer_sms_is_money_in(self):
+        db = self.db
+        stored = server.store_sms(db, 'SAB', 'Salary Transfer\nTo: **001\nAmount: SAR 25,450.00\nOn: 2026-10-25 11:31:07', '2026-10-25T11:31:00+03:00')
+        self.assertEqual((stored['amount_minor'], stored['currency'], stored['direction']), (2545000, 'SAR', 'credit'))
+        self.assertEqual(server.transactions(db)[0]['category'], 'Salary')
+
     def test_salary_from_the_plan_amount(self):
         db = self.db
         db.run("INSERT INTO settings (key, value) VALUES ('salary', :v)", v=json.dumps({'amount': 25000, 'day': 25, 'currency': 'SAR'}))
