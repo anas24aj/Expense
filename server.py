@@ -88,6 +88,8 @@ DELETED_SCHEMA = 'CREATE TABLE IF NOT EXISTS deleted_sms (body TEXT PRIMARY KEY)
 # you import a statement. digits: the account's or card's last 4, so its SMS ('A/c XX1234') show under the same name.
 ACCOUNTS_SCHEMA = "CREATE TABLE IF NOT EXISTS accounts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, currency TEXT NOT NULL, digits TEXT NOT NULL DEFAULT '')"
 ACCOUNT_KINDS = {'bank', 'card', 'wallet', 'bnpl', 'loan'}
+# Transfers you linked by hand on the Money trail: the debit in one of your accounts and the credit it became.
+LINKS_SCHEMA = 'CREATE TABLE IF NOT EXISTS txn_links (debit_id BIGINT PRIMARY KEY, credit_id BIGINT NOT NULL UNIQUE)'
 # One row per imported statement file; its transactions carry statement_id, so the import can be undone.
 STATEMENTS_SCHEMA = '''CREATE TABLE IF NOT EXISTS statements (id {id} PRIMARY KEY, account TEXT NOT NULL, file_name TEXT NOT NULL,
   imported_at TEXT NOT NULL, first_day TEXT, last_day TEXT, read_rows INTEGER NOT NULL, new_rows INTEGER NOT NULL,
@@ -147,7 +149,7 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         if url not in DB._schema_ready:  # once per process, not per request
             self.run(schema)
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
@@ -317,7 +319,7 @@ def transactions(db, month=None, currency=None):
     longer = lambda a: next(iter([f'{a.rpartition("•")[0]}•{x}' for x in ends[a.rpartition('•')[0]]
                                   if len(x) > len(a.rpartition('•')[2]) and x.endswith(a.rpartition('•')[2])][:1]), a)
     acct = {k: longer(v) if '•' in v else v for k, v in acct.items()}
-    linked = links(rows, acct, overrides)
+    linked = links(rows, acct, overrides, [(r['debit_id'], r['credit_id']) for r in db.run('SELECT * FROM txn_links')])
     own |= set(linked)
     result = []
     for r in rows:
@@ -399,7 +401,25 @@ FX_RATIO = {('SAR', 'INR'): (20.0, 27.0), ('USD', 'INR'): (78.0, 100.0), ('SAR',
 LINK_DAYS = 4
 
 
-def links(rows, acct, overrides):
+def transfer_like(r):
+    return bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body']) or P2P.search(r['body']))
+
+
+def link_by_hand(db, debit_id, credit_id):
+    """You say this debit became that credit (or, credit_id None, that it isn't linked by hand any more). Your own
+    category on either is dropped, so both count as an own transfer."""
+    db.run('DELETE FROM txn_links WHERE debit_id = :d OR credit_id = :d', d=debit_id)
+    if credit_id is None:
+        return
+    rows = {r['id']: r for r in db.run('SELECT id, direction FROM transactions WHERE id IN (:d, :c)', d=debit_id, c=credit_id)}
+    if rows.get(debit_id, {}).get('direction') != 'debit' or rows.get(credit_id, {}).get('direction') != 'credit':
+        raise KeyError('pick money going out, and money coming in')
+    db.run('DELETE FROM txn_links WHERE debit_id = :c OR credit_id = :c', c=credit_id)
+    db.run('INSERT INTO txn_links (debit_id, credit_id) VALUES (:d, :c)', d=debit_id, c=credit_id)
+    db.run('DELETE FROM txn_categories WHERE txn_id IN (:d, :c)', d=debit_id, c=credit_id)
+
+
+def links(rows, acct, overrides, manual=()):
     """{debit id: credit id, credit id: debit id} for money that left one of your accounts and arrived in another:
     the same amount (or the same at an exchange rate) within LINK_DAYS, with transfer words on either side.
     Two SMS in the same currency must be an hour apart at most (as in own_transfers), so a UPI payment and an
@@ -413,8 +433,11 @@ def links(rows, acct, overrides):
         v.sort()
     by_id = {r['id']: r for r in rows}
     paired = {}
-    words = lambda r: bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body']) or P2P.search(r['body']))
-    for d in sorted((r for r in rows if r['direction'] == 'debit' and r['id'] not in overrides and not PURCHASE.search(r['body'])),
+    for d, c in manual:  # yours first
+        if d in by_id and c in by_id:
+            paired[d], paired[c] = c, d
+    words = transfer_like
+    for d in sorted((r for r in rows if r['direction'] == 'debit' and r['id'] not in overrides and r['id'] not in paired and not PURCHASE.search(r['body'])),
                     key=lambda r: r['received_at']):
         best = None
         for cur, lo_hi in [(d['currency'], None)] + [(c2, rng) for (c1, c2), rng in FX_RATIO.items() if c1 == d['currency']]:
@@ -613,7 +636,28 @@ def trail(db, first=None, last=None):
     return {'accounts': sorted(({**a, 'in': plain(a['in']), 'out': plain(a['out'])} for a in accounts.values()), key=lambda a: -a['count']),
             'flows': sorted(({**f, 'sent': plain(f['sent']), 'got': plain(f['got']), 'proof': f['proof'][::-1][:20]} for f in flows.values()),
                             key=lambda f: (-f['count'], f['from'])),
-            'journeys': journeys[::-1][:60]}
+            'journeys': journeys[::-1][:60], 'unmatched': unmatched(every, inside)}
+
+
+def unmatched(every, inside):
+    """Transfers in the period with no other side found, newest first, each with the likeliest other sides (opposite
+    way, another account, within a week; same amount or an exchange rate first) for you to link by hand."""
+    def fits(a, b):
+        if a['currency'] == b['currency']:
+            return abs(a['amount'] - b['amount']) <= 0.02 * max(a['amount'], b['amount'])
+        d, c = (a, b) if a['direction'] == 'debit' else (b, a)
+        rng = FX_RATIO.get((d['currency'], c['currency']))
+        return bool(rng) and rng[0] <= c['amount'] / d['amount'] <= rng[1]
+    open_ = [t for t in every if not t['linked'] and t['category'] != IGNORED and transfer_like(t) and not PURCHASE.search(t['body'])]
+    out = []
+    for t in sorted((t for t in open_ if inside(t)), key=lambda t: t['received_at'], reverse=True)[:40]:
+        day = date.fromisoformat(t['received_at'][:10])
+        near = [o for o in every if o['direction'] != t['direction'] and o['account'] != t['account'] and not o['linked']
+                and abs((date.fromisoformat(o['received_at'][:10]) - day).days) <= 7 and o['category'] != IGNORED]
+        near.sort(key=lambda o: (not fits(t, o), abs((date.fromisoformat(o['received_at'][:10]) - day).days)))
+        pick = lambda o: {k: o[k] for k in ('id', 'account', 'amount', 'currency', 'direction', 'merchant')} | {'day': o['received_at'][:10], 'fits': fits(t, o)}
+        out.append({**pick(t), 'body': t['body'], 'candidates': [pick(o) for o in near[:6]]})
+    return out
 
 
 WORDING = 'sms:'  # merchant_categories keys starting with this are message wordings, not merchant names
@@ -632,6 +676,8 @@ def set_category(db, txn_id, category, whole_merchant):
     if not found:
         raise KeyError('no such transaction')
     merchant = merchant_of(found[0]['body']).strip().lower() or wording(found[0]['body'])
+    if category != OWN_TRANSFER:
+        db.run('DELETE FROM txn_links WHERE debit_id = :id OR credit_id = :id', id=txn_id)
     if whole_merchant:
         db.run('INSERT INTO merchant_categories (merchant, category) VALUES (:m, :c) '
                'ON CONFLICT (merchant) DO UPDATE SET category = excluded.category', m=merchant, c=category)
@@ -1333,6 +1379,12 @@ def _app(environ, start_response):
                       base64.b64decode(upload['data'], validate=True), str(upload.get('password') or '') or None)
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/link'):
+        try:
+            pair = read_json(environ, MAX_BODY)
+            pair = (int(pair['debit']), None if pair.get('credit') is None else int(pair['credit']))
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/statement/delete'):
         try:
             undone = int(read_json(environ, MAX_BODY)['id'])
@@ -1449,6 +1501,12 @@ def _app(environ, start_response):
             except Exception as e:  # a file the readers choke on: say so instead of a bare 500
                 print(f'statement import failed: {type(e).__name__}: {e}', file=sys.stderr)
                 return respond('422 Unprocessable Entity', {'error': f'could not read this file ({type(e).__name__}). Try the Excel or CSV download instead.'})
+        if path == '/api/link':
+            try:
+                link_by_hand(db, *pair)
+            except KeyError as e:
+                return respond('400 Bad Request', {'error': str(e.args[0])})
+            return respond('200 OK', {'saved': True})
         if path == '/api/statement/delete':
             try:
                 delete_statement(db, undone)

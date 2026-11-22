@@ -236,6 +236,25 @@ class StoreMixin:
         server.set_category(db, sent['id'], 'Shopping', False)
         self.assertEqual(server.trail(db)['flows'], [])
 
+    def test_unmatched_transfer_is_listed_and_can_be_linked_by_hand(self):
+        db = self.db
+        server.store_sms(db, 'VM-CANBNK', 'Dear Customer, Acct XXX864 credited with INR 13,000.00 on 04/11/26 from V M Kumar; UPI:900000000001; Bal INR 31,769.14-CanaraBank', '2026-11-04T10:00:00+05:30')
+        server.store_sms(db, 'JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 13,000.00 on 04/11/26; V M KUMAR credited. RRN 300000000003.', '2026-11-04T07:30:00+05:30')  # 2.5 h earlier
+        server.store_sms(db, 'JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 900.00 on 03/11/26; SHOP credited. RRN 300000000004.', '2026-11-03T07:30:00+05:30')
+        t = server.trail(db)
+        canara = next(u for u in t['unmatched'] if 'CANBNK' in u['account'])
+        self.assertEqual(t['flows'], [])
+        self.assertEqual([(c['amount'], c['fits']) for c in canara['candidates']], [(13000.0, True), (900.0, False)])  # the likely one first
+        server.link_by_hand(db, canara['candidates'][0]['id'], canara['id'])
+        t = server.trail(db)
+        self.assertEqual([(f['from'], f['to']) for f in t['flows']], [('IDFCFB · Account •1234', 'CANBNK · Account •864')])
+        self.assertNotIn(canara['id'], [u['id'] for u in t['unmatched']])
+        self.assertEqual({x['category'] for x in server.transactions(db) if x['amount'] == 13000}, {server.OWN_TRANSFER})
+        server.set_category(db, canara['id'], 'Salary', False)  # changed your mind: the link goes
+        self.assertEqual(server.trail(db)['flows'], [])
+        with self.assertRaises(KeyError):
+            server.link_by_hand(db, canara['id'], canara['candidates'][0]['id'])  # backwards
+
     def test_card_purchase_never_meets_an_advert_credit(self):
         db = self.db
         server.store_sms(db, 'SAB', 'Online Purchase\nAmount: SAR 48.00\nCard: *2080\nAt: Amazon sa', '2026-10-22T10:00:00+03:00')
@@ -578,7 +597,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements, txn_links')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()

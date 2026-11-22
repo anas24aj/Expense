@@ -150,6 +150,10 @@
   .jr li small { grid-column: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .jr li .v { grid-row: 1; grid-column: 2; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
   .jr li.end b { color: var(--good, #0f7b3e); }
+  .sk svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .sk .band path { opacity: .38; transition: opacity .2s; cursor: pointer; } .sk .band:hover path, .sk .band.on path { opacity: .7; }
+  .sk text { font-size: 10px; font-weight: 600; fill: var(--text); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+  .sk text.amt { font-weight: 500; fill: var(--muted); }
   details.fl > summary { list-style: none; cursor: pointer; } details.fl > summary::-webkit-details-marker { display: none; }
   details.fl + details.fl { border-top: 1px solid var(--line); }
   details.fl[open] > summary .rk .pc::after { content: '▴'; } details.fl > summary .rk .pc::after { content: '▾'; color: var(--muted); }
@@ -159,7 +163,8 @@
   .ev-t span { color: var(--muted); font-size: 12px; }
   .ev-t pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace; color: var(--text-2); background: var(--surface-2); border-radius: 8px; padding: 8px; }
   .ev-t form { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .ev-t form label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
-  .ev-t select { max-width: 100%; }
+  .ev-t select, form.link select { max-width: 100%; width: 100%; }
+  form.link { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } form.link label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
   .jr li.split { display: block; padding-bottom: 4px; }
   .jr li.split::before { background: var(--muted); }
   .jr .jr.sub { margin: 6px 0 0 -6px; padding: 8px 0 0 12px; border-left: 2px dashed var(--line); }
@@ -1673,6 +1678,50 @@ function friendBalances() {
 const KIND_ICON = { bank: '🏦', card: '💳', wallet: '👛', bnpl: '🧾', loan: '🏠' };
 const inCur = (v, c) => c === 'INR' ? short_inr(v) : `${c === 'SAR' ? 'SAR' : c === 'USD' ? '$' : c} ${Math.round(v).toLocaleString('en')}`;
 const curs = o => Object.entries(o || {}).filter(([, v]) => v).map(([c, v]) => inCur(v, c)).join(' + ') || '0';
+// Money flow map (a Sankey): each account a bar, as tall as the money through it; bands from account to account as wide
+// as what moved (in ₹, SAR at today's rate), coloured by where the money started, with dots travelling along them.
+function flowMap(flows) {
+  if (!flows.length) return '';
+  const val = f => Object.entries(f.sent).reduce((a, [c, v]) => a + toInr(v, c), 0);
+  const names = [...new Set(flows.flatMap(f => [f.from, f.to]))], loanSet = new Set(flows.filter(f => f.kind === 'loan').map(f => f.to));
+  const depth = Object.fromEntries(names.map(n => [n, 0]));
+  for (let k = 0; k < names.length; k++) for (const f of flows) if (f.from !== f.to) depth[f.to] = Math.max(depth[f.to], Math.min(depth[f.from] + 1, 5));
+  const cols = Math.max(...Object.values(depth)) + 1;
+  for (const n of loanSet) depth[n] = cols - 1;  // loans are where money ends: the last column
+  const inn = {}, out = {};
+  for (const f of flows) { out[f.from] = (out[f.from] || 0) + val(f); inn[f.to] = (inn[f.to] || 0) + val(f); }
+  const size = n => Math.max(inn[n] || 0, out[n] || 0);
+  const W = 340, bar = 8, gap = 34, colX = c => cols === 1 ? 0 : c * (W - bar) / (cols - 1);
+  const byCol = Array.from({ length: cols }, (_, c) => names.filter(n => depth[n] === c).sort((a, b) => size(b) - size(a)));
+  const H = Math.max(170, Math.max(...byCol.map(c => c.length)) * 62);
+  const k = Math.min(...byCol.filter(c => c.length).map(c => (H - gap * (c.length - 1)) / c.reduce((a, n) => a + size(n), 0)));
+  const pos = {};
+  byCol.forEach((list, c) => { let y = (H - (list.reduce((a, n) => a + size(n), 0) * k + gap * (list.length - 1))) / 2;
+    for (const n of list) { pos[n] = { x: colX(c), y, h: Math.max(2, size(n) * k), outY: y, inY: y }; y += pos[n].h + gap; } });
+  const PALETTE = ['#2a78d6', '#12a37a', '#e8833a', '#8b5cf6', '#e0518b', '#0ea5b7', '#c2410c', '#65a30d'], color = {};
+  names.filter(n => !loanSet.has(n)).sort((a, b) => depth[a] - depth[b] || pos[a].y - pos[b].y).forEach((n, i) => { color[n] = PALETTE[i % PALETTE.length]; });
+  const short = n => { const [bank, rest = ''] = n.split(' · '); return (bank + (rest.match(/•\d+/) ? ' ' + rest.match(/•\d+/)[0] : '')).slice(0, cols > 3 ? 14 : 20); };
+  const f1 = v => v.toFixed(1), motion = document.documentElement.classList.contains('motion');
+  const bands = [...flows].sort((a, b) => depth[a.from] - depth[b.from] || pos[a.from].y - pos[b.from].y || pos[a.to].y - pos[b.to].y).map(f => {
+    const a = pos[f.from], b = pos[f.to], w = Math.max(1.5, val(f) * k), c = color[f.from];
+    const x0 = a.x + bar, x1 = b.x, y0 = a.outY, y1 = b.inY, m = (x0 + x1) / 2;
+    a.outY += w; b.inY += w;
+    const d = `M${f1(x0)},${f1(y0)}C${f1(m)},${f1(y0)} ${f1(m)},${f1(y1)} ${f1(x1)},${f1(y1)}L${f1(x1)},${f1(y1 + w)}C${f1(m)},${f1(y1 + w)} ${f1(m)},${f1(y0 + w)} ${f1(x0)},${f1(y0 + w)}Z`;
+    const mid = `M${f1(x0)},${f1(y0 + w / 2)}C${f1(m)},${f1(y0 + w / 2)} ${f1(m)},${f1(y1 + w / 2)} ${f1(x1)},${f1(y1 + w / 2)}`;
+    const dots = motion ? Array.from({ length: Math.min(3, 1 + Math.floor(w / 18)) }, (_, i) =>
+      `<circle r="${w > 10 ? 3 : 2}" fill="${c}"><animateMotion dur="${(3.2 + i * .4).toFixed(1)}s" begin="${(i * 1.1 + depth[f.from] * .5).toFixed(1)}s" repeatCount="indefinite" path="${mid}"/></circle>`).join('') : '';
+    return `<g class="band" data-flow="${esc(f.from)}→${esc(f.to)}"><path d="${d}" fill="${c}"><title>${esc(f.from)} → ${esc(f.to)}: ${esc(curs(f.sent))}</title></path>${dots}</g>`;
+  }).join('');
+  // Each label sits above its bar, so neighbouring columns don't overlap: left-aligned in the first column, right in the last.
+  const nodes = names.map(n => { const p = pos[n], c = loanSet.has(n) ? 'var(--good, #0f7b3e)' : color[n], col = depth[n];
+    const [x, anchor] = col === 0 ? [p.x, 'start'] : col === cols - 1 ? [p.x + bar, 'end'] : [p.x + bar / 2, 'middle'];
+    return `<rect x="${f1(p.x)}" y="${f1(p.y)}" width="${bar}" height="${f1(p.h)}" rx="3" fill="${c}"/>` +
+      // the last column's labels go under its bars, clear of the column before it (whose labels are above)
+      `<text x="${f1(x)}" y="${f1(col === cols - 1 && cols > 1 ? p.y + p.h + 11 : p.y - 15)}" text-anchor="${anchor}">${loanSet.has(n) ? '🏠 ' + esc(n.slice(0, 20)) : esc(short(n))}</text>` +
+      `<text class="amt" x="${f1(x)}" y="${f1(col === cols - 1 && cols > 1 ? p.y + p.h + 22 : p.y - 4)}" text-anchor="${anchor}">${esc(short_inr(size(n)))}</text>`; }).join('');
+  return `<div class="sk"><svg viewBox="-2 -30 ${W + 4} ${H + 56}" role="img" aria-label="Money flow between your accounts">${bands}${nodes}</svg></div>` +
+    '<p class="muted small">Band width is the money moved, in ₹ (SAR at today’s rate). Tap a band for its messages.</p>';
+}
 function trailPage(rt, P) {
   const url = `/api/trail?from=${P.start}&to=${P.end}`;
   if (state.trailUrl !== url) { state.trail = null; state.trailUrl = url; }
@@ -1694,16 +1743,48 @@ function trailPage(rt, P) {
   const steps = n => step(n) + (n.then.length === 1 ? steps(n.then[0]) : n.then.length ? `<li class="split"><small>split ${n.then.length} ways · probably the same money</small>` +
     n.then.map(k => `<ol class="jr sub">${steps(k)}</ol>`).join('') + '</li>' : '');
   const journey = j => `<ol class="jr">${steps(j)}</ol>`;
+  // Transfers with no other side yet: shown so nothing is hidden, with the likeliest other sides to link by hand.
+  const loose = (T.unmatched || []).map(u => `<details class="fl"><summary>` + rk({ icon: u.direction === 'debit' ? '↗️' : '↘️', nameHtml: splitAcct(u.account),
+      sub: `${u.direction === 'debit' ? 'sent' : 'arrived'} ${esc(dayLabel(u.day))}${u.merchant ? ' · ' + esc(u.merchant) : ''}`,
+      valueText: `${u.direction === 'debit' ? '−' : '+'}${esc(inCur(u.amount, u.currency))}` }) +
+    `</summary><div class="ev"><div class="ev-t"><pre>${esc(u.body)}</pre></div>` + (u.candidates.length
+      ? `<form class="link"><input type="hidden" name="id" value="${u.id}"><input type="hidden" name="way" value="${u.direction}"><label>${u.direction === 'debit' ? 'Where did it arrive?' : 'Where did it come from?'}<select name="other" required>` +
+        u.candidates.map((c, i) => `<option value="${c.id}" ${i ? '' : 'selected'}>${esc(c.account)} · ${c.direction === 'debit' ? '−' : '+'}${esc(inCur(c.amount, c.currency))} · ${esc(dayLabel(c.day))}${c.fits ? ' ✓ amount fits' : ''}</option>`).join('') +
+        '</select></label><button class="btn">Link</button></form>'
+      : `<small class="muted">No ${u.direction === 'debit' ? 'money arriving' : 'money leaving'} in your other accounts within a week. Add that account's statement or SMS.</small>`) + '</div></details>').join('');
   const accts = T.accounts.map(a => rk({ href: link('account', a.name, {}, P), icon: KIND_ICON[a.kind] || '🏦', nameHtml: splitAcct(a.name),
     sub: `${plural(a.count, 'transaction')} · in ${esc(curs(a.in))}`, valueText: esc(curs(a.out)), vsub: 'out' })).join('');
   return { title: 'Money trail', sub: 'Between your accounts', html: chips(P) +
-    card('How money moved', periodText(P), flows || empty('No transfers between your accounts yet', 'Add statements from each bank, card and wallet, and give each account its last 4 digits, so the two sides of a transfer can be matched.'), '') +
+    card('How money moved', periodText(P), flowMap(T.flows) + flows || empty('No transfers between your accounts yet', 'Add statements from each bank, card and wallet, and give each account its last 4 digits, so the two sides of a transfer can be matched.'), '') +
     (T.journeys.length ? card('Journeys', 'newest first', T.journeys.slice(0, 15).map(journey).join(''), '') : '') +
+    (loose ? card('Not matched yet', 'tap to link', loose, '') : '') +
     card('Accounts', 'in this period', (accts || empty('No accounts yet')) + add, '') +
     '<section class="card"><h2>How this is worked out</h2><ul class="muted"><li>A transfer is matched when the same amount leaves one account and arrives in another within 4 days: SAR to ₹ at any rate from 20 to 24.5, with transfer or remittance words on either side.</li>' +
     '<li>After money arrives, the next transfer or loan payment out of that account within 10 days (and no larger) is shown as <i>probably the same money</i>, dashed.</li>' +
     '<li>Loan payments are found from the account digits you gave each loan on the Debt tab. Matched transfers count as Own transfer, not spending.</li></ul></section>' };
 }
+// Tap a band in the flow map: open that flow's messages below it.
+document.addEventListener('click', e => {
+  const g = e.target.closest('.sk .band');
+  if (!g) return;
+  const [from, to] = g.dataset.flow.split('→');
+  const d = [...document.querySelectorAll('details.fl')].find(x => x.querySelector('summary b')?.textContent === `${from} → ${to}`);
+  if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+});
+document.addEventListener('submit', async e => {
+  if (!e.target.matches('form.link')) return;
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector('button'), [d, c] = f.way.value === 'debit' ? [f.id.value, f.other.value] : [f.other.value, f.id.value];
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ debit: +d, credit: +c }) });
+    if (r.status === 401) { location.href = '/login'; return; }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    toast('Linked. Both count as an own transfer.');
+    state.trail = null; state.trailUrl = null;
+    await load(true); render();
+  } catch (err) { btn.disabled = false; toast(`Could not link: ${err.message}`); }
+});
 document.addEventListener('submit', async e => {
   if (!e.target.matches('form.unlink')) return;
   e.preventDefault();
