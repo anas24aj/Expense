@@ -150,6 +150,16 @@
   .jr li small { grid-column: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .jr li .v { grid-row: 1; grid-column: 2; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
   .jr li.end b { color: var(--good, #0f7b3e); }
+  details.fl > summary { list-style: none; cursor: pointer; } details.fl > summary::-webkit-details-marker { display: none; }
+  details.fl + details.fl { border-top: 1px solid var(--line); }
+  details.fl[open] > summary .rk .pc::after { content: '▴'; } details.fl > summary .rk .pc::after { content: '▾'; color: var(--muted); }
+  .ev { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0 0 10px; display: grid; gap: 8px; }
+  .ev .why { color: var(--good, #0f7b3e); font-weight: 600; }
+  .ev-t { display: grid; gap: 4px; min-width: 0; } .ev-t + .ev-t { border-top: 1px dashed var(--line); padding-top: 8px; }
+  .ev-t span { color: var(--muted); font-size: 12px; }
+  .ev-t pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace; color: var(--text-2); background: var(--surface-2); border-radius: 8px; padding: 8px; }
+  .ev-t form { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .ev-t form label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  .ev-t select { max-width: 100%; }
   .jr li.split { display: block; padding-bottom: 4px; }
   .jr li.split::before { background: var(--muted); }
   .jr .jr.sub { margin: 6px 0 0 -6px; padding: 8px 0 0 12px; border-left: 2px dashed var(--line); }
@@ -1668,9 +1678,15 @@ function trailPage(rt, P) {
   if (state.trailUrl !== url) { state.trail = null; state.trailUrl = url; }
   if (!state.trail) return waitFor('Money trail', [['trail', () => fetchInto('trail', url)]]);
   const T = state.trail, add = '<a class="more" href="/import#statement">Add bank statements</a>';
-  const flows = T.flows.map(f => rk({ icon: f.kind === 'loan' ? '🏠' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
+  const cats = (state.sum?.categories || []).filter(c => c !== OWN_TRANSFER);
+  const evidence = f => f.proof.map(p => `<div class="ev"><small class="why">✓ ${esc(p.why)}</small>${p.items.map(t =>
+    `<div class="ev-t"><b>${t.direction === 'debit' ? '−' : '+'}${esc(inCur(t.amount, t.currency))}</b><span>${esc(t.account)} · ${esc(dayLabel(t.day))}</span><pre>${esc(t.body)}</pre>` +
+    `<form class="unlink"><input type="hidden" name="id" value="${t.id}"><label>Not right? What was this?<select name="category" required><option value="" selected disabled>Choose…</option>` +
+    `${cats.map(c => `<option>${esc(c)}</option>`).join('')}<option value="${IGNORED}">Not a real transaction (advert)</option></select></label><button class="btn">Save</button></form></div>`).join('')}</div>`).join('');
+  const flows = T.flows.map(f => `<details class="fl"><summary>` + rk({ icon: f.kind === 'loan' ? '🏠' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
     sub: `${plural(f.count, f.kind === 'loan' ? 'payment' : 'transfer')} · last ${esc(dayLabel(f.last))}`,
-    valueText: esc(curs(f.sent)), vsub: Object.keys(f.got).join() !== Object.keys(f.sent).join() ? `→ ${esc(curs(f.got))}` : '' })).join('');
+    valueText: esc(curs(f.sent)), vsub: Object.keys(f.got).join() !== Object.keys(f.sent).join() ? `→ ${esc(curs(f.got))}` : '' }) +
+    `</summary><p class="muted small">The messages behind this, newest first. If one is wrong, say what it was: it stops being matched.</p>${evidence(f)}</details>`).join('');
   // A journey is a tree: one line while the money goes one way, indented branches where it splits.
   const step = n => n.way === 'loan' ? `<li class="end"><b>🏠 ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span><small>loan payment ${esc(dayLabel(n.day))}</small></li>`
     : `<li class="${n.then.length === 1 && n.then[0].likely ? 'likely' : ''}"><b>${KIND_ICON[n.kind] || '🏦'} ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span>` +
@@ -1688,6 +1704,21 @@ function trailPage(rt, P) {
     '<li>After money arrives, the next transfer or loan payment out of that account within 10 days (and no larger) is shown as <i>probably the same money</i>, dashed.</li>' +
     '<li>Loan payments are found from the account digits you gave each loan on the Debt tab. Matched transfers count as Own transfer, not spending.</li></ul></section>' };
 }
+document.addEventListener('submit', async e => {
+  if (!e.target.matches('form.unlink')) return;
+  e.preventDefault();
+  const form = e.target, btn = form.querySelector('button');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/category?currency=${enc(state.currency)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: +form.id.value, category: form.category.value, whole_merchant: false }) });
+    if (r.status === 401) { location.href = '/login'; return; }
+    if (!r.ok) throw new Error(r.status);
+    toast(`Saved as ${form.category.value}. It's no longer matched.`);
+    state.trail = null; state.trailUrl = null;
+    await load(true); render();
+  } catch { btn.disabled = false; toast('Could not save. Try again.'); }
+});
 function friendsPage(rt) {
   const all = friendBalances();
   if (!rt.arg) {
@@ -2166,7 +2197,7 @@ document.addEventListener('change', e => {
     f.querySelector('.karat').hidden = !gold;
     f.querySelector('.bal-label').textContent = gold ? 'Weight (grams)' : 'Balance';
   }
-  if (e.target.name === 'category') e.target.form.querySelector('[name=custom]').parentElement.hidden = e.target.value !== '__new';
+  if (e.target.name === 'category' && e.target.form.custom) e.target.form.querySelector('[name=custom]').parentElement.hidden = e.target.value !== '__new';
   if (e.target.id === 'day-pick' && okDay(e.target.value) && e.target.value <= today()) go(`#/day/${e.target.value}`, true);
   if (e.target.name === 'split') e.target.form.theirs.parentElement.hidden = e.target.value !== 'custom';
 });

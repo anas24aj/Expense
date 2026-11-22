@@ -224,6 +224,17 @@ class StoreMixin:
         self.assertEqual(tree(j), ('sent', 'D360', 6945.28, [('arrived', 'IDFCFB · Account •1234', 175000.0, [
             ('paid', 'IDFCFB · Account •1234', 15000.0, []),
             ('sent', 'IDFCFB · Account •1234', 14813.34, [('loan', 'Canara home loan', 14813.34, [])])])]))
+        flows = {f['to']: f for f in server.trail(db)['flows']}
+        self.assertEqual([p['why'] for p in flows['Canara home loan']['proof']], ["exactly the loan's EMI"])
+        self.assertEqual(flows['IDFCFB · Account •1234']['proof'][0]['why'], 'arrived the same day at 25.20 INR per SAR')
+        self.assertEqual(len(flows['IDFCFB · Account •1234']['proof'][0]['items']), 2)  # both messages, as proof
+        # You say the 14,813.34 wasn't the EMI: it stops being matched to the loan.
+        emi = flows['Canara home loan']['proof'][0]['items'][0]['id']
+        server.set_category(db, emi, 'Shopping', False)
+        self.assertNotIn('Canara home loan', {f['to'] for f in server.trail(db)['flows']})
+        # And a transfer you correct stops being a transfer.
+        server.set_category(db, sent['id'], 'Shopping', False)
+        self.assertEqual(server.trail(db)['flows'], [])
 
     def test_card_purchase_never_meets_an_advert_credit(self):
         db = self.db

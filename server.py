@@ -331,7 +331,7 @@ def transactions(db, month=None, currency=None):
             'id': r['id'], 'received_at': r['received_at'], 'sender': r['sender'], 'body': r['body'],
             'amount': r['amount_minor'] / 100, 'currency': r['currency'], 'direction': r['direction'],
             'merchant': merchant,
-            'account': acct[r['id']], 'statement': bool(r['statement_id']), 'linked': linked.get(r['id']),
+            'account': acct[r['id']], 'statement': bool(r['statement_id']), 'linked': linked.get(r['id']), 'fixed': r['id'] in overrides,
             'friend': f['friend'] if f else '', 'theirs': theirs / 100, 'settled': bool(f and f['settled']),
             'category': overrides.get(r['id']) or (OWN_TRANSFER if r['id'] in own else None)
                         or (merchant and for_merchant(merchant))
@@ -525,9 +525,18 @@ def trail(db, first=None, last=None):
     by_id = {t['id']: t for t in every}
     kinds = {a['name']: a['kind'] for a in db.run('SELECT name, kind FROM accounts')}
     loans = [h for h in db.run('SELECT id, name, kind, currency, pattern, emi_minor FROM holdings') if h['kind'] in DEBTS]
-    loan_of = lambda t: next((h['name'] for h in loans if t['direction'] == 'debit' and h['currency'] == t['currency'] and (
-        h['pattern'].strip() and h['pattern'].strip().lower() in t['body'].lower()  # its account digits in the SMS
-        or h['emi_minor'] and round(t['amount'] * 100) == h['emi_minor'])), None)  # or exactly its EMI
+    def why_loan(t):
+        """(loan name, why) for a payment to one of your loans: its account digits in the SMS, or exactly its EMI. Not
+        once you've given the transaction a category of your own (other than Rent & EMI): that's your correction."""
+        if t['direction'] != 'debit' or t['fixed'] and t['category'] != 'Rent & EMI':
+            return None
+        for h in loans:
+            if h['currency'] == t['currency'] and h['pattern'].strip() and h['pattern'].strip().lower() in t['body'].lower():
+                return h['name'], f"the message mentions {h['pattern'].strip()}, the loan's account digits"
+            if h['currency'] == t['currency'] and h['emi_minor'] and round(t['amount'] * 100) == h['emi_minor']:
+                return h['name'], "exactly the loan's EMI"
+        return None
+    loan_of = lambda t: (why_loan(t) or (None,))[0]
     inside = lambda t: (not first or t['received_at'][:10] >= first) and (not last or t['received_at'][:10] <= last)
     kind_of = lambda name: kinds.get(name) or ('wallet' if WALLETS.search(name) else 'bnpl' if BNPL.search(name)
                                                else 'card' if 'Card' in name else 'bank')
@@ -542,18 +551,25 @@ def trail(db, first=None, last=None):
         a['last'] = max(a['last'], t['received_at'][:10])
     flows = {}
 
-    def flow(src, dst, kind, sent, got):
-        f = flows.setdefault((src, dst), {'from': src, 'to': dst, 'kind': kind, 'count': 0, 'sent': defaultdict(float), 'got': defaultdict(float), 'last': ''})
+    proof = lambda t: {k: t[k] for k in ('id', 'account', 'amount', 'currency', 'direction', 'body', 'category')} | {'day': t['received_at'][:10]}
+
+    def flow(src, dst, kind, sent, got, why):
+        f = flows.setdefault((src, dst), {'from': src, 'to': dst, 'kind': kind, 'count': 0, 'sent': defaultdict(float), 'got': defaultdict(float), 'last': '', 'proof': []})
         f['count'] += 1
+        f['proof'].append({'why': why, 'items': [proof(sent)] + ([proof(got)] if got is not sent else [])})
         f['sent'][sent['currency']] += sent['amount']
         f['got'][got['currency']] += got['amount']
         f['last'] = max(f['last'], sent['received_at'][:10])
     for t in every:
         if t['direction'] == 'debit' and inside(t):
             if t['linked'] in by_id:
-                flow(t['account'], by_id[t['linked']]['account'], 'transfer', t, by_id[t['linked']])
-            elif name := loan_of(t):
-                flow(t['account'], name, 'loan', t, t)
+                c = by_id[t['linked']]
+                gap = (date.fromisoformat(c['received_at'][:10]) - date.fromisoformat(t['received_at'][:10])).days
+                when = 'the same day' if not gap else f'{gap} day{"s" * (gap > 1)} later'
+                flow(t['account'], c['account'], 'transfer', t, c,
+                     f"arrived {when}" + (f" at {c['amount'] / t['amount']:.2f} {c['currency']} per {t['currency']}" if c['currency'] != t['currency'] else ', same amount'))
+            elif found := why_loan(t):
+                flow(t['account'], found[0], 'loan', t, t, found[1])
     # Journeys: after money arrives in an account, the next transfer/loan payment out of it.
     out_of = defaultdict(list)
     for t in sorted(every, key=lambda t: t['received_at']):
@@ -595,7 +611,8 @@ def trail(db, first=None, last=None):
     journeys = [j for j in journeys if any(inside(by_id[n['id']]) for n in flat(j))]
     plain = lambda d: {k: round(v, 2) for k, v in d.items()}
     return {'accounts': sorted(({**a, 'in': plain(a['in']), 'out': plain(a['out'])} for a in accounts.values()), key=lambda a: -a['count']),
-            'flows': sorted(({**f, 'sent': plain(f['sent']), 'got': plain(f['got'])} for f in flows.values()), key=lambda f: (-f['count'], f['from'])),
+            'flows': sorted(({**f, 'sent': plain(f['sent']), 'got': plain(f['got']), 'proof': f['proof'][::-1][:20]} for f in flows.values()),
+                            key=lambda f: (-f['count'], f['from'])),
             'journeys': journeys[::-1][:60]}
 
 
