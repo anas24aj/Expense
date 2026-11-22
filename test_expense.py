@@ -239,13 +239,13 @@ class StoreMixin:
     def test_unmatched_transfer_is_listed_and_can_be_linked_by_hand(self):
         db = self.db
         server.store_sms(db, 'VM-CANBNK', 'Dear Customer, Acct XXX864 credited with INR 13,000.00 on 04/11/26 from V M Kumar; UPI:900000000001; Bal INR 31,769.14-CanaraBank', '2026-11-04T10:00:00+05:30')
-        server.store_sms(db, 'JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 13,000.00 on 04/11/26; V M KUMAR credited. RRN 300000000003.', '2026-11-04T07:30:00+05:30')  # 2.5 h earlier
+        server.store_sms(db, 'JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 13,000.00 on 02/11/26; V M KUMAR credited. RRN 300000000003.', '2026-11-02T09:00:00+05:30')  # 2 days earlier
         server.store_sms(db, 'JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 900.00 on 03/11/26; SHOP credited. RRN 300000000004.', '2026-11-03T07:30:00+05:30')
         t = server.trail(db)
         canara = next(u for u in t['unmatched'] if 'CANBNK' in u['account'])
         self.assertEqual(t['flows'], [])
         self.assertEqual([(c['amount'], c['fits']) for c in canara['candidates']], [(13000.0, True), (900.0, False)])  # the likely one first
-        self.assertEqual(canara['why_not'], 'the two messages are 2 h 30 min apart; for two SMS automatic matching allows 1 hour')
+        self.assertEqual(canara['why_not'], 'the two messages are 2 days apart; two SMS are matched automatically up to a day apart')
         server.link_by_hand(db, canara['candidates'][0]['id'], canara['id'])
         t = server.trail(db)
         self.assertEqual([(f['from'], f['to']) for f in t['flows']], [('IDFCFB · Account •1234', 'CANBNK · Account •864')])
@@ -295,6 +295,21 @@ class StoreMixin:
         self.assertEqual(path(t['journeys'][0]), [('salary', 'SAB'), ('sent', 'SAB'), ('arrived', 'D360'), ('sent', 'D360'), ('arrived', 'IDFCFB'),
                                                   ('sent', 'IDFCFB'), ('arrived', 'CBSSBI'), ('sent', 'CBSSBI'), ('loan', 'SBI home loan')])
         self.assertIn(('Salary', 'SAB · Account •5555'), {(f['from'], f['to']) for f in t['flows']})
+
+    def test_slow_sms_pairs_only_when_nothing_else_could_be_it(self):
+        db = self.db
+        server.store_sms(db, 'JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 13,000.00 on 04/11/26; V M KUMAR credited. RRN 300000000003.', '2026-11-04T07:30:00+05:30')
+        server.store_sms(db, 'VM-CANBNK', 'Acct XXX864 credited with INR 13,000.00 on 04/11/26 from V M Kumar; UPI:900000000001', '2026-11-04T10:00:00+05:30')
+        self.assertEqual(len([t for t in server.transactions(db) if t['linked']]), 2)  # 2.5 h apart, and alone: one transfer
+        server.store_sms(db, 'VM-SBIINB', 'A/c XX7777 credited INR 13,000.00 by IMPS from R KUMAR', '2026-11-04T12:00:00+05:30')
+        self.assertEqual([t['linked'] for t in server.transactions(db)], [None] * 3)  # two places it could have gone: you link it
+
+    def test_salary_from_the_plan_amount(self):
+        db = self.db
+        db.run("INSERT INTO settings (key, value) VALUES ('salary', :v)", v=json.dumps({'amount': 25000, 'day': 25, 'currency': 'SAR'}))
+        server.store_sms(db, 'SAB', 'Deposit\nAmount: SAR 24,850.00\nAccount: **5555\nFrom: ACME CO', '2026-10-25T09:00:00+03:00')
+        server.store_sms(db, 'SAB', 'Deposit\nAmount: SAR 900.00\nAccount: **5555\nFrom: SAMI', '2026-10-26T09:00:00+03:00')
+        self.assertEqual(sorted(t['category'] for t in server.transactions(db)), ['Income', 'Salary'])
 
     def test_card_purchase_never_meets_an_advert_credit(self):
         db = self.db
@@ -411,13 +426,13 @@ class StoreMixin:
         store('AlRajhi', 'Outgoing Transfer\nAmount: SAR 2,000.00\nTo: SA44*9911\nRef 1', '05T10:00')
         store('SNB', 'حوالة واردة\nمبلغ: SAR 2,000.00\nمن: SA03*1234', '05T10:03')       # the other side, 3 min later
         store('AlRajhi', 'Outgoing Transfer\nAmount: SAR 500.00\nTo: SA44*9911\nRef 2', '06T10:00')
-        store('SNB', 'Incoming Transfer\nAmount: SAR 500.00\nFrom: SA03*1234\nRef 3', '06T15:00')  # 5 hours later: no pair
+        store('SNB', 'Incoming Transfer\nAmount: SAR 500.00\nFrom: SA03*1234\nRef 3', '06T15:00')  # 5 hours later: paired on the trail (nothing else is 500)
         store('AlRajhi', 'PoS Purchase\nAmount: SAR 300.00\nAt: PANDA', '07T10:00')
         store('SNB', 'Incoming Transfer\nAmount: SAR 300.00\nFrom: AHMED', '07T10:10')  # same amount, but the purchase isn't a transfer
         own = lambda: sorted(t['amount'] for t in server.transactions(db) if t['category'] == server.OWN_TRANSFER)
-        self.assertEqual(own(), [2000.0, 2000.0])
+        self.assertEqual(own(), [500.0, 500.0, 2000.0, 2000.0])
         m = server.summary(db)['months'][0]
-        self.assertEqual((m['spent'], m['received']), (800.0, 800.0))  # 500 + 300 out, 500 + 300 in; the 2,000 pair is not counted
+        self.assertEqual((m['spent'], m['received']), (300.0, 300.0))  # only the purchase and AHMED's 300 count
         self.assertNotIn(server.OWN_TRANSFER, server.summary(db)['by_category'])
 
         # Marking the unpaired 500 by hand counts it out too; correcting one side of a pair breaks the pair.

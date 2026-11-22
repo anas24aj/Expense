@@ -113,6 +113,9 @@ TRANSFER = re.compile(r'\b(?:transfer(?:red)?|trf|xfer|neft|imps|rtgs|upi|iban|s
 # shortcut: pairs only same-currency, same-amount SMS within an hour; a slower or cross-currency transfer
 # needs the "Own transfer" option once (with "apply to all", that also covers the future ones).
 PAIR_WINDOW_SECONDS = 60 * 60
+# A slower bank SMS (the 'credited' one arriving hours later) still pairs within a day, when nothing else of that
+# amount and currency is near either side: then there's no other money it could be.
+SLOW_PAIR_SECONDS = 24 * 60 * 60
 
 
 def direct(url):
@@ -302,6 +305,12 @@ def transactions(db, month=None, currency=None):
     for_merchant = rule_finder({k: c for k, c in saved.items() if not k.startswith(WORDING)})
     overrides = {r['txn_id']: r['category'] for r in db.run('SELECT txn_id, category FROM txn_categories')}
     friends = {r['txn_id']: r for r in db.run('SELECT txn_id, friend, theirs_minor, settled FROM txn_friends')}
+    # The salary you entered on the Plan tab: a credit within 10% of it, in its currency, is your salary even when the
+    # bank's SMS doesn't say 'salary'.
+    pay = db.run("SELECT value FROM settings WHERE key = 'salary'")
+    pay = json.loads(pay[0]['value']) if pay else {}
+    pay_minor, pay_cur = round(float(pay.get('amount') or 0) * 100), pay.get('currency') or 'SAR'
+    is_pay = lambda r: pay_minor and r['direction'] == 'credit' and r['currency'] == pay_cur and abs(r['amount_minor'] - pay_minor) <= pay_minor / 10
     # id breaks ties: rows with the same timestamp must come back in the same order every time,
     # or the dashboard sees "changed" data on each load and redraws under your finger.
     rows = db.run('SELECT * FROM transactions ORDER BY received_at DESC, id DESC')
@@ -343,6 +352,7 @@ def transactions(db, month=None, currency=None):
             'category': overrides.get(r['id']) or (OWN_TRANSFER if r['id'] in own else None)
                         or (merchant and for_merchant(merchant))
                         or (not merchant and by_wording.get(wording(r['body'])))
+                        or (r['id'] not in own and is_pay(r) and not REFUND.search(r['body']) and 'Salary')
                         or categorize(merchant, r['body'], rules, 'Income' if r['direction'] == 'credit' and not REFUND.search(r['body']) else 'Uncategorized'),
         })
     return result
@@ -437,6 +447,12 @@ def links(rows, acct, overrides, manual=()):
     for v in credits.values():
         v.sort()
     by_id = {r['id']: r for r in rows}
+    at = {r['id']: datetime.fromisoformat(r['received_at']) for r in rows}
+    same = defaultdict(list)
+    for r in rows:
+        same[r['currency'], r['amount_minor']].append(r['id'])
+    alone = lambda d, c: not any(i not in (d['id'], c['id']) and min(abs((at[i] - at[d['id']]).total_seconds()), abs((at[i] - at[c['id']]).total_seconds())) <= SLOW_PAIR_SECONDS
+                                 for i in same[d['currency'], d['amount_minor']])
     paired = {}
     for d, c in manual:  # yours first
         if d in by_id and c in by_id:
@@ -456,8 +472,9 @@ def links(rows, acct, overrides, manual=()):
                 if cid in paired or acct[cid] == acct[d['id']]:
                     continue
                 if lo_hi is None:
-                    if c['amount_minor'] != d['amount_minor'] or not (d['statement_id'] or c['statement_id']) and abs(
-                            (datetime.fromisoformat(c['received_at']) - datetime.fromisoformat(d['received_at'])).total_seconds()) > PAIR_WINDOW_SECONDS:
+                    secs = abs((at[cid] - at[d['id']]).total_seconds())
+                    if c['amount_minor'] != d['amount_minor'] or not (d['statement_id'] or c['statement_id']) and secs > PAIR_WINDOW_SECONDS and not (
+                            secs <= SLOW_PAIR_SECONDS and alone(d, c)):
                         continue
                 elif not lo_hi[0] <= c['amount_minor'] / d['amount_minor'] <= lo_hi[1]:
                     continue
@@ -686,7 +703,8 @@ def why_not(a, b):
         return f'arrived {gap} later; automatic matching allows {LINK_DAYS} days'
     if not (d['statement'] or c['statement']):
         if abs(secs) > PAIR_WINDOW_SECONDS:
-            return f'the two messages are {gap} apart; for two SMS automatic matching allows 1 hour'
+            return (f'the two messages are {gap} apart; two SMS are matched automatically up to a day apart' if abs(secs) > SLOW_PAIR_SECONDS
+                    else f'the two messages are {gap} apart, and another transaction of the same amount is near, so it could be either')
         missing = [x['account'] for x in (d, c) if not transfer_like(x)]
         if missing:
             return f"the message from {missing[0]} doesn't say transfer, IMPS, NEFT or similar"
