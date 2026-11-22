@@ -71,6 +71,8 @@
   .chips::-webkit-scrollbar { display: none; }
   .chips a { flex: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; font-weight: 600; color: var(--text-2); text-decoration: none; white-space: nowrap; }
   .chips a[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chips .month-pick { flex: none; min-height: 44px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: inherit; font-size: 13px; font-weight: 600; color: var(--text-2); }
+  .chips .month-pick.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* Hero */
   .hero { position: relative; overflow: hidden; background: linear-gradient(135deg, var(--hero-from), var(--hero-to)); color: var(--hero-text); border-radius: 16px; padding: 12px 16px 16px;
@@ -1852,7 +1854,15 @@ function txnList(list, title = 'Transactions', linkDays = true, aside = 'tap to 
     (ignored.length ? `<button type="button" class="link" aria-expanded="${state.showIgnored}" id="toggle-ignored">${state.showIgnored ? 'Hide' : 'Show'} ${ignored.length} not counted (own transfers &amp; ignored)</button>` +
       (state.showIgnored ? ignored.map(t => row(t, true)).join('') : '') : '') + '</section>';
 }
-const chips = P => `<nav class="chips" aria-label="Period">` + [['this', 'This month'], ['last', 'Last month'], ['3m', '3M'], ['6m', '6M'], ['12m', '12M'], ['ytd', 'Year']]
+// Any month since your first transaction, newest first: first in the row so it's in view without scrolling.
+function monthPick(P) {
+  const months = [];
+  for (let m = today().slice(0, 7), first = (state.earliest || today()).slice(0, 7); m >= first && months.length < 120; m = addM(m, -1)) months.push(m);
+  const on = P.kind === 'month' ? P.m : '';
+  return `<select class="month-pick${on && !P.chip ? ' on' : ''}" aria-label="Choose a month"><option value="" ${on ? '' : 'selected'} disabled>📅 Month</option>` +
+    months.map(m => `<option value="${m}" ${m === on ? 'selected' : ''}>📅 ${esc(monthName(m, 'short'))}</option>`).join('') + '</select>';
+}
+const chips = P => `<nav class="chips" aria-label="Period">` + monthPick(P) + [['this', 'This month'], ['last', 'Last month'], ['3m', '3M'], ['6m', '6M'], ['12m', '12M'], ['ytd', 'Year']]
   .map(([k, label]) => `<a href="#/${parseRoute().name}?p=${k}" data-replace aria-current="${P.chip === k && !(P.kind !== 'month' && P.step(1))}">${label}</a>`).join('') + '</nav>';
 const periodText = P => `${P.label}${P.sofar ? ' ' + P.sofar : ''}`;
 
@@ -2296,6 +2306,7 @@ document.addEventListener('change', e => {
   }
   if (e.target.name === 'category' && e.target.form.custom) e.target.form.querySelector('[name=custom]').parentElement.hidden = e.target.value !== '__new';
   if (e.target.id === 'day-pick' && okDay(e.target.value) && e.target.value <= today()) go(`#/day/${e.target.value}`, true);
+  if (e.target.matches('.month-pick') && e.target.value) go(`#/${parseRoute().name}?m=${e.target.value}`, true);
   if (e.target.name === 'split') e.target.form.theirs.parentElement.hidden = e.target.value !== 'custom';
 });
 document.addEventListener('submit', async e => {
