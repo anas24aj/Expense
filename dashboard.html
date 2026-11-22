@@ -169,6 +169,20 @@
   .ev-t select, form.link select { max-width: 100%; width: 100%; }
   form.link { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } form.link label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
   .jr li.split { display: block; padding-bottom: 4px; }
+  .big b.good { color: var(--good, #0f7b3e); } .big b.warn { color: #d97706; } .big b.bad { color: var(--bad, #b42318); }
+  .meter { position: relative; height: 10px; border-radius: 5px; background: var(--surface-2); margin: 10px 0 6px; }
+  .meter i { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--good, #0f7b3e); } .meter i.warn { background: #d97706; } .meter i.bad { background: var(--bad, #b42318); }
+  .meter s { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text-2); }
+  .owed-bars { display: flex; align-items: flex-end; gap: 4px; height: 140px; padding-top: 18px; }
+  .owed-bars div { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; }
+  .owed-bars i { width: 100%; max-width: 28px; border-radius: 4px 4px 0 0; background: var(--debt, #e5533d); opacity: .8; }
+  .owed-bars div:last-child i { opacity: 1; }
+  .owed-bars small { font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .owed-bars b { font-size: 9px; font-weight: 600; color: var(--text-2); white-space: nowrap; margin-bottom: 2px; }
+  details.lb.late > summary .rk .nm small { color: var(--bad, #b42318); }
+  details.lb .rk .nm b, details.lb .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
+  details.lb .rk .v { font-size: 13px; } details.lb .rk .v small { font-size: 11px; }
+  .banner.warn { border-color: #d97706; }
   .jr li.split::before { background: var(--muted); }
   .jr .jr.sub { margin: 6px 0 0 -6px; padding: 8px 0 0 12px; border-left: 2px dashed var(--line); }
   .jr .jr.sub + .jr.sub { border-top: 0; margin-top: 2px; }
@@ -1092,7 +1106,7 @@ function fetchInto(key, url, after) {
       after?.();
     } catch (e) { state.err[key] = e.message || 'no connection'; }
     finally { inflight[url] = null; }
-    if (/^#\/(money|debt|plan|analysis|overview|trail)|^$/.test(location.hash) && !document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus')) render();
+    if (/^#\/(money|debt|plan|analysis|overview|trail|liabilities)|^$/.test(location.hash) && !document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus')) render();
   })();
 }
 function loadMoney() { state.moneyAt = Date.now(); return fetchInto('money', `/api/money?${moneyQs()}`); }
@@ -1726,6 +1740,75 @@ function flowMap(flows) {
   return `<div class="sk"><svg viewBox="-2 -30 ${W + 4} ${H + 56}" role="img" aria-label="Money flow between your accounts">${bands}${nodes}</svg></div>` +
     '<p class="muted small">Band width is the money moved, in ₹ (SAR at today’s rate). Tap a band for its messages.</p>';
 }
+// ---------- Liabilities: what you owe, what's due this month, and whether it was paid ----------
+const owed = (minor, cur) => cur === 'INR' ? rupees(minor) : `${cur} ${fmt(minor)}`;
+// Each loan, card and pay-later plan's status in month m: paid (with the payments as proof), due, overdue/missed.
+function liabBoard(m) {
+  const td = today(), cur = td.slice(0, 7);
+  return (state.money?.holdings || []).filter(isDebt).map(h => {
+    const paid = h.payments.filter(p => p.date.slice(0, 7) === m), got = paid.reduce((a, p) => a + Math.round(p.amount * 100), 0);
+    const dueOn = h.due_day ? `${m}-${pad(Math.min(h.due_day, daysIn(m)))}` : '', left = Math.max(0, h.emi_minor - got);
+    const inDays = dueOn ? dayNum(dueOn) - dayNum(td) : null;
+    const st = !h.emi_minor ? ['none', 'No fixed payment']
+      : m < h.as_of.slice(0, 7) ? ['none', 'Before you added it']
+      : dueOn && dueOn <= h.as_of && !paid.length ? ['none', `Added after this month’s due day · next due ${dayLabel(addM(m, 1) + dueOn.slice(7))}`]
+      : got >= h.emi_minor * .95 ? ['paid', paid.every(p => p.source === 'auto') ? 'Paid · auto-debit' : 'Paid']
+      : h.balance_now <= 0 ? ['paid', 'Closed']
+      : !h.auto && !h.pattern && !paid.length && h.kind === 'loan' ? ['unknown', 'Can’t see its payments: add the loan’s account digits']
+      : !dueOn ? ['unknown', 'No due day set']
+      : inDays > 0 ? ['due', `Due in ${plural(inDays, 'day')}`]
+      : inDays === 0 ? ['due', 'Due today']
+      : [got ? 'late' : 'late', got ? `Part paid · ${owed(left, h.currency)} left` : m < cur ? 'Missed' : `Overdue by ${plural(-inDays, 'day')}`];
+    return { h, paid, got, left: st[0] === 'due' || st[0] === 'late' ? left : 0, dueOn, st: st[0], text: st[1] };
+  });
+}
+// EMIs and card dues as a share of the salary (both in SAR).
+function dti() {
+  const sal = (state.settings?.salary?.amount || 0) * 100;
+  const monthly = (state.money?.holdings || []).filter(h => isDebt(h) && h.balance_now > 0)
+    .reduce((a, h) => a + (h.currency === 'INR' ? sarOf(h.emi_minor) : h.emi_minor), 0);
+  return { sal, monthly, pct: sal ? monthly / sal : null };
+}
+// Warnings worth a banner on Overview (overdue EMIs already have their own).
+function liabAlerts() {
+  if (!state.money) return [];
+  const out = [], td = today();
+  for (const r of liabBoard(td.slice(0, 7)))
+    if (r.h.kind === 'card' && r.st === 'due' && dayNum(r.dueOn) - dayNum(td) <= 3) out.push(`Card bill ${r.text.toLowerCase()} · ${r.h.name} ${owed(r.left, r.h.currency)}`);
+  for (const h of state.money.holdings.filter(h => h.name.startsWith('Pay later') && h.balance_now > 0 && dayNum(td) - dayNum(h.as_of) <= 7))
+    out.push(`New pay-later plan · ${h.name.replace('Pay later · ', '')} ${owed(h.balance_now, h.currency)} left`);
+  const D = dti();
+  if (D.pct > .4) out.push(`Debts take ${Math.round(D.pct * 100)}% of your salary`);
+  return out;
+}
+function liabPage(rt, P) {
+  if (!state.money) return waitFor('Liabilities', [['money', loadMoney]]);
+  const m = P.kind === 'month' ? P.m : P.endMonth, B = liabBoard(m), icon = { paid: '✅', due: '⏳', late: '⚠️', none: '➖', unknown: '❔' };
+  const txn = id => (state.all || []).find(t => t.id === id);
+  const proof = r => r.paid.map(p => { const t = p.source === 'sms' && txn(p.id);
+    return `<div class="ev-t"><b>${esc(owed(Math.round(p.amount * 100), r.h.currency))}</b><span>${esc(dayLabel(p.date))} · ${p.source === 'auto' ? 'taken automatically on its due day (no SMS seen)' : p.source === 'sms' ? 'from the bank SMS' : 'recorded by you'}</span>${t ? `<pre>${esc(t.body)}</pre>` : ''}</div>`; }).join('');
+  const rows = B.sort((a, b) => ['late', 'due', 'unknown', 'paid', 'none'].indexOf(a.st) - ['late', 'due', 'unknown', 'paid', 'none'].indexOf(b.st)).map(r =>
+    `<details class="fl lb ${r.st}"><summary>` + rk({ icon: icon[r.st], name: r.h.name, sub: esc(r.text) + (r.dueOn && r.st !== 'none' ? ` · due ${esc(dayLabel(r.dueOn))}` : ''),
+      valueText: r.h.emi_minor ? esc(owed(r.h.emi_minor, r.h.currency)) : '', vsub: `${esc(owed(r.h.balance_now, r.h.currency))} owed` }) +
+    `</summary><div class="ev">${proof(r) || '<small class="muted">No payment seen this month.</small>'}<a class="sublink" href="#/debt">Edit on the Debt tab ›</a></div></details>`).join('');
+  const left = B.reduce((a, r) => a + toInr(r.left, r.h.currency), 0), late = B.filter(r => r.st === 'late').length;
+  const D = dti(), pct = D.pct == null ? null : Math.round(D.pct * 100), tone = pct == null ? '' : pct > 40 ? 'bad' : pct > 30 ? 'warn' : 'good';
+  const hist = (state.money.history || []).slice(-12), now = state.money.holdings.filter(isDebt).reduce((a, h) => a + toInr(h.balance_now, h.currency), 0);
+  const series = [...hist.filter(x => x.month < today().slice(0, 7)).map(x => [x.month, x.debt_minor]), [today().slice(0, 7), now]];
+  const top = Math.max(1, ...series.map(x => x[1])), change = series.length > 1 ? series.at(-1)[1] - series.at(-2)[1] : null;
+  const alerts = liabAlerts().map(a => `<div class="banner warn"><span>${esc(a)}</span></div>`).join('');
+  return { title: 'Liabilities', sub: 'Loans, cards and pay-later', html: chips(P) + alerts +
+    `<section class="card"><div class="big"><span class="muted">Still to pay in ${esc(monthName(m, 'short'))}</span><b>${rupees(left)}</b></div>` +
+      `<p class="muted small">${late ? `${plural(late, 'payment')} overdue or missed. ` : 'Nothing overdue. '}SAR amounts in ₹ at today’s rate.</p></section>` +
+    card(`${esc(monthName(m))}`, 'tap for proof', rows || empty('No loans or cards yet', '<a href="#/debt">Add them on the Debt tab</a>'), '') +
+    card('Debt-to-income', 'EMIs and card dues ÷ salary', pct == null ? empty('Set your salary on the Plan tab', '<a href="#/plan">Open Plan</a>') :
+      `<div class="big"><span class="muted">${esc(money(D.monthly))} of ${esc(money(D.sal))} a month</span><b class="${tone}">${pct}%</b></div>` +
+      `<div class="meter"><i class="${tone}" style="width:${Math.min(100, pct)}%"></i><s style="left:40%"></s></div>` +
+      `<p class="muted small">${pct > 40 ? 'Above 40%: banks see this as stretched. Close the smallest debt first to free its EMI.' : pct > 30 ? 'Between 30% and 40%: manageable, keep it from rising.' : 'Under 30%: healthy.'}</p>`, '') +
+    card('Total owed, by month', change == null ? 'in ₹' : `${change > 0 ? '▲ up' : '▼ down'} ${rupees(Math.abs(change))} from last month`,
+      `<div class="owed-bars">${series.map(([mm, v]) => `<div><b>${esc(short_inr(v / 100))}</b><i style="height:${(v / top * 85).toFixed(1)}%"></i><small>${esc(monthName(mm, 'short').slice(0, 3))}</small></div>`).join('')}</div>` +
+      '<p class="muted small">From the balances recorded each month on the Debt tab; this month is today’s.</p>', '') };
+}
 function trailPage(rt, P) {
   const url = `/api/trail?from=${P.start}&to=${P.end}`;
   if (state.trailUrl !== url) { state.trail = null; state.trailUrl = url; }
@@ -1913,7 +1996,8 @@ function overview(rt, P, X) {
   const checkin = left ? `<a class="banner" href="#/plan"><span>${esc(monthName(today().slice(0, 7), 'short'))} check-in · ${plural(left, 'step')} left</span>${go1}</a>` : '';
   const Hh = state.money && health(), hcol = { Good: 'good', Fair: 'warn', 'Needs work': 'bad' };
   const healthCard = Hh?.score != null ? `<a class="banner health ${hcol[Hh.rating]}" href="#/health"><span>Money health: <b>${Hh.rating}</b> · ${Hh.score}/100 · ${esc(Hh.checks.find(c => c.tone === 'poor')?.label || Hh.checks.find(c => c.tone === 'fair')?.label || 'all checks good')}</span>${go1}</a>` : '';
-  return { html: chips(P) + hero + healthCard + salaryBanner + checkin + emis + todayCard + coming +
+  const lalerts = liabAlerts().map(a => `<a class="banner" href="#/liabilities"><span>${esc(a)}</span>${go1}</a>`).join('');
+  return { html: chips(P) + hero + healthCard + salaryBanner + checkin + emis + lalerts + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
@@ -1927,6 +2011,7 @@ function overview(rt, P, X) {
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
       ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * worth(h), 0)) : '') +
       ln(`#/trail?${q}`, 'Money trail', 'Between your accounts, on to the loans', '') +
+      ln(`#/liabilities?m=${P.endMonth}`, 'Liabilities', 'Paid, due or missed this month', state.money ? String(liabBoard(P.endMonth).filter(r => r.st === 'late').length || '✓') : '') +
       ln('#/friends', 'Friends', 'Bought for friends, paid back', fmt(friendBalances().reduce((a, e) => a + Math.max(0, e.owed), 0)))) };
 }
 function catRows(groups, total, X, P, f = {}) {
@@ -2167,7 +2252,7 @@ function renderResults() {
 const PAGES = { overview, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage, trail: trailPage };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage, trail: trailPage, liabilities: liabPage };
 const TITLES = { ...Object.fromEntries(TABS.map(([k, label]) => [k, label])), merchants: 'Spending', cards: 'Spending' };
 
 function render() {
