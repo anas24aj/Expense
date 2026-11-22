@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import server
+import statement
 from parse import categorize, compile_rules, merchant_of, parse
 
 RULES = compile_rules(json.loads((Path(__file__).parent / 'rules.json').read_text(encoding='utf-8')))
@@ -152,6 +153,39 @@ class StoreMixin:
 
     def tearDown(self):
         self.db.close()
+
+    def test_statements_trace_salary_to_the_home_loan(self):
+        db = self.db
+        db.run("INSERT INTO holdings (kind, name, currency, balance_minor, pattern, as_of) VALUES ('loan', 'SBI home loan', 'INR', 3000000000, '3876', '2025-01-01')")
+        # The phone already sent the HDFC transfer's SMS: the statement row is skipped and the SMS used instead.
+        server.store_sms(db, 'VM-HDFCBK', 'Rs.1,00,000.00 debited from A/c XX5678 on 01-02-25 by IMPS to SBI SELF', '2025-02-01T09:00:00+05:30')
+        first = server.import_statement(db, 'Al Rajhi', 'bank', 'SAR', '1111', 'rajhi.xlsx', RAJHI)
+        hdfc = server.import_statement(db, 'HDFC', 'bank', 'INR', '5678', 'hdfc.csv', HDFC)
+        server.import_statement(db, 'SBI', 'bank', 'INR', '', 'sbi.pdf', pdf(SBI))
+        self.assertEqual((first['read'], first['new']), (3, 3))
+        self.assertEqual((hdfc['read'], hdfc['new'], hdfc['from_sms']), (3, 2, 1))
+        self.assertEqual(server.import_statement(db, 'HDFC', 'bank', 'INR', '5678', 'hdfc.csv', HDFC)['new'], 0)  # again: nothing new
+        every = server.transactions(db)
+        find = lambda start: next(t for t in every if t['body'].startswith(start))
+        sms = next(t for t in every if not t['statement'])
+        self.assertEqual(sms['account'], 'HDFC')  # its A/c XX5678 is the HDFC account
+        self.assertEqual(find('International transfer')['category'], server.OWN_TRANSFER)  # sent home: not spending
+        self.assertEqual(find('INWARD REMITTANCE ALRAJHI')['category'], server.OWN_TRANSFER)
+        self.assertEqual(find('POS PANDA')['category'], 'Groceries')
+        t = server.trail(db)
+        flows = {(f['from'], f['to']): f for f in t['flows']}
+        self.assertEqual(set(flows), {('Al Rajhi', 'HDFC'), ('HDFC', 'SBI'), ('SBI', 'SBI home loan')})
+        self.assertEqual((flows['Al Rajhi', 'HDFC']['sent'], flows['Al Rajhi', 'HDFC']['got']), ({'SAR': 5000.0}, {'INR': 112500.0}))
+        self.assertEqual(len(t['journeys']), 1)
+        j = t['journeys'][0]
+        self.assertEqual([h['account'] for h in j['hops']], ['Al Rajhi', 'HDFC', 'HDFC', 'SBI', 'SBI'])
+        self.assertEqual((j['end'], j['end_kind']), ('SBI home loan', 'loan'))
+        self.assertEqual([h['likely'] for h in j['hops']], [False, False, True, False, True])
+        # Undo the SBI import: its rows go, and the journey stops at SBI's door.
+        sid = next(r['id'] for r in server.statements(db)['statements'] if r['account'] == 'SBI')
+        server.delete_statement(db, sid)
+        self.assertEqual([h['account'] for h in server.trail(db)['journeys'][0]['hops']], ['Al Rajhi', 'HDFC'])
+        self.assertEqual(server.import_statement(db, 'SBI', 'bank', 'INR', '', 'sbi.pdf', pdf(SBI))['new'], 2)  # can come back
 
     def test_adverts_stored_before_are_ignored_on_start_unless_you_chose(self):
         db = self.db
@@ -337,6 +371,86 @@ class StoreMixin:
             server.set_category(db, 999999, 'Food', True)
 
 
+def xlsx(rows):
+    from openpyxl import Workbook
+    wb = Workbook()
+    for r in rows:
+        wb.active.append(r)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def pdf(lines, password=None):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    out = io.BytesIO()
+    c = canvas.Canvas(out, pagesize=A4, encrypt=password)
+    c.setFont('Courier', 8)
+    for i, line in enumerate(lines):
+        c.drawString(20, 800 - 12 * i, line)
+    c.save()
+    return out.getvalue()
+
+
+# Salary in Saudi, sent home, moved between Indian banks, and on to the home loan.
+RAJHI = xlsx([['كشف حساب'], ['التاريخ', 'البيان', 'مدين', 'دائن', 'الرصيد'],
+              ['2025-01-27', 'راتب Salary ACME', None, 20000, 25000],
+              ['2025-01-28', 'International transfer حوالة دولية HDFC', 5000, None, 20000],
+              ['2025-01-29', 'POS PANDA', 123.45, None, 19876.55]])
+HDFC = b"""Statement of account,,,,,,
+Date,Narration,Chq./Ref.No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance
+30/01/25,INWARD REMITTANCE ALRAJHI,N1,30/01/25,,"1,12,500.00","1,15,000.00"
+01/02/25,IMPS-TO SBI SELF,I2,01/02/25,"1,00,000.00",,"15,000.00"
+02/02/25,UPI-SWIGGY,U3,02/02/25,450.00,,"14,550.00"
+"""
+SBI = ['State Bank of India   Account Statement   INR',
+       'Txn Date     Description                          Debit          Credit         Balance',
+       '05 Feb 2025  TO TRANSFER-INB HOME LOAN 3876      50,000.00                     65,000.00',
+       '             A/C XX3876 EMI',
+       '01 Feb 2025  BY TRANSFER-IMPS HDFC SELF                         1,00,000.00     1,15,000.00',
+       '31 Jan 2025  Opening Balance                                                   15,000.00']
+
+
+class StatementReaderTest(unittest.TestCase):
+    def test_excel_with_arabic_headers(self):
+        got = statement.read_statement(RAJHI)
+        self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in got['rows']],
+                         [('2025-01-27', 2000000, 'credit'), ('2025-01-28', 500000, 'debit'), ('2025-01-29', 12345, 'debit')])
+        self.assertEqual(got['checked'], 2)
+
+    def test_csv_with_indian_numbers(self):
+        rows = statement.read_statement(HDFC)['rows']
+        self.assertEqual([(r['amount_minor'], r['direction'], r['balance_minor']) for r in rows],
+                         [(11250000, 'credit', 11500000), (10000000, 'debit', 1500000), (45000, 'debit', 1455000)])
+
+    def test_pdf_columns_wrapped_narration_and_newest_first(self):
+        got = statement.read_statement(pdf(SBI))
+        self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in got['rows']],
+                         [('2025-02-05', 5000000, 'debit'), ('2025-02-01', 10000000, 'credit')])
+        self.assertIn('XX3876 EMI', got['rows'][0]['desc'])  # the next line continues the narration
+        self.assertEqual(got['currency'], 'INR')
+
+    def test_pdf_without_headers_reads_direction_from_balance(self):
+        rows = statement.read_statement(pdf(['10/03/2025 PURCHASE NOON 1,250.00 8,750.00', '11/03/2025 SALARY 20,000.00 28,750.00',
+                                             '12/03/2025 STC PAY TOPUP 500.00 28,250.00']))['rows']
+        self.assertEqual([r['direction'] for r in rows], ['debit', 'credit', 'debit'])
+
+    def test_locked_pdf_needs_its_password(self):
+        with self.assertRaisesRegex(statement.StatementError, 'locked'):
+            statement.read_statement(pdf(SBI, 'secret'))
+        self.assertEqual(len(statement.read_statement(pdf(SBI, 'secret'), 'secret')['rows']), 2)
+
+    def test_html_xls_and_dates(self):
+        html = (b'<table><tr><td>Txn Date</td><td>Description</td><td>Debit</td><td>Credit</td><td>Balance</td></tr>'
+                b'<tr><td>7 Mar 2025</td><td>ATM WDL</td><td>2,000.00</td><td></td><td>8,000.00</td></tr></table>')
+        self.assertEqual(statement.read_statement(html)['rows'][0]['amount_minor'], 200000)
+        self.assertEqual([statement.day_of(v) for v in ('05/02/2025', '2025-02-05', '05-Feb-25', 'Feb 5, 2025', '13/02/25', '02/13/25', 'x')],
+                         ['2025-02-05', '2025-02-05', '2025-02-05', '2025-02-05', '2025-02-13', '2025-02-13', None])
+        with self.assertRaisesRegex(statement.StatementError, 'no table'):
+            statement.read_statement(b'just,some\ntext,here\n')
+
+
 class DirectConnectionTest(unittest.TestCase):
     def test_neon_pooler_address_becomes_direct(self):
         pooled = 'postgresql://neondb_owner:pw@ep-cool-cat-a1b2c3-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require'
@@ -376,7 +490,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()
@@ -433,6 +547,21 @@ class AppTest(unittest.TestCase):
         os.environ['EXPENSE_TOKEN'] = 'a-different-token-0987654321'  # rotating the token ends old sessions
         self.assertEqual(self.call('GET', '/api/summary', cookie=cookie, **browser)[0], 401)
         os.environ['EXPENSE_TOKEN'] = TOKEN
+
+    def test_statement_upload(self):
+        import base64
+        send = lambda **kw: self.call('POST', '/api/statement', json.dumps({'account': 'HDFC', 'kind': 'bank', 'currency': 'INR', 'file_name': 'h.csv',
+                                                                          'data': base64.b64encode(HDFC).decode(), **kw}).encode())
+        status, out = send()
+        self.assertEqual((status, json.loads(out)['new']), (200, 3))
+        self.assertEqual(send(kind='spaceship')[0], 400)
+        status, out = send(data=base64.b64encode(b'hello').decode())
+        self.assertEqual(status, 422)
+        self.assertIn('no table', json.loads(out)['error'])
+        listed = json.loads(self.call('GET', '/api/statements')[1])
+        self.assertEqual([a['name'] for a in listed['accounts']], ['HDFC'])
+        self.assertEqual(self.call('POST', '/api/statement/delete', json.dumps({'id': listed['statements'][0]['id']}).encode())[0], 200)
+        self.assertEqual(json.loads(self.call('GET', '/api/trail')[1])['accounts'], [])
 
     def test_login_tolerates_spaces_and_reports_missing_setup(self):
         os.environ['EXPENSE_TOKEN'] = f' {TOKEN}\n'  # pasted into Vercel with whitespace

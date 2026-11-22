@@ -138,6 +138,18 @@
   /* Link rows (Insights, settings) */
   .ln { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 0; text-decoration: none; color: inherit; }
   .ln + .ln { border-top: 1px solid var(--line); }
+  .rk .nm b.wrap { white-space: normal; overflow-wrap: anywhere; }
+  .jr { list-style: none; margin: 0; padding: 4px 0 0; }
+  .jr + .jr { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; }
+  .jr li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 0 0 12px 22px; }
+  .jr li::before { content: ''; position: absolute; left: 3px; top: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  .jr li:not(:last-child)::after { content: ''; position: absolute; left: 7px; top: 18px; bottom: 0; border-left: 2px solid var(--line); }
+  .jr li.likely::after { border-left-style: dashed; }
+  .jr li.end::before { background: var(--good, #0f7b3e); }
+  .jr li b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jr li small { grid-column: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jr li .v { grid-row: 1; grid-column: 2; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+  .jr li.end b { color: var(--good, #0f7b3e); }
   .ln .nm { flex: 1; min-width: 0; }
   .ln .nm b { display: block; font-weight: 600; }
   .ln .nm small { display: block; font-size: 12px; color: var(--muted); }
@@ -1008,12 +1020,18 @@ function monthBars(list, endMonth, P, { mini = false, received = false, href = t
       `</span>${mini ? '' : `<span class="m" aria-hidden="true">${new Date(m + '-01T00:00:00').toLocaleDateString('en-GB', { month: 'narrow' })}</span>`}</${href ? 'a' : 'div'}>`;
   }).join('') + '</div>';
 }
+// 'Al Rajhi → HDFC': the other end of a transfer between your accounts (when it is in the list being shown).
+function linkNote(t) {
+  if (!t.linked) return '';
+  const o = (state.all || []).find(x => x.id === t.linked);
+  return ` ${t.direction === 'debit' ? '→' : '←'} ${o ? esc(o.account) : 'your other account'}`;
+}
 function row(t, withDate) {
   const unsure = t.category === 'Uncategorized', ignored = NOT_COUNTED.has(t.category);
   const options = (state.sum?.categories || []).map(c => `<option ${c === t.category ? 'selected' : ''}>${esc(c)}</option>`).join('');
   return `<details class="txn${ignored ? ' ignored' : ''}" data-id="${t.id}" data-merchant="${esc(t.merchant)}" data-key="${esc(ruleKey(t))}" ${unsure ? 'data-unsure' : ''}>` +
     `<summary><span class="emoji" aria-hidden="true">${t.category === OWN_TRANSFER ? '🔁' : ignored ? '🚫' : icon(t.category)}</span>` +
-    `<span class="who"><b>${esc(merName(t.merchant))}</b><small>${unsure ? '<span class="fixme">Needs a category</span>' : ignored ? `${t.category === OWN_TRANSFER ? 'Own transfer' : 'Ignored'}, not counted` : `${esc(t.category)} <span class="pen" aria-hidden="true">✎</span>`} · ${withDate ? dayLabel(t.received_at.slice(0, 10)) + ', ' : ''}${t.received_at.slice(11, 16)}</small><small>💳 ${esc(t.account)}</small>${t.friend ? `<small class="friend-tag">👥 ${esc(friendNote(t))}</small>` : ''}</span>` +
+    `<span class="who"><b>${esc(merName(t.merchant))}</b><small>${unsure ? '<span class="fixme">Needs a category</span>' : ignored ? `${t.category === OWN_TRANSFER ? 'Own transfer' : 'Ignored'}, not counted` : `${esc(t.category)} <span class="pen" aria-hidden="true">✎</span>`} · ${withDate ? dayLabel(t.received_at.slice(0, 10)) + (t.statement ? '' : ', ') : ''}${t.statement ? '' : t.received_at.slice(11, 16)}</small><small>${t.statement ? '📄' : '💳'} ${esc(t.account)}${linkNote(t)}</small>${t.friend ? `<small class="friend-tag">👥 ${esc(friendNote(t))}</small>` : ''}</span>` +
     `<span class="amount ${t.direction}">${t.direction === 'debit' ? '−' : '+'}${fmt(t._c)}</span></summary>` +
     `<pre>${esc(t.body)}</pre>` +
     `<form class="fix"><label>${unsure ? 'Category' : 'Wrong category? Choose the right one'}<select name="category">${unsure ? '<option value="" selected disabled>Choose…</option>' : ''}${options}` +
@@ -1052,7 +1070,7 @@ function fetchInto(key, url, after) {
       after?.();
     } catch (e) { state.err[key] = e.message || 'no connection'; }
     finally { inflight[url] = null; }
-    if (/^#\/(money|debt|plan|analysis|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus')) render();
+    if (/^#\/(money|debt|plan|analysis|overview|trail)|^$/.test(location.hash) && !document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus')) render();
   })();
 }
 function loadMoney() { state.moneyAt = Date.now(); return fetchInto('money', `/api/money?${moneyQs()}`); }
@@ -1077,7 +1095,7 @@ async function loadRate() {
     state.rate = j.rate; ls.set('inrPerSar', j.rate); ls.set('rateAt', Date.now()); ls.set('rateSource', j.source);
     if (j.usd && !ls.get('usdMine')) { state.usd = j.usd; ls.set('inrPerUsd', j.usd); }
     if (j.gold_usd_oz) { state.goldUsdOz = j.gold_usd_oz; ls.set('goldUsdOz', j.gold_usd_oz); ls.set('goldSource', j.gold_source || ''); }
-    if (/^#\/(money|debt|plan|analysis|overview)|^$/.test(location.hash)) render();
+    if (/^#\/(money|debt|plan|analysis|overview|trail)|^$/.test(location.hash)) render();
   } catch { state.rateFailAt = Date.now(); } finally { inflight.rate = false; }
 }
 const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().slice(0, 7));
@@ -1637,6 +1655,33 @@ function friendBalances() {
   }
   return [...m.values()].sort((a, b) => b.owed - a.owed || a.name.localeCompare(b.name));
 }
+// Money trail: how money moved between your accounts (Saudi salary → Indian banks → loans), from statements and SMS.
+const KIND_ICON = { bank: '🏦', card: '💳', wallet: '👛', bnpl: '🧾', loan: '🏠' };
+const inCur = (v, c) => c === 'INR' ? short_inr(v) : `${c === 'SAR' ? 'SAR' : c === 'USD' ? '$' : c} ${Math.round(v).toLocaleString('en')}`;
+const curs = o => Object.entries(o || {}).filter(([, v]) => v).map(([c, v]) => inCur(v, c)).join(' + ') || '0';
+function trailPage(rt, P) {
+  const url = `/api/trail?from=${P.start}&to=${P.end}`;
+  if (state.trailUrl !== url) { state.trail = null; state.trailUrl = url; }
+  if (!state.trail) return waitFor('Money trail', [['trail', () => fetchInto('trail', url)]]);
+  const T = state.trail, add = '<a class="more" href="/import#statement">Add bank statements</a>';
+  const flows = T.flows.map(f => rk({ icon: f.kind === 'loan' ? '🏠' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
+    sub: `${plural(f.count, f.kind === 'loan' ? 'payment' : 'transfer')} · last ${esc(dayLabel(f.last))}`,
+    valueText: esc(curs(f.sent)), vsub: Object.keys(f.got).join() !== Object.keys(f.sent).join() ? `→ ${esc(curs(f.got))}` : '' })).join('');
+  const journey = j => `<ol class="jr">${j.hops.map((h, i) => {
+    const arrive = i % 2 === 1 || i === j.hops.length - 1 && j.end_kind !== 'loan';
+    return `<li class="${j.hops[i + 1]?.likely ? 'likely' : ''}"><b>${KIND_ICON[h.kind] || '🏦'} ${esc(h.account)}</b><span class="v">${esc(inCur(h.amount, h.currency))}</span>` +
+      `<small>${arrive ? 'arrived' : 'sent'} ${esc(dayLabel(h.day))}${h.likely ? ' · probably the same money' : ''}${h.desc ? ' · ' + esc(h.desc) : ''}</small></li>`;
+  }).join('')}${j.end_kind === 'loan' ? `<li class="end"><b>🏠 ${esc(j.end)}</b><small>loan payment</small></li>` : ''}</ol>`;
+  const accts = T.accounts.map(a => rk({ href: link('account', a.name, {}, P), icon: KIND_ICON[a.kind] || '🏦', nameHtml: splitAcct(a.name),
+    sub: `${plural(a.count, 'transaction')} · in ${esc(curs(a.in))}`, valueText: esc(curs(a.out)), vsub: 'out' })).join('');
+  return { title: 'Money trail', sub: 'Between your accounts', html: chips(P) +
+    card('How money moved', periodText(P), flows || empty('No transfers between your accounts yet', 'Add statements from each bank, card and wallet, and give each account its last 4 digits, so the two sides of a transfer can be matched.'), '') +
+    (T.journeys.length ? card('Journeys', 'newest first', T.journeys.slice(0, 15).map(journey).join(''), '') : '') +
+    card('Accounts', 'in this period', (accts || empty('No accounts yet')) + add, '') +
+    '<section class="card"><h2>How this is worked out</h2><ul class="muted"><li>A transfer is matched when the same amount leaves one account and arrives in another within 4 days: SAR to ₹ at any rate from 20 to 24.5, with transfer or remittance words on either side.</li>' +
+    '<li>After money arrives, the next transfer or loan payment out of that account within 10 days (and no larger) is shown as <i>probably the same money</i>, dashed.</li>' +
+    '<li>Loan payments are found from the account digits you gave each loan on the Debt tab. Matched transfers count as Own transfer, not spending.</li></ul></section>' };
+}
 function friendsPage(rt) {
   const all = friendBalances();
   if (!rt.arg) {
@@ -1737,6 +1782,7 @@ function overview(rt, P, X) {
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
       ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * worth(h), 0)) : '') +
+      ln(`#/trail?${q}`, 'Money trail', 'Between your accounts, on to the loans', '') +
       ln('#/friends', 'Friends', 'Bought for friends, paid back', fmt(friendBalances().reduce((a, e) => a + Math.max(0, e.owed), 0)))) };
 }
 function catRows(groups, total, X, P, f = {}) {
@@ -1977,7 +2023,7 @@ function renderResults() {
 const PAGES = { overview, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage, trail: trailPage };
 const TITLES = { ...Object.fromEntries(TABS.map(([k, label]) => [k, label])), merchants: 'Spending', cards: 'Spending' };
 
 function render() {

@@ -22,13 +22,19 @@ from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
+import base64
+from bisect import bisect_left
+from datetime import date
+
 from parse import AD, ARABIC_DIGITS, account_of, categorize, compile_rules, merchant_of, parse
+from statement import StatementError, read_statement, span
 
 HERE = Path(__file__).parent
 RULES = HERE / 'rules.json'
 MAX_BODY = 16 * 1024
 VERSION = os.environ.get('VERCEL_GIT_COMMIT_SHA', 'local')[:7]  # which commit is live; Vercel sets this
 MAX_IMPORT_BODY, MAX_IMPORT_BATCH = 2 * 1024 * 1024, 500  # one upload batch from the import page
+MAX_STATEMENT_BODY = 4_400_000  # Vercel refuses request bodies over 4.5 MB; the file arrives base64 (a 3.2 MB file)
 SESSION_DAYS = 30
 PAGES = {'/': 'dashboard.html', '/import': 'import.html'}
 # What Android needs to install the site as an app. No personal data, and Chrome fetches the manifest without
@@ -78,6 +84,14 @@ PLAN_STATUS = {'planned', 'done', 'skipped'}
 PLAN_MONTHS = 600  # 50 years: a loan whose EMI doesn't cover its interest never ends
 # SMS of transactions you deleted, so the phone sending them again (or an import) doesn't bring them back.
 DELETED_SCHEMA = 'CREATE TABLE IF NOT EXISTS deleted_sms (body TEXT PRIMARY KEY)'
+# Your bank accounts, cards, wallets (STC Pay, PhonePe…), buy-now-pay-later (Tamara, Tabby) and loan accounts, named when
+# you import a statement. digits: the account's or card's last 4, so its SMS ('A/c XX1234') show under the same name.
+ACCOUNTS_SCHEMA = "CREATE TABLE IF NOT EXISTS accounts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, currency TEXT NOT NULL, digits TEXT NOT NULL DEFAULT '')"
+ACCOUNT_KINDS = {'bank', 'card', 'wallet', 'bnpl', 'loan'}
+# One row per imported statement file; its transactions carry statement_id, so the import can be undone.
+STATEMENTS_SCHEMA = '''CREATE TABLE IF NOT EXISTS statements (id {id} PRIMARY KEY, account TEXT NOT NULL, file_name TEXT NOT NULL,
+  imported_at TEXT NOT NULL, first_day TEXT, last_day TEXT, read_rows INTEGER NOT NULL, new_rows INTEGER NOT NULL,
+  sms_rows INTEGER NOT NULL, checked INTEGER NOT NULL)'''
 # A receipt per SMS the phone sends (time, sender, what happened; never the text), so you can check delivery.
 DELIVERIES_SCHEMA = 'CREATE TABLE IF NOT EXISTS phone_deliveries (id {id} PRIMARY KEY, at TEXT NOT NULL, sender TEXT NOT NULL, outcome TEXT NOT NULL)'
 DELIVERY_DAYS = 7
@@ -133,7 +147,7 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         if url not in DB._schema_ready:  # once per process, not per request
             self.run(schema)
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
             DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
@@ -150,6 +164,11 @@ class DB:
         if 'auto' not in cols:
             self.run('ALTER TABLE holdings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0')
             self.run("UPDATE holdings SET auto = 1 WHERE kind = 'loan'")
+        # transactions.statement_id: the statement a row came from (none for SMS)
+        cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions'")}
+                if self.pg else {r['name'] for r in self.run('PRAGMA table_info(transactions)')})
+        if 'statement_id' not in cols:
+            self.run('ALTER TABLE transactions ADD COLUMN statement_id BIGINT')
 
     @staticmethod
     def _connect(url):
@@ -168,7 +187,7 @@ class DB:
         statement: one round trip per row could outlast the request on a slow link."""
         has_category = {r['txn_id'] for r in self.run('SELECT txn_id FROM txn_categories')}
         adverts, fixes = [], []
-        for r in self.run('SELECT id, sender, body, amount_minor, currency, direction FROM transactions'):
+        for r in self.run('SELECT id, sender, body, amount_minor, currency, direction FROM transactions WHERE statement_id IS NULL'):
             if AD_SENDER.search(r['sender'].strip()) or AD.search(r['body']):
                 if r['id'] not in has_category:
                     adverts.append(r['id'])
@@ -285,11 +304,16 @@ def transactions(db, month=None, currency=None):
     # or the dashboard sees "changed" data on each load and redraws under your finger.
     rows = db.run('SELECT * FROM transactions ORDER BY received_at DESC, id DESC')
     own = own_transfers(rows, overrides)
+    named = {a['digits']: a['name'] for a in db.run("SELECT name, digits FROM accounts WHERE digits != ''")}
+    acct = {r['id']: r['sender'] if r['statement_id'] else named.get(account_of(r['body'])[-4:]) or account_label(r['sender'], r['body'])
+            for r in rows}
+    linked = links(rows, acct, overrides)
+    own |= set(linked)
     result = []
     for r in rows:
         if (month and not r['received_at'].startswith(month)) or (currency and r['currency'] != currency):
             continue
-        merchant = merchant_of(r['body'])
+        merchant = r['merchant'] if r['statement_id'] else merchant_of(r['body'])
         f = friends.get(r['id'])
         # A credit from a friend is all theirs (a repayment); a debit is theirs up to its amount.
         theirs = 0 if not f else r['amount_minor'] if r['direction'] == 'credit' else min(f['theirs_minor'], r['amount_minor'])
@@ -297,7 +321,7 @@ def transactions(db, month=None, currency=None):
             'id': r['id'], 'received_at': r['received_at'], 'sender': r['sender'], 'body': r['body'],
             'amount': r['amount_minor'] / 100, 'currency': r['currency'], 'direction': r['direction'],
             'merchant': merchant,
-            'account': account_label(r['sender'], r['body']),
+            'account': acct[r['id']], 'statement': bool(r['statement_id']), 'linked': linked.get(r['id']),
             'friend': f['friend'] if f else '', 'theirs': theirs / 100, 'settled': bool(f and f['settled']),
             'category': overrides.get(r['id']) or (OWN_TRANSFER if r['id'] in own else None)
                         or (merchant and for_merchant(merchant))
@@ -347,6 +371,204 @@ def own_transfers(rows, overrides):
         if cid is not None and gap <= PAIR_WINDOW_SECONDS:
             paired |= {r['id'], cid}
     return paired
+
+
+# Words that make a debit and a credit in two of your accounts days apart (or in two currencies) one movement of money:
+# transfers, remittances home, wallet top-ups, card bills and loan repayments.
+LINK_WORDS = re.compile(r'\b(?:remit\w*|inward|outward|international|swift|foreign|nre|nro|western union|moneygram|tahweel|enjaz|'
+                        r'barq|stc ?pay|rajhi|wallet|top ?-?up|load(?:ed)?|card ?payment|cc ?payment|payment (?:received|thank)|'
+                        r'repayment|emi|loan|by transfer|to transfer)\b|حوالة|تحويل|سداد', re.I)
+# Credit/debit amount ratio for money changing currency on the way (₹ per SAR, ₹ per $, $ per SAR), with room for fees and
+# the rates of the last few years.
+FX_RATIO = {('SAR', 'INR'): (20.0, 24.5), ('USD', 'INR'): (78.0, 92.0), ('SAR', 'USD'): (0.255, 0.27)}
+LINK_DAYS = 4
+
+
+def links(rows, acct, overrides):
+    """{debit id: credit id, credit id: debit id} for money that left one of your accounts and arrived in another:
+    the same amount (or the same at an exchange rate) within LINK_DAYS, with transfer words on either side.
+    Pairs of two SMS in the same currency are left to own_transfers (an hour apart at most), so a UPI payment and
+    an unrelated refund of the same amount days later don't pair. Nearest in time first; each row pairs once."""
+    day = {r['id']: date.fromisoformat(r['received_at'][:10]) for r in rows}
+    credits = defaultdict(list)  # currency -> [(day, id)] sorted
+    for r in rows:
+        if r['direction'] == 'credit' and r['id'] not in overrides:
+            credits[r['currency']].append((day[r['id']], r['id']))
+    for v in credits.values():
+        v.sort()
+    by_id = {r['id']: r for r in rows}
+    paired = {}
+    for d in sorted((r for r in rows if r['direction'] == 'debit' and r['id'] not in overrides), key=lambda r: r['received_at']):
+        best = None
+        for cur, lo_hi in [(d['currency'], None)] + [(c2, rng) for (c1, c2), rng in FX_RATIO.items() if c1 == d['currency']]:
+            lst = credits.get(cur, [])
+            for k in range(bisect_left(lst, (day[d['id']], -1)), len(lst)):
+                when, cid = lst[k]
+                gap = (when - day[d['id']]).days
+                if gap > LINK_DAYS:
+                    break
+                c = by_id[cid]
+                if cid in paired or acct[cid] == acct[d['id']]:
+                    continue
+                if lo_hi is None:
+                    if c['amount_minor'] != d['amount_minor'] or not (d['statement_id'] or c['statement_id']):
+                        continue
+                elif not lo_hi[0] <= c['amount_minor'] / d['amount_minor'] <= lo_hi[1]:
+                    continue
+                if not (LINK_WORDS.search(d['body']) or LINK_WORDS.search(c['body']) or TRANSFER.search(d['body']) or TRANSFER.search(c['body'])):
+                    continue
+                if best is None or gap < best[0]:
+                    best = (gap, cid)
+                break  # the nearest in this currency
+        if best:
+            paired[d['id']], paired[best[1]] = best[1], d['id']
+    return paired
+
+
+def import_statement(db, account, kind, currency, digits, file_name, data, password=None):
+    """Store a statement's transactions under `account`. A row that an SMS already stored shows (same amount, way and
+    currency within 2 days, and the same last 4 digits when both have them) is skipped: the SMS stays. Importing the
+    same file again adds nothing. Returns the statement's summary."""
+    got = read_statement(data, password)
+    rows = got['rows']
+    if not rows:
+        raise StatementError('no transactions were found in this file')
+    first, last = span(rows)
+    db.run('INSERT INTO accounts (name, kind, currency, digits) VALUES (:n, :k, :c, :d) '
+           'ON CONFLICT (name) DO UPDATE SET kind = :k, currency = :c, digits = :d', n=account, k=kind, c=currency, d=digits)
+    sms = [r for r in db.run('SELECT id, received_at, body, amount_minor, direction FROM transactions '
+                             'WHERE statement_id IS NULL AND currency = :c AND received_at >= :a AND received_at < :b',
+                             c=currency, a=(date.fromisoformat(first) - timedelta(days=3)).isoformat(),
+                             b=(date.fromisoformat(last) + timedelta(days=4)).isoformat())]
+    used, fresh, seen = set(), [], defaultdict(int)
+    for r in rows:
+        twin = next((m for m in sms if m['id'] not in used and m['amount_minor'] == r['amount_minor'] and m['direction'] == r['direction']
+                     and abs((date.fromisoformat(m['received_at'][:10]) - date.fromisoformat(r['day'])).days) <= 2
+                     and not (digits and account_of(m['body'])[-4:].isdigit() and account_of(m['body'])[-4:] != digits)), None)
+        if twin:
+            used.add(twin['id'])
+            continue
+        amount = f"{currency} {r['amount_minor'] / 100:,.2f}"
+        body = (f"{r['desc'] or 'No description'} · {'Paid' if r['direction'] == 'debit' else 'Received'} {amount} · {account}, {r['day']}"
+                + (f" · balance {r['balance_minor'] / 100:,.2f}" if r['balance_minor'] is not None else ''))
+        seen[body] += 1
+        if seen[body] > 1:
+            body += f' · #{seen[body]}'  # two identical rows in one file are two transactions
+        fresh.append({'received_at': f"{r['day']}T12:00:00{'+05:30' if currency == 'INR' else '+03:00'}", 'sender': account,
+                      'body': body, 'amount_minor': r['amount_minor'], 'currency': currency, 'direction': r['direction'],
+                      'merchant': ' '.join(r['desc'].split())[:80]})
+    deleted = {r['body'] for r in db.run('SELECT body FROM deleted_sms')} if fresh else set()
+    fresh = [f for f in fresh if f['body'] not in deleted]
+    sid = db.run('INSERT INTO statements (account, file_name, imported_at, first_day, last_day, read_rows, new_rows, sms_rows, checked) '
+                 'VALUES (:a, :f, :t, :x, :y, :n, 0, :s, :k) RETURNING id', a=account, f=file_name[:120],
+                 t=datetime.now(timezone.utc).isoformat(timespec='seconds'), x=first, y=last, n=len(rows), s=len(used), k=got['checked'])[0]['id']
+    new = 0
+    columns = ('received_at', 'sender', 'body', 'amount_minor', 'currency', 'direction', 'merchant')
+    for i in range(0, len(fresh), 300):
+        chunk = fresh[i:i + 300]
+        values = ', '.join('(' + ', '.join(f':{c}{n}' for c in columns) + f', :sid)' for n in range(len(chunk)))
+        new += len(db.run(f'INSERT INTO transactions ({", ".join(columns)}, statement_id) VALUES {values} ON CONFLICT (body) DO NOTHING RETURNING id',
+                          sid=sid, **{f'{c}{n}': row[c] for n, row in enumerate(chunk) for c in columns}))
+    db.run('UPDATE statements SET new_rows = :n WHERE id = :id', n=new, id=sid)
+    return {'id': sid, 'account': account, 'kind': got['kind'], 'first_day': first, 'last_day': last, 'read': len(rows),
+            'new': new, 'from_sms': len(used), 'already': len(fresh) - new, 'checked': got['checked'], 'currency_in_file': got['currency']}
+
+
+def statements(db):
+    return {'accounts': db.run('SELECT * FROM accounts ORDER BY name'),
+            'statements': db.run('SELECT * FROM statements ORDER BY imported_at DESC, id DESC')}
+
+
+def delete_statement(db, sid):
+    """Undo an import: its transactions go (and can be imported again), the account stays."""
+    if not db.run('SELECT id FROM statements WHERE id = :id', id=sid):
+        raise KeyError('no such statement')
+    for table, key in (('txn_categories', 'txn_id'), ('txn_friends', 'txn_id')):
+        db.run(f'DELETE FROM {table} WHERE {key} IN (SELECT id FROM transactions WHERE statement_id = :id)', id=sid)
+    db.run('DELETE FROM transactions WHERE statement_id = :id', id=sid)
+    db.run('DELETE FROM statements WHERE id = :id', id=sid)
+
+
+WALLETS = re.compile(r'stc ?pay|urpay|barq|phonepe|phone pe|gpay|google pay|paytm|amazon pay|mobikwik|wallet', re.I)
+BNPL = re.compile(r'tamara|tabby|postpay|spotii|simpl|lazypay', re.I)
+FOLLOW_DAYS = 10
+
+
+def trail(db, first=None, last=None):
+    """Where money went between your accounts: each account's in and out, the flows between accounts (and on to
+    loans), and journeys: a transfer, then the next transfer or loan payment out of the account it reached
+    (likely the same money: within FOLLOW_DAYS and no more than what arrived), and so on."""
+    every = transactions(db)
+    by_id = {t['id']: t for t in every}
+    kinds = {a['name']: a['kind'] for a in db.run('SELECT name, kind FROM accounts')}
+    loans = [h for h in db.run('SELECT id, name, kind, currency, pattern FROM holdings') if h['kind'] in DEBTS and h['pattern'].strip()]
+    loan_of = lambda t: next((h['name'] for h in loans if t['direction'] == 'debit' and h['currency'] == t['currency']
+                              and h['pattern'].strip().lower() in t['body'].lower()), None)
+    inside = lambda t: (not first or t['received_at'][:10] >= first) and (not last or t['received_at'][:10] <= last)
+    kind_of = lambda name: kinds.get(name) or ('wallet' if WALLETS.search(name) else 'bnpl' if BNPL.search(name)
+                                               else 'card' if 'Card' in name else 'bank')
+    accounts = {}
+    for t in every:
+        if not inside(t) or t['category'] == IGNORED:
+            continue
+        a = accounts.setdefault(t['account'], {'name': t['account'], 'kind': kind_of(t['account']), 'in': defaultdict(float),
+                                               'out': defaultdict(float), 'count': 0, 'last': ''})
+        a['in' if t['direction'] == 'credit' else 'out'][t['currency']] += t['amount']
+        a['count'] += 1
+        a['last'] = max(a['last'], t['received_at'][:10])
+    flows = {}
+
+    def flow(src, dst, kind, sent, got):
+        f = flows.setdefault((src, dst), {'from': src, 'to': dst, 'kind': kind, 'count': 0, 'sent': defaultdict(float), 'got': defaultdict(float), 'last': ''})
+        f['count'] += 1
+        f['sent'][sent['currency']] += sent['amount']
+        f['got'][got['currency']] += got['amount']
+        f['last'] = max(f['last'], sent['received_at'][:10])
+    for t in every:
+        if t['direction'] == 'debit' and inside(t):
+            if t['linked'] in by_id:
+                flow(t['account'], by_id[t['linked']]['account'], 'transfer', t, by_id[t['linked']])
+            elif name := loan_of(t):
+                flow(t['account'], name, 'loan', t, t)
+    # Journeys: after money arrives in an account, the next transfer/loan payment out of it.
+    out_of = defaultdict(list)
+    for t in sorted(every, key=lambda t: t['received_at']):
+        if t['direction'] == 'debit' and (t['linked'] in by_id or loan_of(t)):
+            out_of[t['account']].append(t)
+    nxt, used = {}, set()
+    for c in sorted((t for t in every if t['direction'] == 'credit' and t['linked'] in by_id), key=lambda t: t['received_at']):
+        day = date.fromisoformat(c['received_at'][:10])
+        for d in out_of[c['account']]:
+            gap = (date.fromisoformat(d['received_at'][:10]) - day).days
+            if gap < 0 or d['id'] in used or d['currency'] != c['currency']:
+                continue
+            if gap > FOLLOW_DAYS:
+                break
+            if 0.3 * c['amount'] <= d['amount'] <= 1.02 * c['amount']:
+                nxt[c['id']] = d
+                used.add(d['id'])
+                break
+    hop = lambda t, likely: {'id': t['id'], 'account': t['account'], 'kind': kind_of(t['account']), 'day': t['received_at'][:10],
+                             'amount': t['amount'], 'currency': t['currency'], 'desc': t['merchant'] or wording(t['body'])[len(WORDING):][:60], 'likely': likely}
+    journeys = []
+    for d in sorted((t for t in every if t['direction'] == 'debit' and t['id'] not in used and (t['linked'] in by_id)), key=lambda t: t['received_at']):
+        hops, end, t, likely = [], None, d, False
+        while t is not None and len(hops) < 12:
+            hops.append(hop(t, likely))
+            if t['linked'] in by_id:
+                c = by_id[t['linked']]
+                hops.append(hop(c, False))
+                t, likely = nxt.get(c['id']), True
+            else:
+                end = loan_of(t)
+                t = None
+        last_hop = hops[-1]
+        journeys.append({'hops': hops, 'end': end or last_hop['account'], 'end_kind': 'loan' if end else last_hop['kind']})
+    journeys = [j for j in journeys if inside(by_id[j['hops'][0]['id']]) or inside(by_id[j['hops'][-1]['id']])]
+    plain = lambda d: {k: round(v, 2) for k, v in d.items()}
+    return {'accounts': sorted(({**a, 'in': plain(a['in']), 'out': plain(a['out'])} for a in accounts.values()), key=lambda a: -a['count']),
+            'flows': sorted(({**f, 'sent': plain(f['sent']), 'got': plain(f['got'])} for f in flows.values()), key=lambda f: (-f['count'], f['from'])),
+            'journeys': journeys[::-1][:60]}
 
 
 WORDING = 'sms:'  # merchant_categories keys starting with this are message wordings, not merchant names
@@ -1031,12 +1253,28 @@ def _app(environ, start_response):
             gone = int(read_json(environ, MAX_BODY)['id'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/statement'):
+        try:
+            upload = read_json(environ, MAX_STATEMENT_BODY)
+            name, kind, cur = ' '.join(str(upload['account']).split())[:60], upload['kind'], upload['currency']
+            digits = re.sub(r'\D', '', str(upload.get('digits') or ''))[-4:]
+            if not name or kind not in ACCOUNT_KINDS or cur not in ('SAR', 'INR', 'USD'):
+                raise ValueError(f'account name, kind ({sorted(ACCOUNT_KINDS)}) and currency (SAR/INR/USD) are required')
+            upload = (name, kind, cur, digits, str(upload.get('file_name') or 'statement')[:120],
+                      base64.b64decode(upload['data'], validate=True), str(upload.get('password') or '') or None)
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/statement/delete'):
+        try:
+            undone = int(read_json(environ, MAX_BODY)['id'])
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/friend/settle'):
         try:
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -1134,6 +1372,24 @@ def _app(environ, start_response):
                 snapshot(db, result)
             result['history'] = db.run('SELECT * FROM snapshots ORDER BY month')
             return respond('200 OK', result)
+        if path == '/api/statement':
+            try:
+                return respond('200 OK', import_statement(db, *upload))
+            except StatementError as e:
+                return respond('422 Unprocessable Entity', {'error': str(e)})
+            except Exception as e:  # a file the readers choke on: say so instead of a bare 500
+                print(f'statement import failed: {type(e).__name__}: {e}', file=sys.stderr)
+                return respond('422 Unprocessable Entity', {'error': f'could not read this file ({type(e).__name__}). Try the Excel or CSV download instead.'})
+        if path == '/api/statement/delete':
+            try:
+                delete_statement(db, undone)
+            except KeyError:
+                return respond('404 Not Found', {'error': 'no such statement'})
+            return respond('200 OK', statements(db))
+        if path == '/api/statements':
+            return respond('200 OK', statements(db))
+        if path == '/api/trail':
+            return respond('200 OK', trail(db, query.get('from'), query.get('to')))
         if path == '/api/friend/settle':
             settle_friend(db, square, query.get('currency') or 'SAR')
             return respond('200 OK', {'saved': True, **refreshed(db, query)})

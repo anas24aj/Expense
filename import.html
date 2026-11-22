@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Import old SMS · Expenses</title>
+<title>Import · Expenses</title>
 <style>
   :root {
     color-scheme: light;
@@ -41,16 +41,52 @@
   .status.ok { color: var(--good); } .status.err { color: var(--bad); }
   .done a { display: inline-block; margin-top: 12px; color: var(--accent); font-weight: 600; }
   [hidden] { display: none !important; }
-  textarea, input[type=date], input[type=time] { width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  textarea, select, input[type=date], input[type=time], input[type=text], input[type=password] { width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   textarea { min-height: 120px; resize: vertical; }
   .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
   .row input { min-width: 0; }
   .row label { font-size: 13px; color: var(--text-2); display: grid; gap: 4px; }
+  .row .wide { grid-column: 1 / -1; }
+  .stmts { margin-top: 14px; display: grid; gap: 8px; }
+  .stmts h3 { font-size: 13px; margin: 6px 0 0; color: var(--text-2); }
+  .stmt { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; }
+  .stmt b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stmt span { color: var(--muted); }
+  .stmt button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; }
+  .results { margin: 10px 0 0; padding-left: 18px; font-size: 14px; }
+  .results li { margin: 4px 0; } .results .err { color: var(--bad); }
 </style>
 </head>
 <body>
 <main>
-  <div class="bar"><a href="/" aria-label="Back to dashboard">‹</a><h1>Import old SMS</h1></div>
+  <div class="bar"><a href="/" aria-label="Back to dashboard">‹</a><h1>Import</h1></div>
+
+  <section class="card" id="statement">
+    <h2>Bank, card or wallet statement</h2>
+    <p class="note" style="margin:0 0 10px">PDF, Excel or CSV, as downloaded from the bank's website or app (Al Rajhi, SNB, SBI, HDFC, STC Pay, Tamara, Tabby…). For two years, choose all of one account's files at once. Importing a file again adds nothing twice, and transactions your phone already sent are kept as they are.</p>
+    <form id="stmt">
+      <label class="pick">
+        <input type="file" id="stmt-file" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,application/pdf">
+        <strong>Choose statement files</strong>
+        <span id="stmt-name">one account at a time</span>
+      </label>
+      <div class="row">
+        <label class="wide">Account name<input type="text" id="acct" list="acct-list" required maxlength="60" placeholder="e.g. Al Rajhi salary, SBI home loan"></label>
+        <datalist id="acct-list"></datalist>
+        <label>Type<select id="kind">
+          <option value="bank">Bank account</option><option value="card">Credit card</option><option value="wallet">Wallet / UPI (STC Pay, PhonePe…)</option>
+          <option value="bnpl">Pay later (Tamara, Tabby)</option><option value="loan">Loan account</option></select></label>
+        <label>Currency<select id="cur"><option>SAR</option><option value="INR">INR (₹)</option><option>USD</option></select></label>
+        <label>Last 4 digits<input type="text" id="digits" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="of the account or card"></label>
+        <label>PDF password<input type="password" id="pw" autocomplete="off" placeholder="if it's locked"></label>
+      </div>
+      <p class="note">The last 4 digits let SMS from this account show under the same name. The password only opens the file; it is never saved.</p>
+      <button class="primary" id="stmt-go">Import statement</button>
+      <div class="progress" aria-hidden="true"><i id="stmt-bar"></i></div>
+      <ul class="results" id="stmt-results" aria-live="polite"></ul>
+    </form>
+    <div class="stmts" id="stmt-list"></div>
+  </section>
 
   <section class="card" id="paste-card">
     <h2>Paste a bank SMS</h2>
@@ -219,6 +255,73 @@ $('paste').addEventListener('submit', async e => {
   } catch (err) {
     status.className = 'status err'; status.textContent = `Could not add it: ${err.message}`;
   } finally { $('add').disabled = false; }
+});
+
+// ---------- Statements ----------
+const MAX_FILE = 3.2 * 1048576;  // the site accepts uploads up to 4.5 MB, and the file travels as base64
+let accounts = [];
+const guessKind = n => /stc ?pay|urpay|barq|phone ?pe|gpay|google pay|paytm|wallet/i.test(n) ? 'wallet' : /tamara|tabby|postpay/i.test(n) ? 'bnpl'
+  : /loan/i.test(n) ? 'loan' : /card|visa|master/i.test(n) ? 'card' : null;
+const esc = v => String(v).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const nice = d => d ? new Date(d + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+function showStatements(data) {
+  accounts = data.accounts;
+  $('acct-list').innerHTML = accounts.map(a => `<option value="${esc(a.name)}">`).join('');
+  const by = {};
+  for (const st of data.statements) (by[st.account] ||= []).push(st);
+  $('stmt-list').innerHTML = Object.entries(by).map(([name, list]) => `<h3>${esc(name)}</h3>` + list.map(st =>
+    `<div class="stmt"><div><b>${esc(st.file_name)}</b><span>${nice(st.first_day)} – ${nice(st.last_day)} · ${st.new_rows} added${st.sms_rows ? ` · ${st.sms_rows} already from SMS` : ''}</span></div>` +
+    `<button type="button" data-undo="${st.id}" aria-label="Undo the import of ${esc(st.file_name)}">Undo</button></div>`).join('')).join('');
+}
+async function api(url, body) {
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(out.error || `the server answered ${r.status}`);
+  return out;
+}
+api('/api/statements').then(showStatements).catch(() => {});
+$('acct').addEventListener('change', () => {
+  const a = accounts.find(x => x.name.toLowerCase() === $('acct').value.trim().toLowerCase());
+  if (a) { $('kind').value = a.kind; $('cur').value = a.currency; $('digits').value = a.digits; }
+  else if (guessKind($('acct').value)) $('kind').value = guessKind($('acct').value);
+});
+$('stmt-file').addEventListener('change', () => {
+  const n = $('stmt-file').files.length;
+  $('stmt-name').textContent = n ? `${n} file${n > 1 ? 's' : ''} chosen` : 'one account at a time';
+  $('stmt-results').innerHTML = '';
+});
+const base64 = f => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = () => fail(r.error); r.readAsDataURL(f); });
+$('stmt').addEventListener('submit', async e => {
+  e.preventDefault();
+  const files = [...$('stmt-file').files], out = $('stmt-results');
+  out.innerHTML = files.length ? '' : '<li class="err">Choose the statement files first.</li>';
+  if (!files.length) return;
+  $('stmt-go').disabled = true;
+  let done = 0;
+  for (const f of files) {
+    const li = document.createElement('li'); out.append(li);
+    li.textContent = `${f.name}: reading…`;
+    try {
+      if (f.size > MAX_FILE) throw new Error('larger than 3 MB: download it month by month, or as Excel/CSV');
+      const r = await api('/api/statement', { account: $('acct').value.trim(), kind: $('kind').value, currency: $('cur').value,
+        digits: $('digits').value.trim(), password: $('pw').value, file_name: f.name, data: await base64(f) });
+      li.textContent = `${f.name}: ${r.read} transactions, ${nice(r.first_day)} – ${nice(r.last_day)}. ${r.new} added` +
+        (r.from_sms ? `, ${r.from_sms} already from SMS` : '') + (r.already ? `, ${r.already} already imported` : '') +
+        (r.checked ? `. The running balance confirms ${r.checked}.` : '.') +
+        (r.currency_in_file && r.currency_in_file !== $('cur').value ? ` Check the currency: the file mentions ${r.currency_in_file}.` : '');
+    } catch (err) { li.className = 'err'; li.textContent = `${f.name}: ${err.message}`; }
+    $('stmt-bar').style.width = `${(++done / files.length * 100).toFixed(0)}%`;
+  }
+  $('pw').value = '';
+  $('stmt-go').disabled = false;
+  api('/api/statements').then(showStatements).catch(() => {});
+});
+$('stmt-list').addEventListener('click', async e => {
+  const b = e.target.closest('[data-undo]');
+  if (!b || !confirm('Remove this statement\'s transactions? You can import the file again later.')) return;
+  b.disabled = true;
+  try { showStatements(await api('/api/statement/delete', { id: +b.dataset.undo })); } catch (err) { b.disabled = false; alert(err.message); }
 });
 
 $('file').addEventListener('change', async () => {
