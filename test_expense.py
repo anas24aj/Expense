@@ -174,16 +174,16 @@ class StoreMixin:
         self.assertEqual(find('POS PANDA')['category'], 'Groceries')
         t = server.trail(db)
         flows = {(f['from'], f['to']): f for f in t['flows']}
-        self.assertEqual(set(flows), {('Al Rajhi', 'HDFC'), ('HDFC', 'SBI'), ('SBI', 'SBI home loan')})
+        self.assertEqual(set(flows), {('Salary', 'Al Rajhi'), ('Al Rajhi', 'HDFC'), ('HDFC', 'SBI'), ('SBI', 'SBI home loan')})
         self.assertEqual((flows['Al Rajhi', 'HDFC']['sent'], flows['Al Rajhi', 'HDFC']['got']), ({'SAR': 5000.0}, {'INR': 112500.0}))
         self.assertEqual(len(t['journeys']), 1)
         path = lambda n: [(n['way'], n['account'], n['likely'])] + (path(n['then'][0]) if n['then'] else [])
-        self.assertEqual(path(t['journeys'][0]), [('sent', 'Al Rajhi', False), ('arrived', 'HDFC', False), ('sent', 'HDFC', True),
+        self.assertEqual(path(t['journeys'][0]), [('salary', 'Al Rajhi', False), ('sent', 'Al Rajhi', False), ('arrived', 'HDFC', False), ('sent', 'HDFC', True),
                                                   ('arrived', 'SBI', False), ('sent', 'SBI', True), ('loan', 'SBI home loan', False)])
         # Undo the SBI import: its rows go, and the journey stops at SBI's door.
         sid = next(r['id'] for r in server.statements(db)['statements'] if r['account'] == 'SBI')
         server.delete_statement(db, sid)
-        self.assertEqual([(w, a) for w, a, _ in path(server.trail(db)['journeys'][0])], [('sent', 'Al Rajhi'), ('arrived', 'HDFC'), ('paid', 'HDFC')])
+        self.assertEqual([(w, a) for w, a, _ in path(server.trail(db)['journeys'][0])], [('salary', 'Al Rajhi'), ('sent', 'Al Rajhi'), ('arrived', 'HDFC'), ('paid', 'HDFC')])
         self.assertEqual(server.import_statement(db, 'SBI', 'bank', 'INR', '', 'sbi.pdf', pdf(SBI))['new'], 2)  # can come back
 
     def test_one_transfer_home_split_to_each_loan_account(self):
@@ -234,7 +234,7 @@ class StoreMixin:
         self.assertNotIn('Canara home loan', {f['to'] for f in server.trail(db)['flows']})
         # And a transfer you correct stops being a transfer.
         server.set_category(db, sent['id'], 'Shopping', False)
-        self.assertEqual(server.trail(db)['flows'], [])
+        self.assertEqual([f for f in server.trail(db)['flows'] if f['kind'] != 'salary'], [])
 
     def test_unmatched_transfer_is_listed_and_can_be_linked_by_hand(self):
         db = self.db
@@ -251,7 +251,7 @@ class StoreMixin:
         self.assertNotIn(canara['id'], [u['id'] for u in t['unmatched']])
         self.assertEqual({x['category'] for x in server.transactions(db) if x['amount'] == 13000}, {server.OWN_TRANSFER})
         server.set_category(db, canara['id'], 'Salary', False)  # changed your mind: the link goes
-        self.assertEqual(server.trail(db)['flows'], [])
+        self.assertEqual([(f['from'], f['kind']) for f in server.trail(db)['flows']], [('Salary', 'salary')])
         with self.assertRaises(KeyError):
             server.link_by_hand(db, canara['id'], canara['candidates'][0]['id'])  # backwards
 
@@ -275,6 +275,25 @@ class StoreMixin:
         t = server.trail(db)
         self.assertEqual(next(f for f in t['flows'] if f['to'] == 'Parents')['count'], 2)
         self.assertEqual(t['unmatched'], [])
+
+    def test_salary_to_the_loan_through_four_banks(self):
+        db = self.db
+        db.run("INSERT INTO holdings (kind, name, currency, balance_minor, pattern, as_of) VALUES ('loan', 'SBI home loan', 'INR', 3000000000, '3876', '2026-01-01')")
+        for sender, body, at in (
+                ('SAB', 'Salary Deposit\nAmount: SAR 25,000.00\nAccount: **5555\nFrom: ACME CO', '2026-10-25T09:00:00+03:00'),
+                ('SAB', 'Outgoing Transfer\nAmount: SAR 7,000.00\nFrom: **5555\nTo: D360 Bank', '2026-10-26T12:30:00+03:00'),
+                ('D360', 'Incoming Transfer: Saudi Awwal Bank\nAmount: SAR 7,000.00\nFrom: R KUMAR\nIBAN: ****0001', '2026-10-26T12:36:00+03:00'),
+                ('D360', 'International transfer\nAmount: INR 175,000.00 (SAR 6,945.28)\nTo: ravi kumar\nCountry:India', '2026-10-26T16:26:00+03:00'),
+                ('JD-IDFCFB-S', 'Your a/c no. XXXXXXXX234 is credited by Rs. 175000.00 on 26-Oct-26 (IMPS Ref no 600000000001 ).', '2026-10-26T19:05:00+05:30'),
+                ('JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 1,10,000.00 on 27/10/26; R KUMAR credited. RRN 300000000006.', '2026-10-27T10:00:00+05:30'),
+                ('CBSSBI', 'Your A/C XXXXX7777 Credited INR 1,10,000.00 on 27/10/26 -Deposit by transfer from R KUMAR. Avl Bal INR 1,20,000.00', '2026-10-27T10:01:00+05:30'),
+                ('CBSSBI', 'Your A/C XXXXX7777 Debited INR 1,05,000.00 on 05/11/26 towards loan A/c XX3876 EMI. Avl Bal INR 15,000.00', '2026-11-05T09:00:00+05:30')):
+            self.assertTrue(server.store_sms(db, sender, body, at), body)
+        t = server.trail(db)
+        path = lambda n: [(n['way'], n['account'].split(' · ')[0])] + (path(n['then'][0]) if n['then'] else [])
+        self.assertEqual(path(t['journeys'][0]), [('salary', 'SAB'), ('sent', 'SAB'), ('arrived', 'D360'), ('sent', 'D360'), ('arrived', 'IDFCFB'),
+                                                  ('sent', 'IDFCFB'), ('arrived', 'CBSSBI'), ('sent', 'CBSSBI'), ('loan', 'SBI home loan')])
+        self.assertIn(('Salary', 'SAB · Account •5555'), {(f['from'], f['to']) for f in t['flows']})
 
     def test_card_purchase_never_meets_an_advert_credit(self):
         db = self.db

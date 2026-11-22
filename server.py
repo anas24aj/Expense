@@ -319,6 +319,11 @@ def transactions(db, month=None, currency=None):
     longer = lambda a: next(iter([f'{a.rpartition("•")[0]}•{x}' for x in ends[a.rpartition('•')[0]]
                                   if len(x) > len(a.rpartition('•')[2]) and x.endswith(a.rpartition('•')[2])][:1]), a)
     acct = {k: longer(v) if '•' in v else v for k, v in acct.items()}
+    # An SMS that names no account ('SAB' alone) is from that bank's account when the bank has just one ('SAB ·
+    # Account •5555'); its cards are separate.
+    only = {head.split(' · ')[0]: [f'{head}•{d}' for d in ds] for head, ds in ends.items() if head.endswith('Account ')}
+    acct = {r['id']: only[acct[r['id']]][0] if not r['statement_id'] and len(only.get(acct[r['id']], ())) == 1 else acct[r['id']]
+            for r in rows}
     linked = links(rows, acct, overrides, [(r['debit_id'], r['credit_id']) for r in db.run('SELECT * FROM txn_links')])
     own |= set(linked)
     result = []
@@ -598,7 +603,10 @@ def trail(db, first=None, last=None):
         f['sent'][sent['currency']] += sent['amount']
         f['got'][got['currency']] += got['amount']
         f['last'] = max(f['last'], sent['received_at'][:10])
+    salary = lambda t: t['direction'] == 'credit' and t['category'] == 'Salary'
     for t in every:
+        if salary(t) and inside(t):  # where the money starts
+            flow('Salary', t['account'], 'salary', t, t, 'your salary arriving')
         if t['direction'] == 'debit' and inside(t):
             if t['linked'] in by_id:
                 c = by_id[t['linked']]
@@ -650,6 +658,13 @@ def trail(db, first=None, last=None):
     flat = lambda n: [n] + [m for k in n['then'] for m in flat(k)]
     journeys = [follow(d, False) for d in sorted((t for t in every if t['direction'] == 'debit' and t['id'] not in used and t['linked'] in by_id),
                                                  key=lambda t: t['received_at'])]
+    # A journey starting from an account your salary reached in the month before begins with that salary.
+    pay = sorted((t for t in every if salary(t)), key=lambda t: t['received_at'])
+    for i, j in enumerate(journeys):
+        start = date.fromisoformat(j['day'])
+        got = [t for t in pay if t['account'] == j['account'] and 0 <= (start - date.fromisoformat(t['received_at'][:10])).days <= 35]
+        if got:
+            journeys[i] = {**hop(got[-1], 'salary', False), 'then': [j]}
     journeys = [j for j in journeys if any(inside(by_id[n['id']]) for n in flat(j))]
     plain = lambda d: {k: round(v, 2) for k, v in d.items()}
     return {'accounts': sorted(({**a, 'in': plain(a['in']), 'out': plain(a['out'])} for a in accounts.values()), key=lambda a: -a['count']),

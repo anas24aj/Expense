@@ -1683,7 +1683,7 @@ const curs = o => Object.entries(o || {}).filter(([, v]) => v).map(([c, v]) => i
 function flowMap(flows) {
   if (!flows.length) return '';
   const val = f => Object.entries(f.sent).reduce((a, [c, v]) => a + toInr(v, c), 0);
-  const names = [...new Set(flows.flatMap(f => [f.from, f.to]))], loanSet = new Set(flows.filter(f => f.kind !== 'transfer').map(f => f.to));
+  const names = [...new Set(flows.flatMap(f => [f.from, f.to]))], loanSet = new Set(flows.filter(f => f.kind === 'loan' || f.kind === 'payee').map(f => f.to));
   const payees = new Set(flows.filter(f => f.kind === 'payee').map(f => f.to));
   const depth = Object.fromEntries(names.map(n => [n, 0]));
   for (let k = 0; k < names.length; k++) for (const f of flows) if (f.from !== f.to) depth[f.to] = Math.max(depth[f.to], Math.min(depth[f.from] + 1, 5));
@@ -1710,16 +1710,16 @@ function flowMap(flows) {
     const d = `M${f1(x0)},${f1(y0)}C${f1(m)},${f1(y0)} ${f1(m)},${f1(y1)} ${f1(x1)},${f1(y1)}L${f1(x1)},${f1(y1 + w)}C${f1(m)},${f1(y1 + w)} ${f1(m)},${f1(y0 + w)} ${f1(x0)},${f1(y0 + w)}Z`;
     const mid = `M${f1(x0)},${f1(y0 + w / 2)}C${f1(m)},${f1(y0 + w / 2)} ${f1(m)},${f1(y1 + w / 2)} ${f1(x1)},${f1(y1 + w / 2)}`;
     const dots = motion ? Array.from({ length: Math.min(3, 1 + Math.floor(w / 18)) }, (_, i) =>
-      `<circle r="${w > 10 ? 3 : 2}" fill="${c}"><animateMotion dur="${(3.2 + i * .4).toFixed(1)}s" begin="${(i * 1.1 + depth[f.from] * .5).toFixed(1)}s" repeatCount="indefinite" path="${mid}"/></circle>`).join('') : '';
+      `<circle r="${w > 10 ? 3 : 2}" fill="${c}"><animateMotion dur="${(3.2 + i * .4).toFixed(1)}s" begin="-${(i * 1.1 + depth[f.from] * .5).toFixed(1)}s" repeatCount="indefinite" path="${mid}"/></circle>`).join('') : '';
     return `<g class="band" data-flow="${esc(f.from)}→${esc(f.to)}"><path d="${d}" fill="${c}"><title>${esc(f.from)} → ${esc(f.to)}: ${esc(curs(f.sent))}</title></path>${dots}</g>`;
   }).join('');
   // Each label sits above its bar, so neighbouring columns don't overlap: left-aligned in the first column, right in the last.
-  const nodes = names.map(n => { const p = pos[n], c = payees.has(n) ? '#e0518b' : loanSet.has(n) ? 'var(--good, #0f7b3e)' : color[n], col = depth[n];
+  const nodes = names.map(n => { const p = pos[n], c = n === 'Salary' ? '#d4a017' : payees.has(n) ? '#e0518b' : loanSet.has(n) ? 'var(--good, #0f7b3e)' : color[n], col = depth[n];
     const [x, anchor] = col === 0 ? [p.x, 'start'] : col === cols - 1 ? [p.x + bar, 'end'] : [p.x + bar / 2, 'middle'];
     return `<rect x="${f1(p.x)}" y="${f1(p.y)}" width="${bar}" height="${f1(p.h)}" rx="3" fill="${c}"/>` +
-      // the last column's labels go under its bars, clear of the column before it (whose labels are above)
-      `<text x="${f1(x)}" y="${f1(col === cols - 1 && cols > 1 ? p.y + p.h + 11 : p.y - 15)}" text-anchor="${anchor}">${loanSet.has(n) ? (payees.has(n) ? '💝 ' : '🏠 ') + esc(n.slice(0, 20)) : esc(short(n))}</text>` +
-      `<text class="amt" x="${f1(x)}" y="${f1(col === cols - 1 && cols > 1 ? p.y + p.h + 22 : p.y - 4)}" text-anchor="${anchor}">${esc(short_inr(size(n)))}</text>`; }).join('');
+      // labels alternate under / above the bars column by column (the last column under), so neighbours never collide
+      `<text x="${f1(x)}" y="${f1((cols - 1 - col) % 2 === 0 && cols > 1 ? p.y + p.h + 11 : p.y - 15)}" text-anchor="${anchor}">${loanSet.has(n) ? (payees.has(n) ? '💝 ' : '🏠 ') + esc(n.slice(0, 20)) : n === 'Salary' ? '💰 Salary' : esc(short(n))}</text>` +
+      `<text class="amt" x="${f1(x)}" y="${f1((cols - 1 - col) % 2 === 0 && cols > 1 ? p.y + p.h + 22 : p.y - 4)}" text-anchor="${anchor}">${esc(short_inr(size(n)))}</text>`; }).join('');
   return `<div class="sk"><svg viewBox="-2 -30 ${W + 4} ${H + 56}" role="img" aria-label="Money flow between your accounts">${bands}${nodes}</svg></div>` +
     '<p class="muted small">Band width is the money moved, in ₹ (SAR at today’s rate). Tap a band for its messages.</p>';
 }
@@ -1733,14 +1733,14 @@ function trailPage(rt, P) {
     `<div class="ev-t"><b>${t.direction === 'debit' ? '−' : '+'}${esc(inCur(t.amount, t.currency))}</b><span>${esc(t.account)} · ${esc(dayLabel(t.day))}</span><pre>${esc(t.body)}</pre>` +
     `<form class="unlink"><input type="hidden" name="id" value="${t.id}"><label>Not right? What was this?<select name="category" required><option value="" selected disabled>Choose…</option>` +
     `${cats.map(c => `<option>${esc(c)}</option>`).join('')}<option value="${IGNORED}">Not a real transaction (advert)</option></select></label><button class="btn">Save</button></form></div>`).join('')}</div>`).join('');
-  const flows = T.flows.map(f => `<details class="fl"><summary>` + rk({ icon: f.kind === 'loan' ? '🏠' : f.kind === 'payee' ? '💝' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
-    sub: `${plural(f.count, f.kind === 'transfer' ? 'transfer' : 'payment')} · last ${esc(dayLabel(f.last))}`,
+  const flows = T.flows.map(f => `<details class="fl"><summary>` + rk({ icon: f.kind === 'loan' ? '🏠' : f.kind === 'payee' ? '💝' : f.kind === 'salary' ? '💰' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
+    sub: `${plural(f.count, f.kind === 'transfer' ? 'transfer' : f.kind === 'salary' ? 'salary' : 'payment')} · last ${esc(dayLabel(f.last))}`,
     valueText: esc(curs(f.sent)), vsub: Object.keys(f.got).join() !== Object.keys(f.sent).join() ? `→ ${esc(curs(f.got))}` : '' }) +
     `</summary><p class="muted small">The messages behind this, newest first. If one is wrong, say what it was: it stops being matched.</p>${evidence(f)}</details>`).join('');
   // A journey is a tree: one line while the money goes one way, indented branches where it splits.
   const step = n => n.way === 'loan' || n.way === 'payee' ? `<li class="end"><b>${n.way === 'loan' ? '🏠' : '💝'} ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span><small>${n.way === 'loan' ? 'loan payment' : 'sent'} ${esc(dayLabel(n.day))}</small></li>`
-    : `<li class="${n.then.length === 1 && n.then[0].likely ? 'likely' : ''}"><b>${KIND_ICON[n.kind] || '🏦'} ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span>` +
-      `<small>${n.way} ${esc(dayLabel(n.day))}${n.likely ? ' · probably the same money' : ''}${n.desc ? ' · ' + esc(n.desc) : ''}</small></li>`;
+    : `<li class="${n.then.length === 1 && n.then[0].likely ? 'likely' : ''}"><b>${n.way === 'salary' ? '💰' : KIND_ICON[n.kind] || '🏦'} ${esc(n.account)}</b><span class="v">${esc(inCur(n.amount, n.currency))}</span>` +
+      `<small>${n.way === "salary" ? "salary arrived" : n.way} ${esc(dayLabel(n.day))}${n.likely ? ' · probably the same money' : ''}${n.desc ? ' · ' + esc(n.desc) : ''}</small></li>`;
   const steps = n => step(n) + (n.then.length === 1 ? steps(n.then[0]) : n.then.length ? `<li class="split"><small>split ${n.then.length} ways · probably the same money</small>` +
     n.then.map(k => `<ol class="jr sub">${steps(k)}</ol>`).join('') + '</li>' : '');
   const journey = j => `<ol class="jr">${steps(j)}</ol>`;
