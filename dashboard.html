@@ -159,6 +159,7 @@
   details.fl[open] > summary .rk .pc::after { content: '▴'; } details.fl > summary .rk .pc::after { content: '▾'; color: var(--muted); }
   .ev { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0 0 10px; display: grid; gap: 8px; }
   .ev .why { color: var(--good, #0f7b3e); font-weight: 600; }
+  .ev .nomatch { color: var(--text-2); background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
   .ev-t { display: grid; gap: 4px; min-width: 0; } .ev-t + .ev-t { border-top: 1px dashed var(--line); padding-top: 8px; }
   .ev-t span { color: var(--muted); font-size: 12px; }
   .ev-t pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace; color: var(--text-2); background: var(--surface-2); border-radius: 8px; padding: 8px; }
@@ -1748,7 +1749,8 @@ function trailPage(rt, P) {
   const loose = (T.unmatched || []).map(u => `<details class="fl"><summary>` + rk({ icon: u.direction === 'debit' ? '↗️' : '↘️', nameHtml: splitAcct(u.account),
       sub: `${u.direction === 'debit' ? 'sent' : 'arrived'} ${esc(dayLabel(u.day))}${u.merchant ? ' · ' + esc(u.merchant) : ''}`,
       valueText: `${u.direction === 'debit' ? '−' : '+'}${esc(inCur(u.amount, u.currency))}` }) +
-    `</summary><div class="ev"><div class="ev-t"><pre>${esc(u.body)}</pre></div>` + (u.candidates.length
+    `</summary><div class="ev"><div class="ev-t"><pre>${esc(u.body)}</pre></div>` +
+    (u.why_not ? `<small class="nomatch">Not matched automatically: ${esc(u.why_not)}. If it's the same money, tap Link.</small>` : '') + (u.candidates.length
       ? `<form class="link"><input type="hidden" name="id" value="${u.id}"><input type="hidden" name="way" value="${u.direction}"><label>${u.direction === 'debit' ? 'Where did it arrive?' : 'Where did it come from?'}<select name="other" required>` +
         u.candidates.map((c, i) => `<option value="${c.id}" ${i ? '' : 'selected'}>${esc(c.account)} · ${c.direction === 'debit' ? '−' : '+'}${esc(inCur(c.amount, c.currency))} · ${esc(dayLabel(c.day))}${c.fits ? ' ✓ amount fits' : ''}</option>`).join('') +
         '</select></label><button class="btn">Link</button></form>'
@@ -1760,12 +1762,23 @@ function trailPage(rt, P) {
   return { title: 'Money trail', sub: 'Between your accounts', html: chips(P) +
     card('How money moved', periodText(P), flowMap(T.flows) + flows || empty('No transfers between your accounts yet', 'Add statements from each bank, card and wallet, and give each account its last 4 digits, so the two sides of a transfer can be matched.'), '') +
     (T.journeys.length ? card('Journeys', 'newest first', T.journeys.slice(0, 15).map(journey).join(''), '') : '') +
-    (loose ? card('Not matched yet', 'tap to link', loose, '') : '') +
+    (loose ? card('Not matched yet', 'tap to link', loose + '<button type="button" class="btn" data-copy-loose>Copy for help</button>' +
+      '<p class="muted small">Copies these messages with account and reference numbers hidden, to paste into a chat.</p>', '') : '') +
     card('Accounts', 'in this period', (accts || empty('No accounts yet')) + add, '') +
     '<section class="card"><h2>How this is worked out</h2><ul class="muted"><li>A transfer is matched when the same amount leaves one account and arrives in another within 4 days: SAR to ₹ at any rate from 20 to 24.5, with transfer or remittance words on either side.</li>' +
     '<li>After money arrives, the next transfer or loan payment out of that account within 10 days (and no larger) is shown as <i>probably the same money</i>, dashed.</li>' +
     '<li>Loan payments are found from the account digits you gave each loan on the Debt tab. Matched transfers count as Own transfer, not spending.</li></ul></section>' };
 }
+// 'Copy for help': the unmatched messages and their likely other sides, with long numbers (accounts, references) hidden.
+const masked = t => t.replace(/\d{7,}/g, m => 'X'.repeat(m.length));  // amounts keep their commas and decimals
+document.addEventListener('click', async e => {
+  if (!e.target.closest('[data-copy-loose]')) return;
+  const L = state.trail?.unmatched || [], line = t => `[${t.day} · ${t.account} · ${t.direction === 'debit' ? '−' : '+'}${t.amount} ${t.currency}]\n${masked(t.body)}`;
+  const text = L.map(u => `NOT MATCHED${u.why_not ? ' (' + u.why_not + ')' : ''}\n${line(u)}` +
+    (u.candidates[0] ? `\n-- likely other side --\n${line(u.candidates[0])}` : '')).join('\n\n');
+  try { await navigator.clipboard.writeText(text); toast(`Copied ${L.length} messages. Paste them into the chat.`); }
+  catch { toast('Copying is blocked here. Long-press a message to copy it instead.'); }
+});
 // Tap a band in the flow map: open that flow's messages below it.
 document.addEventListener('click', e => {
   const g = e.target.closest('.sk .band');

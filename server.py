@@ -673,6 +673,26 @@ def trail(db, first=None, last=None):
             'journeys': journeys[::-1][:60], 'unmatched': unmatched([t for t in every if not (why_loan(t) or why_payee(t))], inside)}
 
 
+def why_not(a, b):
+    """Why the automatic matching passed over two transactions whose amounts fit, in words."""
+    d, c = (a, b) if a['direction'] == 'debit' else (b, a)
+    secs = (datetime.fromisoformat(c['received_at']) - datetime.fromisoformat(d['received_at'])).total_seconds()
+    gap = f'{abs(secs) / 86400:.0f} days' if abs(secs) >= 86400 else f'{int(abs(secs) // 3600)} h {int(abs(secs) % 3600 // 60)} min'
+    if secs < -PAIR_WINDOW_SECONDS:
+        return f'the money arrived {gap} before it was sent, by the message times'
+    if d['currency'] != c['currency']:
+        if not transfer_like(d):
+            return "the sending message doesn't say transfer, remittance or similar"
+        return f'arrived {gap} later; automatic matching allows {LINK_DAYS} days'
+    if not (d['statement'] or c['statement']):
+        if abs(secs) > PAIR_WINDOW_SECONDS:
+            return f'the two messages are {gap} apart; for two SMS automatic matching allows 1 hour'
+        missing = [x['account'] for x in (d, c) if not transfer_like(x)]
+        if missing:
+            return f"the message from {missing[0]} doesn't say transfer, IMPS, NEFT or similar"
+    return f'arrived {gap} later; automatic matching allows {LINK_DAYS} days' if secs > LINK_DAYS * 86400 else ''
+
+
 def unmatched(every, inside):
     """Transfers in the period with no other side found, newest first, each with the likeliest other sides (opposite
     way, another account, within a week; same amount or an exchange rate first) for you to link by hand."""
@@ -689,8 +709,8 @@ def unmatched(every, inside):
         near = [o for o in every if o['direction'] != t['direction'] and o['account'] != t['account'] and not o['linked']
                 and abs((date.fromisoformat(o['received_at'][:10]) - day).days) <= 7 and o['category'] != IGNORED]
         near.sort(key=lambda o: (not fits(t, o), abs((date.fromisoformat(o['received_at'][:10]) - day).days)))
-        pick = lambda o: {k: o[k] for k in ('id', 'account', 'amount', 'currency', 'direction', 'merchant')} | {'day': o['received_at'][:10], 'fits': fits(t, o)}
-        out.append({**pick(t), 'body': t['body'], 'candidates': [pick(o) for o in near[:6]]})
+        pick = lambda o: {k: o[k] for k in ('id', 'account', 'amount', 'currency', 'direction', 'merchant', 'body')} | {'day': o['received_at'][:10], 'fits': fits(t, o)}
+        out.append({**pick(t), 'candidates': [pick(o) for o in near[:6]], 'why_not': near and fits(t, near[0]) and why_not(t, near[0]) or ''})
     return out
 
 

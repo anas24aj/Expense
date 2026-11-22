@@ -245,6 +245,7 @@ class StoreMixin:
         canara = next(u for u in t['unmatched'] if 'CANBNK' in u['account'])
         self.assertEqual(t['flows'], [])
         self.assertEqual([(c['amount'], c['fits']) for c in canara['candidates']], [(13000.0, True), (900.0, False)])  # the likely one first
+        self.assertEqual(canara['why_not'], 'the two messages are 2 h 30 min apart; for two SMS automatic matching allows 1 hour')
         server.link_by_hand(db, canara['candidates'][0]['id'], canara['id'])
         t = server.trail(db)
         self.assertEqual([(f['from'], f['to']) for f in t['flows']], [('IDFCFB · Account •1234', 'CANBNK · Account •864')])
