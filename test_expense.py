@@ -225,6 +225,14 @@ class StoreMixin:
             ('paid', 'IDFCFB · Account •1234', 15000.0, []),
             ('sent', 'IDFCFB · Account •1234', 14813.34, [('loan', 'Canara home loan', 14813.34, [])])])]))
 
+    def test_card_purchase_never_meets_an_advert_credit(self):
+        db = self.db
+        server.store_sms(db, 'SAB', 'Online Purchase\nAmount: SAR 48.00\nCard: *2080\nAt: Amazon sa', '2026-10-22T10:00:00+03:00')
+        server.store_sms(db, 'JD-TALUXE-S', 'Rs. 1,200 has been credited to your savings with Luxe. T&C apply', '2026-10-22T12:00:00+05:30')
+        server.store_sms(db, 'D360', 'Outgoing Transfer\nAmount: SAR 50.00\nTo: SA03*1234', '2026-10-23T10:00:00+03:00')
+        server.store_sms(db, 'JD-TALUXE-S', 'Rs. 1,250 has been credited to your savings with Luxe. T&C apply', '2026-10-23T12:00:00+05:30')
+        self.assertEqual([t['linked'] for t in server.transactions(db)], [None] * 4)  # a purchase, and a credit to no account
+
     def test_sms_sar_transfer_meets_the_inr_credit(self):
         db = self.db
         for sender, body, at in (

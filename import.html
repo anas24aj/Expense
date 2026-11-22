@@ -63,7 +63,7 @@
 
   <section class="card" id="statement">
     <h2>Bank, card or wallet statement</h2>
-    <p class="note" style="margin:0 0 10px">PDF, Excel or CSV, as downloaded from the bank's website or app (Al Rajhi, SNB, SBI, HDFC, STC Pay, Tamara, Tabby…). For two years, choose all of one account's files at once. Importing a file again adds nothing twice, and transactions your phone already sent are kept as they are.</p>
+    <p class="note" style="margin:0 0 10px">PDF, Excel or CSV, as downloaded from the bank's website or app (your banks, credit cards, STC Pay, Tamara, Tabby…). For two years, choose all of one account's files at once. Importing a file again adds nothing twice, and transactions your phone already sent are kept as they are.</p>
     <form id="stmt">
       <label class="pick">
         <input type="file" id="stmt-file" multiple accept=".pdf,.xlsx,.xls,.csv,.txt,application/pdf">
@@ -74,7 +74,7 @@
         <label class="wide">Account name<input type="text" id="acct" list="acct-list" required maxlength="60" placeholder="e.g. Al Rajhi salary, SBI home loan"></label>
         <datalist id="acct-list"></datalist>
         <label>Type<select id="kind">
-          <option value="bank">Bank account</option><option value="card">Credit card</option><option value="wallet">Wallet / UPI (STC Pay, PhonePe…)</option>
+          <option value="bank">Bank account</option><option value="card">Credit card</option><option value="wallet">Wallet (STC Pay, urpay…)</option>
           <option value="bnpl">Pay later (Tamara, Tabby)</option><option value="loan">Loan account</option></select></label>
         <label>Currency<select id="cur"><option>SAR</option><option value="INR">INR (₹)</option><option>USD</option></select></label>
         <label>Last 4 digits<input type="text" id="digits" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="of the account or card"></label>
@@ -260,7 +260,7 @@ $('paste').addEventListener('submit', async e => {
 // ---------- Statements ----------
 const MAX_FILE = 3.2 * 1048576;  // the site accepts uploads up to 4.5 MB, and the file travels as base64
 let accounts = [];
-const guessKind = n => /stc ?pay|urpay|barq|phone ?pe|gpay|google pay|paytm|wallet/i.test(n) ? 'wallet' : /tamara|tabby|postpay/i.test(n) ? 'bnpl'
+const guessKind = n => /stc ?pay|urpay|barq|wallet/i.test(n) ? 'wallet' : /tamara|tabby|postpay/i.test(n) ? 'bnpl'
   : /loan/i.test(n) ? 'loan' : /card|visa|master/i.test(n) ? 'card' : null;
 const esc = v => String(v).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const nice = d => d ? new Date(d + 'T00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';

@@ -387,11 +387,13 @@ def own_transfers(rows, overrides):
 # transfers, remittances home, wallet top-ups, card bills and loan repayments.
 # Generic words only (no bank or app names), so it works the same whatever banks you use.
 LINK_WORDS = re.compile(r'\b(?:remit\w*|inward|outward|international|swift|foreign|nre|nro|'
-                        r'wallet|top ?-?up|load(?:ed)?|card ?payment|cc ?payment|payment (?:received|thank)|'
+                        r'top ?-?up|card ?payment|cc ?payment|payment (?:received|thank)|'
                         r'repayment|emi|loan|by transfer|to transfer)\b|حوالة|تحويل|سداد', re.I)
 # Credit/debit amount ratio for money changing currency on the way (₹ per SAR, ₹ per $, $ per SAR), with room for fees and
 # the rates of the last few years.
 # 'A/c XX1234 debited by Rs 15,000; ANIL K credited. RRN …': money sent to another account (a person's, or yours).
+# A purchase or a card spend pays a shop: it never moves money to one of your accounts.
+PURCHASE = re.compile(r'\b(?:purchase|pos|spent|shopping)\b|شراء', re.I)
 P2P = re.compile(r'\bdebited\b[^\n]*\bcredited\b|\brrn\b', re.I)
 FX_RATIO = {('SAR', 'INR'): (20.0, 27.0), ('USD', 'INR'): (78.0, 100.0), ('SAR', 'USD'): (0.255, 0.27)}
 LINK_DAYS = 4
@@ -411,7 +413,9 @@ def links(rows, acct, overrides):
         v.sort()
     by_id = {r['id']: r for r in rows}
     paired = {}
-    for d in sorted((r for r in rows if r['direction'] == 'debit' and r['id'] not in overrides), key=lambda r: r['received_at']):
+    words = lambda r: bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body']) or P2P.search(r['body']))
+    for d in sorted((r for r in rows if r['direction'] == 'debit' and r['id'] not in overrides and not PURCHASE.search(r['body'])),
+                    key=lambda r: r['received_at']):
         best = None
         for cur, lo_hi in [(d['currency'], None)] + [(c2, rng) for (c1, c2), rng in FX_RATIO.items() if c1 == d['currency']]:
             lst = credits.get(cur, [])
@@ -429,9 +433,13 @@ def links(rows, acct, overrides):
                         continue
                 elif not lo_hi[0] <= c['amount_minor'] / d['amount_minor'] <= lo_hi[1]:
                     continue
-                words = [bool(LINK_WORDS.search(r['body']) or TRANSFER.search(r['body']) or P2P.search(r['body'])) for r in (d, c)]
-                if not (all(words) if lo_hi is None and not (d['statement_id'] or c['statement_id']) else any(words)):
+                sms = not (d['statement_id'] or c['statement_id'])
+                if lo_hi is None and sms and not (words(d) and words(c)):
                     continue  # two SMS: both must say transfer, as own_transfers asks
+                if lo_hi and not (words(d) and (words(c) or c['statement_id'] or account_of(c['body']))):
+                    continue  # changing currency: a transfer out, arriving in a named account (not an advert's 'credited to you')
+                if lo_hi is None and not sms and not (words(d) or words(c)):
+                    continue
                 if best is None or gap < best[0]:
                     best = (gap, cid)
                 break  # the nearest in this currency
@@ -504,7 +512,7 @@ def delete_statement(db, sid):
     db.run('DELETE FROM statements WHERE id = :id', id=sid)
 
 
-WALLETS = re.compile(r'stc ?pay|urpay|barq|phonepe|phone pe|gpay|google pay|paytm|amazon pay|mobikwik|wallet', re.I)
+WALLETS = re.compile(r'stc ?pay|urpay|barq|wallet', re.I)  # PhonePe/GPay are UPI: the money moves in a bank account
 BNPL = re.compile(r'tamara|tabby|postpay|spotii|simpl|lazypay', re.I)
 FOLLOW_DAYS = 10
 
