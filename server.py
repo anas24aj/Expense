@@ -791,12 +791,36 @@ CARD_DIGITS = re.compile(r'(?:card|ending|\*)\D{0,12}?(\d{4})\b', re.I)
 CARD_BRAND = re.compile(r'\b(visa|master\s?card|mada|amex|american\s+express)\b', re.I)
 
 
+# Pay-later (Tamara, Tabby): 'Split in 6 payment confirmation: Store: Petromin Nissan Order: 6,991.92 SAR'.
+PAY_LATER = re.compile(r'\b(?:split|pay)\s+in\s+(\d{1,2})\b|\b(\d{1,2})\s+(?:interest-free\s+)?(?:payments|instal+ments)\b', re.I)
+PAY_LATER_TOTAL = re.compile(r'(?:order|total|amount|purchase)[^\n\d]{0,12}?(?:' + _AMT + r'|([\d,]+(?:\.\d+)?)\s*(SAR|SR|ريال))', re.I)
+PAY_LATER_STORE = re.compile(r'(?:store|merchant)\s*:\s*([^\n]{2,40})', re.I)
+
+
+def pay_later(db, body, received_at):
+    """A pay-later confirmation goes on the Debt tab as a 0% plan: the first part is paid at checkout, the rest one a
+    month on the purchase day (taken automatically, like an EMI). Not stored as spending: the card charges that pay
+    each part already are. Returns the plan's name, or None."""
+    parts, total, store = PAY_LATER.search(body), PAY_LATER_TOTAL.search(body), PAY_LATER_STORE.search(body)
+    n = parts and int(parts.group(1) or parts.group(2))
+    if not (total and n and 2 <= n <= 24):
+        return None
+    cur, amount = (total.group(1), total.group(2)) if total.group(1) else (total.group(4), total.group(3))
+    owed = round(float(amount.replace(',', '')) * 100)
+    part, when = round(owed / n), received_at[:10]
+    name = f"Pay later · {' '.join(store.group(1).split()) if store else 'purchase'}"
+    if not any(h['name'] == name and h['as_of'] == when for h in db.run("SELECT name, as_of FROM holdings WHERE kind = 'loan'")):  # phone resends
+        save_holding(db, {'id': None, 'kind': 'loan', 'auto': 1, 'name': name[:60], 'currency': 'INR' if cur.upper().startswith(('INR', 'RS', '₹')) else 'SAR',
+                          'balance_minor': owed - part, 'rate_bp': 0, 'emi_minor': part, 'due_day': min(28, int(when[8:])), 'pattern': '', 'as_of': when})
+    return name
+
+
 def card_statement(db, body, received_at):
     """A card's due reminder puts the card on the Debt page, or updates what's owed, the payment due and the due
     day from it (a reminder older than the card's last update is ignored). Returns the card's name, or None."""
     total = CARD_TOTAL.search(body) if re.search(r'\bcard\b', body, re.I) else None
     if not total:
-        return None
+        return pay_later(db, body, received_at)
     minor = lambda m: round(float(m.group(2).replace(',', '')) * 100)
     currency = 'INR' if total.group(1).upper().startswith(('INR', 'RS', '₹')) else 'SAR'
     due, day, digits, brand = CARD_DUE.search(body), CARD_DUE_DAY.search(body), CARD_DIGITS.search(body), CARD_BRAND.search(body)

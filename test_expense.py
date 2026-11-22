@@ -187,6 +187,37 @@ class StoreMixin:
         self.assertEqual([h['account'] for h in server.trail(db)['journeys'][0]['hops']], ['Al Rajhi', 'HDFC'])
         self.assertEqual(server.import_statement(db, 'SBI', 'bank', 'INR', '', 'sbi.pdf', pdf(SBI))['new'], 2)  # can come back
 
+    def test_sms_sar_transfer_meets_the_inr_credit(self):
+        db = self.db
+        for sender, body, at in (
+                ('AlRajhiBank', 'Outgoing International Transfer\nAmount: SAR 5,000.00\nFrom: 1111\nTo: HARI KUMAR\nCountry: India', '2025-01-28T20:00:00+03:00'),
+                ('AlRajhiBank', 'حوالة دولية صادرة\nمبلغ: 2,000.00 ريال\nمن: 1111\nإلى: HARI KUMAR', '2025-03-02T09:00:00+03:00'),
+                ('VM-HDFCBK', 'Your A/c XX5678 is credited with INR 1,12,450.00 on 30-01-25 by NEFT inward remittance from AL RAJHI BANK', '2025-01-30T11:00:00+05:30'),
+                ('VM-HDFCBK', 'INR 45,100.00 credited to A/c XX5678 on 03-03-25. Info: INWARD REMIT ALRAJHI', '2025-03-03T10:00:00+05:30'),
+                ('VM-HDFCBK', 'INR 1,12,450.00 credited to A/c XX5678 on 15-03-25 by UPI from RAVI', '2025-03-15T10:00:00+05:30')):  # unrelated
+            self.assertTrue(server.store_sms(db, sender, body, at), body)
+        every = server.transactions(db)
+        amount = {t['id']: t['amount'] for t in every}
+        pairs = sorted((t['amount'], amount[t['linked']]) for t in every if t['currency'] == 'SAR' and t['linked'])
+        self.assertEqual(pairs, [(2000.0, 45100.0), (5000.0, 112450.0)])
+        upi = next(t for t in every if 'RAVI' in t['body'])
+        self.assertIsNone(upi['linked'])  # same amount, but weeks later and a UPI payment
+        self.assertEqual(sorted(t['category'] == server.OWN_TRANSFER for t in every), [False, True, True, True, True])
+        flows = server.trail(db)['flows']
+        self.assertEqual([(f['count'], f['sent'], f['got']) for f in flows], [(2, {'SAR': 7000.0}, {'INR': 157550.0})])
+
+    def test_pay_later_goes_on_the_debt_tab(self):
+        db = self.db
+        sms = 'Split in 6 payment\nconfirmation:\nStore: Petromin Nissan\nOrder: 6,991.92 SAR\nDate: 01/12/2026\nVisit the app for more details.'
+        self.assertIsNone(parse(sms))  # not spending: the six card charges are
+        self.assertEqual(server.card_statement(db, sms, '2026-11-22T10:00:00+03:00'), 'Pay later · Petromin Nissan')
+        server.card_statement(db, sms, '2026-11-22T10:05:00+03:00')  # the phone sent it twice
+        plan = [h for h in db.run('SELECT * FROM holdings') if h['name'].startswith('Pay later')]
+        self.assertEqual([(h['kind'], h['currency'], h['balance_minor'], h['emi_minor'], h['due_day'], h['auto']) for h in plan],
+                         [('loan', 'SAR', 582660, 116532, 22, 1)])
+        later = server.money(db, 'SAR', rate=24.9, today='2027-01-25')['holdings']
+        self.assertEqual(next(h for h in later if h['name'].startswith('Pay later'))['balance_now'], 582660 - 2 * 116532)  # Dec and Jan paid
+
     def test_adverts_stored_before_are_ignored_on_start_unless_you_chose(self):
         db = self.db
         for sender, body in (('STC-AD', 'PoS Purchase\nAmount: SAR 30.00\nAt: STC'), ('Zain', 'PoS Purchase\nAmount: SAR 50.00\nAt: ZAIN SHOP 1'),
