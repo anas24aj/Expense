@@ -5,7 +5,7 @@ import type { Money as M } from '../api/types';
 import { fmt, monthLabel } from '../lib/format';
 import { Icon } from './Icon';
 
-export { Icon, Tile, CategoryTile, Avatar, brandOf } from './Icon';
+export { Icon, Tile, CategoryTile, Avatar, brandOf, logoOf, BrandTile } from './Icon';
 
 /* ---------- Money ---------- */
 export function Money({ m, compact, sign, cents, className = '', tone }: { m: M | null | undefined; compact?: boolean; sign?: boolean; cents?: boolean; className?: string; tone?: boolean }) {

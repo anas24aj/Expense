@@ -45,6 +45,7 @@ Member: `{id, display_name, relation, role, user_id|null, email|null}`. Contact:
 ## Ledger (`api/ledger.py`)
 | GET | /accounts | → `{items: [Account]}` Account: `{id, kind, institution, name, currency, country, last4, owner_member_id, visibility, balance: Money|null, balance_at, credit_limit: Money|null, used_pct|null, due_day, statement_day, rate_bp, archived}` |
 | POST/PATCH/DELETE | /accounts, /accounts/{id} | create/update/archive |
+| PATCH | /members/{id}, /contacts/{id} `photo` | small profile photo: `data:image/jpeg|png|webp;base64,…` under 64 KB, or null. Remote URLs are refused. Returned as `photo` on members, contacts and /people |
 | POST | /accounts/{id}/used-by | `{person:{kind,id}, from, to, purpose?}`: every debit on the account in the dates becomes that person's (`lend` for contacts, `support` for members) → `{account_id, tagged}` |
 | GET | /transactions | query `month, account_id, category, purpose, member_id, q, review=1, limit, before` → `{items: [Txn], next_before}` |
 | GET | /transactions/{id} | → Txn + `{raw: sender/body|null, links: [...], splits: [...], claim|null}` |

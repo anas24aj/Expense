@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
 import type { Account, Coverage, Flows, FlowNode, HouseholdFull, Person, Txn } from '../api/types';
 import { fmt, monthLabel, shiftMonth, shortDate, thisMonth, today } from '../lib/format';
-import { Avatar, Chip, EmptyState, Field, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
+import { Avatar, BrandTile, brandOf, Chip, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { EditAccountSheet, KIND_LABEL, KIND_TILE } from './More';
 
@@ -233,7 +233,7 @@ export function AccountPage() {
       {accounts.isLoading ? <PageSkeleton /> : !a ? <EmptyState icon="bank" title="Account not found" /> : (
         <div className="grid-desktop stack">
           <section className="glass hero span-2">
-            <div className="row-flex"><Tile icon={icon} color={color} /><div><b>{a.name}</b><p className="caption">{KIND_LABEL[a.kind]?.replace(/s$/, '')} · {a.country} · {a.currency}{owner ? ` · ${owner}` : ''}{a.visibility === 'private' ? ' · private' : ''}</p></div></div>
+            <div className="row-flex">{brandOf(a.institution) || logoOf(a.institution) ? <BrandTile name={a.institution} /> : <Tile icon={icon} color={color} />}<div><b>{a.name}</b><p className="caption">{KIND_LABEL[a.kind]?.replace(/s$/, '')} · {a.country} · {a.currency}{owner ? ` · ${owner}` : ''}{a.visibility === 'private' ? ' · private' : ''}</p></div></div>
             <div className={`hero-amount ${a.balance && a.balance.minor < 0 ? 'neg' : ''}`} style={{ fontSize: 40 }}>{fmt(a.balance)}</div>
             <p className="caption">{a.balance_at ? `Balance as of ${shortDate(a.balance_at.slice(0, 10))}` : 'No balance seen yet — it appears from the next SMS or statement'}</p>
             {a.credit_limit && a.used_pct !== null && (
@@ -284,7 +284,7 @@ function UsedBySheet({ a, open, onClose }: { a: Account; open: boolean; onClose:
             <Field label="From"><input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></Field>
             <Field label="To"><input className="input" type="date" value={to} onChange={e => setTo(e.target.value)} /></Field>
           </div>
-          <List>{people.map(p => <ListRow key={p.kind + p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.kind === 'member' ? 'Family' : 'Friend'}
+          <List>{people.map(p => <ListRow key={p.kind + p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name} sub={p.kind === 'member' ? 'Family' : 'Friend'}
             end={who?.id === p.id ? <Icon name="check" size={22} className="pos" /> : undefined} onClick={() => setWho(p)} chevron={false} />)}</List>
           {save.error && <p className="caption neg">{save.error.message}</p>}
           <button className="btn block" disabled={!who || !from || !to || to < from || save.isPending}

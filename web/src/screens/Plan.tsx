@@ -211,7 +211,7 @@ function NewCommitmentSheet({ open, onClose }: { open: boolean; onClose: () => v
                 <div key={p.id} className="list-row">
                   <button type="button" className="row-flex" style={{ flex: 1, minWidth: 0, background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit', textAlign: 'left', minHeight: 44 }}
                     aria-pressed={on} onClick={() => setSharers(on ? sharers.filter(x => x !== p.id) : [...sharers, p.id])}>
-                    <Avatar name={p.name} size={32} /><span style={{ flex: 1, minWidth: 0 }}>{p.name}<br /><span className="caption">{p.kind === 'member' ? p.relation : 'friend'}</span></span>
+                    <Avatar name={p.name} photo={p.photo} size={32} /><span style={{ flex: 1, minWidth: 0 }}>{p.name}<br /><span className="caption">{p.kind === 'member' ? p.relation : 'friend'}</span></span>
                     {on && equal === 'equal' && <span className="num caption">{fmt({ minor: each, currency })}</span>}
                     {on ? <Icon name="check" size={22} className="pos" /> : <Icon name="plus" size={20} className="muted" />}
                   </button>

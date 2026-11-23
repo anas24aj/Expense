@@ -212,7 +212,7 @@ function PersonPicker({ direction, onPick }: { direction: 'debit' | 'credit'; on
       {(['member', 'contact'] as const).map((kind, i) => (
         <div key={kind} className="stack-sm">
           <div className="caption" style={{ marginLeft: 4 }}>{hint[i]}</div>
-          <List>{people.filter(p => p.kind === kind).map(p => <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.relation} onClick={() => onPick(p, personPurpose(d, p))} chevron={false} />)}</List>
+          <List>{people.filter(p => p.kind === kind).map(p => <ListRow key={p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name} sub={p.relation} onClick={() => onPick(p, personPurpose(d, p))} chevron={false} />)}</List>
         </div>
       ))}
     </div>
@@ -268,7 +268,7 @@ function SplitPicker({ t, onDone }: { t: Txn; onDone: () => void }) {
     <div className="stack">
       <List>
         {people.map(p => (
-          <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.relation}
+          <ListRow key={p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name} sub={p.relation}
             end={picked.includes(p.id) ? <Icon name="check" size={22} className="pos" /> : undefined}
             onClick={() => setPicked(picked.includes(p.id) ? picked.filter(x => x !== p.id) : [...picked, p.id])} chevron={false} />
         ))}

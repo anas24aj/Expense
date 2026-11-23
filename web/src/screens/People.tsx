@@ -43,7 +43,7 @@ function Family({ people, me }: { people: Person[]; me: Me }) {
         <Section title="Money between you">
           <List>
             {owing.map(p => (
-              <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub="lent, borrowed and paid back"
+              <ListRow key={p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name} sub="lent, borrowed and paid back"
                 end={p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span> : <span className="neg"><Monies items={p.you_owe} /></span>}
                 endSub={p.owes_you.length ? 'owes you' : 'you owe'} onClick={() => setOpen(p)} />
             ))}
@@ -60,7 +60,7 @@ function Family({ people, me }: { people: Person[]; me: Me }) {
               return (
                 <div key={p.id} className="stack-sm">
                   <div className="between">
-                    <span className="row-flex"><Avatar name={p.name} size={32} /><b>{p.name}</b></span>
+                    <span className="row-flex"><Avatar name={p.name} photo={p.photo} size={32} /><b>{p.name}</b></span>
                     <span className="num"><Money m={p.support_month} /> <span className="caption">of <Money m={p.support_plan} /></span></span>
                   </div>
                   <Meter pct={plan ? (got / plan) * 100 : 100} color={over ? 'var(--orange-fill)' : 'var(--green-fill)'} />
@@ -76,7 +76,7 @@ function Family({ people, me }: { people: Person[]; me: Me }) {
         <List>
           <ListRow icon={<Avatar name={me.user.name} />} title={<>{me.user.name} <span className="caption">(you)</span></>} sub={me.member.role} chevron={false} />
           {(hh.data?.members || []).filter(m => m.id !== me.member.id).map(m => (
-            <ListRow key={m.id} icon={<Avatar name={m.display_name} />} title={m.display_name} sub={`${m.relation} · ${m.user_id ? 'on the app' : m.email ? 'invited' : 'no login'}`}
+            <ListRow key={m.id} icon={<Avatar name={m.display_name} photo={m.photo} />} title={m.display_name} sub={`${m.relation} · ${m.user_id ? 'on the app' : m.email ? 'invited' : 'no login'}`}
               end={<span className={`badge ${m.role === 'admin' || m.role === 'owner' ? 'blue' : ''}`}>{m.role}</span>} onClick={admin ? () => setEditing(m) : undefined} label={admin ? `Edit ${m.display_name}` : undefined} />
           ))}
         </List>
@@ -217,7 +217,7 @@ function Friends({ people }: { people: Person[] }) {
         {friends.length ? (
           <List>
             {friends.map(p => (
-              <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name}
+              <ListRow key={p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name}
                 sub={p.rent_due ? <span className="warn">Rent due {fmt(p.rent_due)}</span> : p.on_app ? 'On the app — splits sync' : p.relation || 'friend'}
                 end={p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span> : p.you_owe.length ? <span className="neg"><Monies items={p.you_owe} /></span> : <span className="caption">Settled</span>}
                 endSub={p.owes_you.length ? 'owes you' : p.you_owe.length ? 'you owe' : undefined} onClick={() => setOpen(p)} />

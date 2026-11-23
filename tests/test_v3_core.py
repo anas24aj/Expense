@@ -304,6 +304,15 @@ class IngestTest(Base):
 
 
 class LedgerTest(Base):
+    def test_people_photos(self):
+        o = signup('pics@x.com')
+        c = o.ok('POST', '/api/contacts', {'name': 'Harish'})
+        pic = 'data:image/jpeg;base64,' + 'A' * 400
+        self.assertEqual(o.ok('PATCH', f'/api/contacts/{c["id"]}', {'photo': pic})['photo'], pic)
+        o.ok('PATCH', f'/api/contacts/{c["id"]}', {'photo': 'https://evil.example/x.jpg'}, status=(400,))
+        self.assertEqual(next(p for p in o.ok('GET', '/api/people')['items'] if p['id'] == c['id'])['photo'], pic)
+        self.assertIsNone(o.ok('PATCH', f'/api/contacts/{c["id"]}', {'photo': None})['photo'])
+
     def test_contact_who_joins_sees_shared_splits(self):
         owner = signup('own@x.com')
         harish = owner.ok('POST', '/api/contacts', {'name': 'Harish', 'email': 'harish@x.com'})

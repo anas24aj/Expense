@@ -5,15 +5,15 @@ export type Ref = { kind: 'member' | 'contact'; id: string };
 
 export interface User { id: string; email: string; username: string | null; name: string }
 export interface Household { id: string; name: string; base_currency: Currency; home_currency: Currency; timezone: string }
-export interface Member { id: string; display_name: string; relation: string; role: 'owner' | 'admin' | 'member' | 'viewer'; user_id: string | null; email: string | null }
-export interface Contact { id: string; name: string; email: string | null; phone: string | null; on_app: boolean }
+export interface Member { id: string; display_name: string; relation: string; role: 'owner' | 'admin' | 'member' | 'viewer'; user_id: string | null; email: string | null; photo?: string | null }
+export interface Contact { id: string; name: string; email: string | null; phone: string | null; on_app: boolean; photo?: string | null }
 export interface Invite { id: string; email: string; role?: string; link?: string; expires_at?: string }
 export interface Me { user: User; household: Household; member: Member; households: { id: string; name: string; role: string }[] }
 export interface HouseholdFull { household: Household; members: Member[]; contacts: Contact[]; invites: Invite[]; resets?: { member_id: string; name: string; email: string; expires_at: string; link: string }[] }
 
 export interface Person {
   kind: 'member' | 'contact'; id: string; name: string; relation: string | null; role: string | null; on_app: boolean;
-  owes_you: Money[]; you_owe: Money[]; support_month: Money | null; support_plan: Money | null; rent_due?: Money | null;
+  owes_you: Money[]; you_owe: Money[]; support_month: Money | null; support_plan: Money | null; rent_due?: Money | null; photo?: string | null;
 }
 export interface Device { id: string; name: string; platform: 'iphone' | 'android' | 'other'; member_id: string; created_at: string; last_seen: string | null }
 export interface DeviceCreated { device: Device; key: string; sms_url: string; setup: string; shortcut_url: string | null }

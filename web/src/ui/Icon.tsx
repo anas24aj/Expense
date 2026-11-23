@@ -110,20 +110,54 @@ const BRANDS: [RegExp, string, string, string][] = [
   [/xiaomi|\bmi store/i, 'mi', '#ff6900', '#fff'], [/jarir/i, 'J', '#e31e24', '#fff'], [/tamara/i, 't', '#000', '#f5c2a8'], [/tabby/i, 't', '#3bffc1', '#000'],
   [/saudia/i, 'S', '#006c35', '#fff'], [/flynas/i, 'nas', '#00244e', '#fff'], [/air ?india ?express/i, 'IX', '#e31837', '#fff'], [/qatar airways/i, 'QR', '#5c0632', '#fff'],
   [/phonepe/i, 'Pe', '#5f259f', '#fff'], [/paytm/i, 'P', '#00baf2', '#fff'], [/al ?rajhi/i, 'R', '#0d3b8f', '#fff'], [/urpay/i, 'ur', '#00b1a9', '#fff'],
+  [/sab|saudi british|saudi awwal/i, 'SAB', '#e30613', '#fff'], [/hdfc/i, 'H', '#004c8f', '#fff'], [/canara/i, 'C', '#0091d5', '#ffcc00'],
+  [/federal/i, 'F', '#1a3d8f', '#f7b500'], [/sbi ?card/i, 'SBI', '#1a4b8c', '#fff'], [/sbi|state bank/i, 'SBI', '#22409a', '#fff'],
+  [/axis/i, 'A', '#97144d', '#fff'], [/tiqmo/i, 't', '#6c2bd9', '#fff'], [/one ?card/i, '1', '#111', '#fff'], [/barq/i, 'B', '#0a1f44', '#fff'],
+  [/nissan|patrol/i, 'N', '#c3002f', '#fff'], [/shriram/i, 'SP', '#7a1f2b', '#fff'],
 ];
+/** Brand → its website, for the real logo (favicon). The monogram above stays underneath as the fallback. */
+const DOMAINS: [RegExp, string][] = [
+  [/netflix/i, 'netflix.com'], [/youtube/i, 'youtube.com'], [/google ?play/i, 'play.google.com'], [/google/i, 'google.com'], [/apple|itunes|icloud/i, 'apple.com'],
+  [/spotify/i, 'spotify.com'], [/amazon|amzn/i, 'amazon.com'], [/shahid/i, 'shahid.mbc.net'], [/disney|hotstar/i, 'hotstar.com'], [/anghami/i, 'anghami.com'],
+  [/openai|chatgpt/i, 'openai.com'], [/anthropic|claude/i, 'anthropic.com'], [/microsoft|office 365|xbox/i, 'microsoft.com'], [/stc bank/i, 'stcbank.com.sa'],
+  [/\bstc\b|stc pay/i, 'stc.com.sa'], [/mobily/i, 'mobily.com.sa'], [/\bzain\b/i, 'sa.zain.com'], [/ooredoo/i, 'ooredoo.qa'], [/\bjio\b/i, 'jio.com'],
+  [/airtel/i, 'airtel.in'], [/careem/i, 'careem.com'], [/\buber\b/i, 'uber.com'], [/jahez/i, 'jahez.net'], [/hunger ?station/i, 'hungerstation.com'],
+  [/talabat/i, 'talabat.com'], [/snoonu/i, 'snoonu.com'], [/\bnoon\b/i, 'noon.com'], [/zomato/i, 'zomato.com'], [/swiggy/i, 'swiggy.com'],
+  [/starbucks/i, 'starbucks.com'], [/mcdonald/i, 'mcdonalds.com'], [/\bkfc\b/i, 'kfc.com'], [/carrefour/i, 'carrefourksa.com'], [/lulu/i, 'luluhypermarket.com'],
+  [/panda/i, 'panda.com.sa'], [/danube/i, 'danube.sa'], [/tamimi/i, 'tamimimarkets.com'], [/ikea/i, 'ikea.com'], [/xiaomi|\bmi store/i, 'mi.com'],
+  [/jarir/i, 'jarir.com'], [/tamara/i, 'tamara.co'], [/tabby/i, 'tabby.ai'], [/saudia/i, 'saudia.com'], [/flynas/i, 'flynas.com'],
+  [/air ?india ?express/i, 'airindiaexpress.com'], [/qatar airways/i, 'qatarairways.com'], [/phonepe/i, 'phonepe.com'], [/paytm/i, 'paytm.com'],
+  [/al ?rajhi/i, 'alrajhibank.com.sa'], [/urpay/i, 'urpay.com.sa'], [/\bsab\b|saudi british|saudi awwal/i, 'sab.com'], [/hdfc/i, 'hdfcbank.com'],
+  [/canara/i, 'canarabank.com'], [/federal/i, 'federalbank.co.in'], [/sbi ?card/i, 'sbicard.com'], [/\bsbi\b|state bank/i, 'sbi.co.in'], [/axis/i, 'axisbank.com'],
+  [/tiqmo/i, 'tiqmo.com'], [/one ?card/i, 'getonecard.app'], [/nissan|patrol/i, 'nissan-global.com'], [/shriram/i, 'shriramproperties.com'],
+];
+export function logoOf(name?: string | null) {
+  const d = name && DOMAINS.find(([rx]) => rx.test(name));
+  return d ? `https://www.google.com/s2/favicons?domain=${d[1]}&sz=128` : undefined;
+}
+/** A brand tile: the real logo when it loads, its monogram underneath otherwise. */
+export function BrandTile({ name, size }: { name: string; size?: number }) {
+  const b = brandOf(name), logo = logoOf(name);
+  const [label, bg, fg] = b ? [b[1], b[2], b[3]] : [name.slice(0, 1).toUpperCase(), '#8e8e93', '#fff'];
+  const box = size ? { width: size, height: size, borderRadius: size * .26 } : {};
+  return (
+    <span className="icon-tile brand-tile" aria-hidden style={{ background: bg, color: fg, fontSize: label.length > 2 ? 10 : 17, position: 'relative', overflow: 'hidden', ...box }}>
+      {label}
+      {logo && <img src={logo} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.display = 'none'; }}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#fff', padding: '14%' }} />}
+    </span>
+  );
+}
 export function brandOf(merchant?: string | null) {
   return merchant ? BRANDS.find(([rx]) => rx.test(merchant)) : undefined;
 }
 export function CategoryTile({ category, purpose, merchant }: { category: string | null; purpose?: string; merchant?: string | null }) {
-  const brand = !purpose && brandOf(merchant);
-  if (brand) {
-    const [, label, bg, fg] = brand;
-    return <span className="icon-tile brand-tile" aria-hidden style={{ background: bg, color: fg, fontSize: label.length > 2 ? 10 : 17 }}>{label}</span>;
-  }
+  if (!purpose && merchant && (brandOf(merchant) || logoOf(merchant))) return <BrandTile name={merchant} />;
   const [icon, color] = (purpose && PURPOSE_ICON[purpose]) || (category && CAT[category]) || ['tag', '#8e8e93'];
   return <Tile icon={icon} color={color} />;
 }
-export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
+export function Avatar({ name, size = 40, photo }: { name: string; size?: number; photo?: string | null }) {
+  if (photo) return <img className="avatar" src={photo} alt="" aria-hidden style={{ width: size, height: size, objectFit: 'cover' }} />;
   const hues = [211, 262, 340, 28, 145, 190, 300];
   const h = hues[[...name].reduce((s, c) => s + c.charCodeAt(0), 0) % hues.length];
   const initials = name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();

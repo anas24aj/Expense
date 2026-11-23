@@ -187,7 +187,7 @@ def reclassify(hh, txn_ids=None, pair=True):
         sql, params = valid.inlist('i', txn_ids)
         where = f'AND t.id IN {sql} '
     rows = hh.run(SELECT + "WHERE t.household_id = :hid AND t.deleted_at IS NULL " + where +
-                  "AND t.id NOT IN (SELECT txn_id FROM txn_meta WHERE household_id = :hid AND set_by = 'user') ORDER BY t.occurred_at, t.id", **params)
+                  "AND t.id NOT IN (SELECT txn_id FROM txn_meta WHERE household_id = :hid AND set_by = 'user') ORDER BY t.occurred_at, t.dedupe_key, t.id", **params)
     ctx, done = _context(hh, pair), []
     for t in rows:
         save_meta(hh, t['id'], infer(hh, t, ctx))

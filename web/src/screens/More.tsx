@@ -5,7 +5,7 @@ import { api, useApi, useWrite } from '../api/client';
 import type { Account, Asset, Coverage, DeviceCreated, Device, HouseholdFull, Liability, Me, Milestone, Money as MoneyT, SalaryEntry, Settings, Statement, Txn } from '../api/types';
 import { fmt, major, monthLabel, shortDate, thisMonth, toMinor, today } from '../lib/format';
 import {
-  AmountInput, Avatar, brandOf, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
+  AmountInput, Avatar, BrandTile, brandOf, CategoryTile, logoOf, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
 } from '../ui';
 import { copy, InviteSheet } from './People';
 import { readFile } from './files';
@@ -97,7 +97,7 @@ export function AccountsPage() {
                 <List>
                   {list.map(a => (
                     <Link key={a.id} to={`/more/accounts/${a.id}`} className="list-row" style={a.credit_limit ? { flexWrap: 'wrap' } : undefined}>
-                      {brandOf(a.institution) ? <CategoryTile category={null} merchant={a.institution} /> : <Tile icon={KIND_TILE[kind][0]} color={KIND_TILE[kind][1]} />}
+                      {brandOf(a.institution) || logoOf(a.institution) ? <BrandTile name={a.institution} /> : <Tile icon={KIND_TILE[kind][0]} color={KIND_TILE[kind][1]} />}
                       <div className="body"><div className="title">{a.institution} {a.last4 && <span className="caption">··{a.last4}</span>}</div>
                         <div className="sub">{a.name.startsWith(a.institution) ? KIND_LABEL[a.kind].replace(/s$/, "") : a.name}{owners.size > 1 && a.owner_member_id ? ` · ${ownerName(a.owner_member_id)}` : ''}{covOf(a.id) && covOf(a.id)!.status !== 'ok' ? <span className="warn"> · {covOf(a.id)!.status === 'gaps' ? `${covOf(a.id)!.missing_months.length} month gap` : covOf(a.id)!.status === 'stale' ? 'quiet' : 'no data'}</span> : null}</div></div>
                       <div className="end"><span className={`amt ${a.balance && a.balance.minor < 0 ? 'neg' : ''}`}><Money m={a.balance} /></span>
@@ -355,7 +355,7 @@ const TONE: Record<string, [string, string]> = { good: ['check', '#30d158'], war
 const STATUS_LABEL = { sold: 'Sold', written_off: 'Written off' } as const;
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 
-/** Name, builder or maker as a monogram tile (no logos are fetched), your own photo if you added a link, and the status. */
+/** Builder or maker as its logo (monogram if unknown), your own photo if you added a link, and the status. */
 function AssetHeader({ a }: { a: Asset }) {
   const [editing, setEditing] = useState(false);
   const d = a.details, maker = d.builder || '';
@@ -364,7 +364,7 @@ function AssetHeader({ a }: { a: Asset }) {
     <section className="glass card span-2 stack-sm" style={{ padding: 0, overflow: 'hidden' }}>
       {d.photo_url && <img src={d.photo_url} alt={`Photo of ${a.name}`} referrerPolicy="no-referrer" loading="lazy" style={{ width: '100%', height: 168, objectFit: 'cover', display: 'block' }} />}
       <div className="row-flex" style={{ padding: '14px 16px', gap: 12 }}>
-        {maker ? <span className="icon-tile brand-tile" aria-hidden style={{ background: tileColor, color: '#fff', fontSize: 15 }}>{initials(maker)}</span> : <Tile icon={tileIcon} color={tileColor} />}
+        {maker && (brandOf(maker) || logoOf(maker)) ? <BrandTile name={maker} /> : maker ? <span className="icon-tile brand-tile" aria-hidden style={{ background: tileColor, color: '#fff', fontSize: 15 }}>{initials(maker)}</span> : <Tile icon={tileIcon} color={tileColor} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{maker || a.name}</b>
           <span className="caption">{a.kind === 'property' ? (a.under_construction ? 'Under construction' : 'Property') : a.kind === 'vehicle' ? 'Vehicle' : 'Investment'}
@@ -907,7 +907,7 @@ export function HouseholdPage({ me }: { me: Me }) {
         <>
           <Section title={q.data!.household.name}>
             <List>{q.data!.members.map(m => (
-              <ListRow key={m.id} icon={<Avatar name={m.display_name} />} title={m.display_name} sub={`${m.relation}${m.email ? ' · ' + m.email : ''}`} end={<span className="badge">{m.role}</span>} endSub={m.user_id ? 'on app' : 'no login'} />
+              <ListRow key={m.id} icon={<Avatar name={m.display_name} photo={m.photo} />} title={m.display_name} sub={`${m.relation}${m.email ? ' · ' + m.email : ''}`} end={<span className="badge">{m.role}</span>} endSub={m.user_id ? 'on app' : 'no login'} />
             ))}</List>
           </Section>
           {q.data!.invites.length > 0 && (

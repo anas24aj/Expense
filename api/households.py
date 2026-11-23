@@ -1,6 +1,7 @@
 """Household, members, invites, contacts, people balances and phones (docs/brain/api-v3.md, "Household & people")."""
 import json
 import os
+import re
 import secrets
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,17 @@ def member_view(db, m):
         inv = db.one('SELECT email FROM invites WHERE member_id = :m AND household_id = :h AND accepted_at IS NULL ORDER BY expires_at DESC',
                      m=m['id'], h=m['household_id'])
         email = inv and inv['email']
-    return {'id': m['id'], 'display_name': m['display_name'], 'relation': m['relation'], 'role': m['role'], 'user_id': m['user_id'], 'email': email}
+    return {'id': m['id'], 'display_name': m['display_name'], 'relation': m['relation'], 'role': m['role'], 'user_id': m['user_id'], 'email': email,
+            'photo': m.get('photo')}
+
+
+def _photo(v):
+    """A small inline image only: no remote URLs (they'd leak who views the page), at most ~64 KB."""
+    if not v:
+        return None
+    if not isinstance(v, str) or len(v) > 90_000 or not re.fullmatch(r'data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+', v):
+        raise ApiError(400, 'photo must be a data:image/jpeg|png|webp;base64 URL under 64 KB')
+    return v
 
 
 def on_app(db, email):
@@ -36,7 +47,7 @@ def on_app(db, email):
 
 
 def contact_view(db, c):
-    return {'id': c['id'], 'name': c['name'], 'email': c['email'], 'phone': c['phone'], 'on_app': on_app(db, c['email'])}
+    return {'id': c['id'], 'name': c['name'], 'email': c['email'], 'phone': c['phone'], 'on_app': on_app(db, c['email']), 'photo': c.get('photo')}
 
 
 def invite_view(req, inv):
@@ -160,6 +171,8 @@ def patch_member(req):
         if m['role'] == 'owner':
             raise ApiError(403, "the owner's role can't change")
         cols['role'] = valid.choice(b['role'], ROLES, 'role')
+    if 'photo' in b:
+        cols['photo'] = _photo(b['photo'])
     req.hh.update('members', m['id'], **cols)
     out = member_view(req.db, req.hh.get('members', m['id']))
     if b.get('email') and not m['user_id']:
@@ -220,6 +233,8 @@ def _contact_fields(b, partial=False):
         cols['email'] = auth._email(b['email']) if b['email'] else ''
     if 'phone' in b:
         cols['phone'] = valid.text(b['phone'], 'phone', 30, required=False)
+    if 'photo' in b:
+        cols['photo'] = _photo(b['photo'])
     return cols
 
 
@@ -322,12 +337,12 @@ def people(hh, db):
         k = ('member', m['id'])
         items.append({'kind': 'member', 'id': m['id'], 'name': m['display_name'], 'relation': m['relation'], 'role': m['role'],
                       'on_app': bool(m['user_id']), 'owes_you': owe(k, 1), 'you_owe': owe(k, -1),
-                      'support_month': _monthly(support[m['id']]), 'support_plan': _monthly(plan[m['id']])})
+                      'support_month': _monthly(support[m['id']]), 'support_plan': _monthly(plan[m['id']]), 'photo': m.get('photo')})
     for c in hh.run('SELECT * FROM contacts WHERE household_id = :hid AND removed_at IS NULL ORDER BY name'):
         k = ('contact', c['id'])
         items.append({'kind': 'contact', 'id': c['id'], 'name': c['name'], 'relation': 'other', 'role': None, 'on_app': on_app(db, c['email']),
                       'owes_you': owe(k, 1), 'you_owe': owe(k, -1), 'support_month': None, 'support_plan': None,
-                      'rent_due': _monthly(rent_due[c['id']])})
+                      'rent_due': _monthly(rent_due[c['id']]), 'photo': c.get('photo')})
     return items
 
 
