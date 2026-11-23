@@ -33,6 +33,7 @@ def fresh_db(name):
         db = dbmod.DB()
         db.run('DROP SCHEMA public CASCADE')
         db.run('CREATE SCHEMA public')
+        db.run(f'DROP SCHEMA IF EXISTS {dbmod.SCHEMA} CASCADE')
         db.conn.close()
         dbmod._idle.clear()
         dbmod._ready.clear()

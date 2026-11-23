@@ -29,6 +29,9 @@ def _url():
     return url.replace('-pooler.', '.', 1)  # pooled Neon hosts break pg8000's prepared statements
 
 
+SCHEMA = 'v3'
+
+
 class DB:
     def __init__(self, url=None):
         self.url = _url() if url is None else url
@@ -52,8 +55,16 @@ class DB:
         import pg8000.native
         u = urlparse(self.url)
         tls = parse_qs(u.query).get('sslmode', ['require'])[0] != 'disable'
-        return pg8000.native.Connection(unquote(u.username or ''), host=u.hostname, port=u.port or 5432, database=u.path.lstrip('/'),
+        conn = pg8000.native.Connection(unquote(u.username or ''), host=u.hostname, port=u.port or 5432, database=u.path.lstrip('/'),
                                         password=unquote(u.password or ''), ssl_context=ssl.create_default_context() if tls else None)
+        # v3 lives in its own schema: the old app's tables (transactions, accounts, ...) sit in public with the same names.
+        # public stays on the path only so old accounts (app_users) can move over on first sign-in.
+        try:
+            conn.run(f'CREATE SCHEMA IF NOT EXISTS {SCHEMA}')
+        except Exception:  # two cold starts racing: the other one created it
+            pass
+        conn.run(f'SET search_path TO {SCHEMA}, public')
+        return conn
 
     def run(self, sql, **params):
         """Run one statement with :name params; returns a list of dicts."""
