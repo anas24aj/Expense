@@ -2,3 +2,4 @@ expense.db
 __pycache__/
 .vercel/
 android/app/*.keystore
+.claude/worktrees/
