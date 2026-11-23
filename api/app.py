@@ -9,11 +9,12 @@ import mimetypes
 import re
 import sys
 import traceback
+from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from api.db import DB, Scoped
+from api.db import DB, Scoped, new_id, now
 
 DIST = Path(__file__).parent.parent / 'web' / 'dist'
 MAX_BODY = 6 * 1024 * 1024  # statements arrive base64; Vercel caps requests at 4.5 MB anyway
@@ -107,6 +108,25 @@ def _authorize(req, level):
     req.hh = Scoped(req.db, hid)
     if level == 'admin' and req.member['role'] not in ('owner', 'admin'):
         raise ApiError(403, 'only the household owner or an admin can do this')
+    if req.member['role'] == 'viewer' and req.method != 'GET':
+        raise ApiError(403, 'viewers can look but not change anything')
+
+
+def log_error(db, where, e, hh=None):
+    """Keep an unhandled exception for the household admin: route, kind, message and the traceback's last 4 KB.
+    Never the request body. Logging must not fail the request."""
+    try:
+        db.run('DELETE FROM errors WHERE at < :old', old=(datetime.now(timezone.utc) - timedelta(days=30)).isoformat(timespec='seconds'))
+        db.run('INSERT INTO errors (id, household_id, at, route, kind, message, trace) VALUES (:id, :h, :at, :r, :k, :m, :tb)',
+               id=new_id(), h=hh and hh.hid, at=now(), r=where[:200], k=type(e).__name__, m=str(e)[:500], tb=traceback.format_exc()[-4096:])
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+
+
+@route('GET', '/api/admin/errors', auth='admin')
+def errors(req):
+    """The household's last 100 unhandled errors, newest first."""
+    return {'items': req.hh.run('SELECT at, route, kind, message, trace FROM errors WHERE household_id = :hid ORDER BY at DESC, id LIMIT 100')}
 
 
 def _static(path):
@@ -137,7 +157,7 @@ def app(environ, start_response):
         return send(200, f.read_bytes(), ctype, [('Cache-Control', cache)])
 
     _load()
-    db = DB()
+    db, req = DB(), None
     try:
         req = Request(environ, db)
         allowed = False
@@ -157,8 +177,9 @@ def app(environ, start_response):
             except ApiError as e:
                 return send(e.status, {'error': e.message}, headers=req.headers_out)
         return send(405 if allowed else 404, {'error': 'method not allowed' if allowed else 'not found'})
-    except Exception as e:  # never leak internals to the client; log them for Vercel
+    except Exception as e:  # never leak internals to the client; log them for Vercel and the errors table
         traceback.print_exc(file=sys.stderr)
+        log_error(db, f'{method} {path}', e, req and req.hh)
         return send(500, {'error': 'something went wrong on our side', 'kind': type(e).__name__})
     finally:
         db.close()

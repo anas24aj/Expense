@@ -2,6 +2,7 @@
 import re
 from datetime import date, datetime, timezone
 
+import engine
 from api.app import ApiError
 
 CURRENCY = re.compile(r'[A-Z]{3}\Z')
@@ -35,6 +36,8 @@ def currency(v, field='currency'):
     v = v.upper() if isinstance(v, str) else v
     if not isinstance(v, str) or not CURRENCY.match(v):
         raise ApiError(400, f'{field} must be a 3-letter currency code')
+    if v not in engine.SUPPORTED:  # totals could not convert it
+        raise ApiError(400, f"{field} must be one of: {', '.join(sorted(engine.SUPPORTED))}")
     return v
 
 

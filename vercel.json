@@ -4,5 +4,10 @@
   "regions": [
     "fra1"
   ],
+  "functions": {
+    "api/app.py": {
+      "maxDuration": 300
+    }
+  },
   "buildCommand": "cd web && npm ci && npm run build"
 }

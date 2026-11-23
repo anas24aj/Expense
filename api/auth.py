@@ -159,6 +159,22 @@ def invite_by_token(db, token):
     return inv if inv and inv['expires_at'] > now() else None
 
 
+CONTACT_TOKEN = 'contact.'  # an invite link for a contact (not a member): shared lines only, never the household's books
+
+
+def contact_token(db, cid):
+    return CONTACT_TOKEN + link_token(db, 'contact', cid)
+
+
+def _link_contact(db, user, token):
+    """Accepting a contact invite proves the user got the household's link: only then does /api/shared show its lines.
+    The first account to accept it keeps it."""
+    cid = token[len(CONTACT_TOKEN):].split('.')[0]
+    if len(token) > 100 or not hmac.compare_digest(token, contact_token(db, cid)):
+        raise ApiError(404, 'this invite link is not valid')
+    db.run('UPDATE contacts SET linked_user_id = :u WHERE id = :c AND linked_user_id IS NULL AND removed_at IS NULL', u=user['id'], c=cid)
+
+
 def _join(db, user, token):
     """Accept an invite for `user`: they become its member (the login-less member it was made for, if any)."""
     inv = invite_by_token(db, token)
@@ -197,6 +213,8 @@ def signup(req):
     b = req.json
     email, password, name = _email(b.get('email')), _password(b.get('password')), valid.text(b.get('name'), 'name')
     invite = b.get('invite')
+    contact = invite if isinstance(invite, str) and invite.startswith(CONTACT_TOKEN) else None
+    invite = None if contact else invite
     db = req.db
     with db.tx():
         if db.one('SELECT id FROM users WHERE email = :e', e=email):
@@ -205,6 +223,8 @@ def signup(req):
         db.run('INSERT INTO users (id, email, name, pw_hash, created_at) VALUES (:id, :email, :name, :pw_hash, :created_at)', **user)
         user = db.one('SELECT * FROM users WHERE id = :id', id=user['id'])
         hid = _join(db, user, invite) if invite else create_household(db, user, f"{name}'s family")['id']
+        if contact:
+            _link_contact(db, user, contact)
     _sign_in(req, user, hid)
     return 201, {'user': public_user(user), 'household': household_view(db.one('SELECT * FROM households WHERE id = :id', id=hid))}
 
@@ -221,7 +241,10 @@ def login(req):
         db.run('DELETE FROM login_failures WHERE at <= :since', since=t - LOCKOUT_SECONDS)
         db.run('INSERT INTO login_failures (ip, at) VALUES (:ip, :at)', ip=ip, at=t)
         raise ApiError(401, 'wrong email or password')
-    hid = _join(db, user, b['invite']) if b.get('invite') else None
+    contact = isinstance(b.get('invite'), str) and b['invite'].startswith(CONTACT_TOKEN)
+    if contact:
+        _link_contact(db, user, b['invite'])
+    hid = _join(db, user, b['invite']) if b.get('invite') and not contact else None
     _sign_in(req, user, hid)
     return {'user': public_user(user)}
 

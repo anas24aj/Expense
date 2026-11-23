@@ -112,9 +112,12 @@ def set_meta(hh, txn_id, **cols):
         hh.run(f'INSERT INTO txn_meta (txn_id, household_id, {names}) VALUES (:t, :hid, {", ".join(":" + k for k in cols)})', t=txn_id, **cols)
 
 
-def reclassify(hh, txn_ids=None):
-    """Let the classifier re-tag transactions after a rule-bearing change (commitment/liability/asset patterns)."""
+def reclassify(hh, txn_ids=None, rule=None):
+    """Let the classifier re-tag transactions after a rule-bearing change. rule=(table, id): only the transactions that
+    rule's pattern could match or that are tagged to it, without transfer pairing (a rule never changes a pair)."""
     from api import classify
+    if rule:
+        return classify.reclassify(hh, classify.candidates(hh, *rule), pair=False)
     classify.reclassify(hh, txn_ids)
 
 
@@ -191,7 +194,7 @@ def liability_add(req):
     cols.setdefault('opening_balance_minor', cols.get('principal_minor', 0))
     cols.setdefault('as_of', insights.today_in(None))
     row = req.hh.insert('liabilities', created_at=now(), **cols)
-    reclassify(req.hh)
+    reclassify(req.hh, rule=('liabilities', row['id']))
     return 201, _one_liability(req, row['id'])
 
 
@@ -202,7 +205,7 @@ def liability_edit(req):
     if 'closed' in req.json:
         cols['closed_at'] = now() if req.json['closed'] else None
     req.hh.update('liabilities', req.params['id'], **cols)
-    reclassify(req.hh)
+    reclassify(req.hh, rule=('liabilities', req.params['id']))
     return _one_liability(req, req.params['id'])
 
 
@@ -322,7 +325,7 @@ def commitment_add(req):
         row = req.hh.insert('commitments', created_at=now(), **cols)
         _save_shares(req, row['id'])
         _sync_fund(req.hh, row['id'])
-    reclassify(req.hh)
+    reclassify(req.hh, rule=('commitments', row['id']))
     return 201, _one_commitment(req, row['id'])
 
 
@@ -335,7 +338,7 @@ def commitment_edit(req):
         req.hh.update('commitments', cid, **cols)
         _save_shares(req, cid)
         _sync_fund(req.hh, cid)
-    reclassify(req.hh)
+    reclassify(req.hh, rule=('commitments', cid))
     return _one_commitment(req, cid)
 
 
@@ -426,7 +429,7 @@ def fund_add(req):
         if 'rent' in b:
             _save_rent(req, row['id'], b['rent'])
     if 'rent' in b:
-        reclassify(req.hh)  # past rent credits that match get tagged to the pot
+        reclassify(req.hh, rule=('funds', row['id']))  # past rent credits that match get tagged to the pot
     return 201, _one_fund(req, row['id'])
 
 
@@ -438,7 +441,7 @@ def fund_edit(req):
         if 'rent' in req.json:
             _save_rent(req, req.params['id'], req.json['rent'])
     if 'rent' in req.json:
-        reclassify(req.hh)
+        reclassify(req.hh, rule=('funds', req.params['id']))
     return _one_fund(req, req.params['id'])
 
 

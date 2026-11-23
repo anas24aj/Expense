@@ -28,13 +28,16 @@ def money(minor, currency):
 USD_PEGS = {'USD': 1, 'SAR': 3.75, 'QAR': 3.64, 'AED': 3.6725, 'BHD': 0.376, 'OMR': 0.3845, 'KWD': 0.307}
 
 
+SUPPORTED = {'SAR', 'INR', *USD_PEGS}  # currencies conv can convert
+
+
 def conv(minor, cur, to, rate):
     """Convert at `rate` (INR per SAR); USD-pegged Gulf currencies through their fixed pegs."""
     if cur == to or not minor:
         return minor
     sar_per = {'SAR': 1, 'INR': 1 / rate, **{c: USD_SAR / p for c, p in USD_PEGS.items()}}
-    if cur not in sar_per or to not in sar_per:
-        raise ValueError(f'no exchange rate for {cur} to {to}')
+    if cur not in sar_per or to not in sar_per:  # no rate (EUR, THB…): left out of converted totals; the row itself still lists
+        return 0
     return minor * sar_per[cur] / sar_per[to]
 
 
