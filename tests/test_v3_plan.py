@@ -102,9 +102,11 @@ class PlanTest(unittest.TestCase):
 
     # ---- commitments, funds ----
         catch_up = self.txn(5000_00, 'debit', 'AXIS ACH RETURN', self.today)  # a bounced EMI paid another way
-        self.ok('PATCH', f'/transactions/{catch_up}', {'liability_id': loan['id']})
+        self.assertEqual(self.ok('PATCH', f'/transactions/{catch_up}', {'liability_id': loan['id']})['liability_id'], loan['id'])
         self.assertEqual(len(self.ok('GET', f'/liabilities/{loan["id"]}')['payments']), 3)
         self.assertEqual(self.call('PATCH', f'/api/transactions/{catch_up}', {'liability_id': new_id()}, '')[0], 400)
+        self.assertIsNone(self.ok('PATCH', f'/transactions/{catch_up}', {'liability_id': None, 'purpose': 'spend'})['liability_id'])  # unlink
+        self.assertEqual(len(self.ok('GET', f'/liabilities/{loan["id"]}')['payments']), 2)
 
     def test_six_monthly_rent_gets_a_fund(self):
         c = self.ok('POST', '/commitments', {'name': 'Flat rent', 'kind': 'rent', 'amount_minor': 30000_00, 'currency': 'SAR', 'cycle_months': 6,

@@ -15,7 +15,7 @@ PURPOSES = {'spend', 'fee', 'transfer', 'income', 'support', 'lend', 'repaid', '
             'reimbursement', 'asset', 'saving', 'refund', 'ignore'}
 LINK_KINDS = {'transfer', 'refund', 'repayment'}
 MAX_PAGE = 200
-TXN_SELECT = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id, m.person_contact_id, m.claim_id, m.commitment_id, '
+TXN_SELECT = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id, m.person_contact_id, m.claim_id, m.commitment_id, m.liability_id, '
               'a.name AS account_name FROM transactions t '
               'LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id '
               'LEFT JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id ')
@@ -49,7 +49,7 @@ def txn_views(hh, rows):
                     'account_id': r['account_id'], 'account_name': r['account_name'], 'member_id': r['member_id'], 'note': r['note'],
                     'source': r['source'], 'person': person,
                     'split_mine': valid.money(r['amount_minor'] - shared[r['id']], r['currency']) if r['id'] in shared else None,
-                    'claim_id': r['claim_id'], 'commitment_id': r['commitment_id']})
+                    'claim_id': r['claim_id'], 'commitment_id': r['commitment_id'], 'liability_id': r['liability_id']})
     return out
 
 

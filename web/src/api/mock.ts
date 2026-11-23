@@ -54,11 +54,11 @@ const categories = ['Groceries', 'Dining', 'Fuel', 'Transport', 'Shopping', 'Ren
   'Education', 'Travel', 'Fees & interest', 'Loan EMI', 'Salary', 'Transfer', 'Home', 'Entertainment', 'Ignored']
   .map((name, i) => ({ id: 'cat' + i, name, parent: null, kind: name === 'Salary' ? 'income' : name === 'Ignored' || name === 'Transfer' ? 'excluded' : 'spend', icon: null }));
 
-const T = (offset: number, merchant: string, amt: Money, account_id: string, category: string | null, purpose: Txn['purpose'] = 'spend',
+const T = (offset: number, merchant: string, amt: Money, account_id: string | null, category: string | null, purpose: Txn['purpose'] = 'spend',
   extra: Partial<Txn> = {}): Txn => ({
   id: id(), day: day(offset), occurred_at: day(offset) + 'T1' + (Math.abs(offset) % 10) + ':24:00Z', amount: amt,
   direction: purpose === 'income' || purpose === 'repaid' || purpose === 'reimbursement' ? 'credit' : 'debit', merchant, category, purpose,
-  confidence: 0.95, account_id, account_name: acctName(account_id), member_id: 'm1', note: null, source: 'sms', person: null, split_mine: null,
+  confidence: 0.95, account_id, account_name: account_id ? acctName(account_id) : null, member_id: 'm1', note: null, source: 'sms', person: null, split_mine: null,
   claim_id: null, commitment_id: null, ...extra,
 });
 const txns: Txn[] = [
@@ -184,7 +184,7 @@ const liabilities: Liability[] = [
     emi: INR(39500), due_day: 5, start_on: '2023-04-05', end_on: '2043-03-05', paid_pct: 14, payoff_month: '2041-03', interest_month: INR(27840), account_id: 'a7', contact_id: null },
   { id: 'l2', kind: 'loan', name: 'Camry auto finance', lender: 'Al Rajhi Bank', currency: 'SAR', principal: SAR(96000), outstanding: SAR(41200), rate_bp: 450,
     emi: SAR(2150), due_day: 28, start_on: '2023-07-28', end_on: '2028-06-28', paid_pct: 57, payoff_month: '2028-06', interest_month: SAR(155), account_id: 'a8', contact_id: null },
-  { id: 'l3', kind: 'card', name: 'SNB Platinum', lender: 'SNB', currency: 'SAR', principal: SAR(6850), outstanding: SAR(6850), rate_bp: 2700,
+  { id: 'l3', kind: 'credit_card', name: 'SNB Platinum', lender: 'SNB', currency: 'SAR', principal: SAR(6850), outstanding: SAR(6850), rate_bp: 2700,
     emi: SAR(1200), due_day: 18, start_on: null, end_on: null, paid_pct: 0, payoff_month: ym(6), interest_month: SAR(154), account_id: 'a2', contact_id: null },
   { id: 'l4', kind: 'bnpl', name: 'Tabby — Extra', lender: 'Tabby', currency: 'SAR', principal: SAR(1200), outstanding: SAR(900), rate_bp: 0,
     emi: SAR(300), due_day: 12, start_on: day(-40), end_on: day(50), paid_pct: 25, payoff_month: ym(2), interest_month: SAR(0), account_id: 'a9', contact_id: null },
@@ -263,10 +263,8 @@ const claims: Claim[] = [
 const people = (): Person[] => [
   ...members.filter(m => m.relation !== 'self').map(m => ({ kind: 'member' as const, id: m.id, name: m.display_name, relation: m.relation, role: m.role, on_app: !!m.user_id,
     owes_you: [], you_owe: [], support_month: m.id === 'm3' ? INR(25000) : m.id === 'm4' ? INR(8000) : null, support_plan: m.id === 'm3' ? INR(25000) : m.id === 'm4' ? INR(5000) : null })),
-  { kind: 'contact', id: 'c1', name: 'Rahul Nair', relation: 'friend', role: null, on_app: true, owes_you: [SAR(171.67)], you_owe: [], support_month: null, support_plan: null },
-  { kind: 'contact', id: 'c2', name: 'Imran Shaikh', relation: 'friend', role: null, on_app: false, owes_you: [SAR(21.67)], you_owe: [], support_month: null, support_plan: null },
-  { kind: 'contact', id: 'c3', name: 'Sameer Khan', relation: 'colleague', role: null, on_app: true, owes_you: [], you_owe: [SAR(120)], support_month: null, support_plan: null },
-  { kind: 'contact', id: 'c4', name: 'Vineeth K', relation: 'friend', role: null, on_app: false, owes_you: [INR(4500)], you_owe: [], support_month: null, support_plan: null },
+  ...contacts.map(c => ({ kind: 'contact' as const, id: c.id, name: c.name, relation: c.id === 'c3' ? 'colleague' : 'friend', role: null, on_app: c.on_app,
+    owes_you: ({ c1: [SAR(171.67)], c2: [SAR(21.67)], c4: [INR(4500)] } as Record<string, Money[]>)[c.id] || [], you_owe: c.id === 'c3' ? [SAR(120)] : [], support_month: null, support_plan: null })),
 ];
 
 let settings: Settings = { salary: SAR(24000), salary_day: 27, emergency_months: 6, debt_strategy: 'avalanche', extra_to_debt_minor: 50000 };
@@ -320,10 +318,14 @@ on('PATCH', '/households/current', (_m, b) => Object.assign(household, b));
 on('POST', '/households/switch', () => me());
 on('POST', '/members', (_m, b) => { const m: Member = { id: id(), display_name: b.display_name, relation: b.relation, role: b.role || 'member', user_id: null, email: b.email || null };
   members.push(m); if (b.email) { const inv = { id: id(), email: b.email, link: location.origin + '/join?t=' + id() }; invites.push(inv); return { ...m, invite: inv }; } return m; });
-on('PATCH', '/members/{id}', (m, b) => Object.assign(members.find(x => x.id === m[1])!, b));
+on('PATCH', '/members/{id}', (m, b) => { const x = members.find(x => x.id === m[1])!; const { email, ...rest } = b; Object.assign(x, rest);
+  if (email && !x.user_id) { x.email = email; const inv = { id: id(), email, link: location.origin + '/join?t=' + id() }; invites.push(inv); return { ...x, invite: inv }; } return x; });
+on('DELETE', '/members/{id}', m => { members.splice(members.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('POST', '/invites/{id}/resend', m => invites.find(x => x.id === m[1]));
 on('DELETE', '/invites/{id}', m => { invites.splice(invites.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('POST', '/contacts', (_m, b) => { const c = { id: id(), name: b.name, email: b.email || null, phone: b.phone || null, on_app: false }; contacts.push(c); return c; });
+on('PATCH', '/contacts/{id}', (m, b) => { const c = contacts.find(x => x.id === m[1])!; Object.assign(c, { ...b, email: b.email ?? c.email ?? null, phone: b.phone ?? c.phone ?? null }); return c; });
+on('DELETE', '/contacts/{id}', m => { contacts.splice(contacts.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('GET', '/people', () => ({ items: people() }));
 on('GET', '/shared', () => ({ items: [] }));
 on('GET', '/devices', () => ({ items: devices }));
@@ -352,11 +354,12 @@ on('GET', '/transactions/{id}', m => { const t = txns.find(x => x.id === m[1]); 
 on('PATCH', '/transactions/{id}', (m, b) => { const t = txns.find(x => x.id === m[1])!;
   const targets = b.apply_to_merchant ? txns.filter(x => x.merchant === t.merchant) : [t];
   for (const x of targets) { if (b.category !== undefined) x.category = b.category; if (b.purpose) x.purpose = b.purpose; if (b.note !== undefined) x.note = b.note;
-    if (b.person) x.person = { ...b.person, name: [...members.map(p => ({ id: p.id, name: p.display_name })), ...contacts].find(p => p.id === b.person.id)?.name || '' }; x.confidence = 1; }
+    if (b.person) x.person = { ...b.person, name: [...members.map(p => ({ id: p.id, name: p.display_name })), ...contacts].find(p => p.id === b.person.id)?.name || '' };
+    if (b.liability_id !== undefined) { x.liability_id = b.liability_id; if (b.liability_id && !b.purpose) x.purpose = 'loan_payment'; } x.confidence = 1; }
   return t; });
 on('POST', '/transactions/{id}/split', (m, b) => { const t = txns.find(x => x.id === m[1])!; const others = b.shares.reduce((s: number, x: any) => s + x.share_minor, 0);
   t.split_mine = { ...t.amount, minor: t.amount.minor - others }; t.confidence = 1; return t; });
-on('POST', '/transactions', (_m, b) => { const t = T(0, b.merchant, { minor: b.amount_minor, currency: b.currency }, b.account_id || 'a1', b.category || null, b.purpose || 'spend', { source: 'manual', day: b.day }); txns.unshift(t); return t; });
+on('POST', '/transactions', (_m, b) => { const t = T(0, b.merchant, { minor: b.amount_minor, currency: b.currency }, b.account_id || null, b.category || null, b.purpose || 'spend', { source: 'manual', day: b.day, direction: b.direction }); txns.unshift(t); return t; });
 on('DELETE', '/transactions/{id}', m => { txns.splice(txns.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('GET', '/review', () => { const items = review(); return { items, count: items.length }; });
 on('GET', '/categories', () => ({ items: categories }));
@@ -372,20 +375,38 @@ on('GET', '/ingest/log', () => ({ items: [
   { at: day(-1) + 'T19:40:00Z', device: 'Priya’s Pixel', sender: 'HDFCBK', outcome: 'duplicate' }] }));
 
 on('GET', '/liabilities', () => ({ items: liabilities }));
+const liab = (l: Liability, b: any): Liability => {  // the fields LoanSheet sends, in the response shape
+  const cur = b.currency || l.currency, M = (v: number | undefined, d: Money) => (v === undefined ? d : { minor: v, currency: cur });
+  const principal = M(b.principal_minor, l.principal);
+  return Object.assign(l, { kind: b.kind ?? l.kind, name: b.name ?? l.name, lender: b.lender ?? l.lender, currency: cur, principal,
+    opening_balance: M(b.opening_balance_minor ?? (l.opening_balance ? undefined : b.principal_minor), l.opening_balance || principal), as_of: b.as_of ?? l.as_of,
+    outstanding: M(b.opening_balance_minor ?? (l.opening_balance ? undefined : b.principal_minor), l.outstanding), rate_bp: b.rate_bp ?? l.rate_bp,
+    emi: M(b.emi_minor, l.emi), start_on: b.start_on !== undefined ? b.start_on : l.start_on, end_on: b.end_on !== undefined ? b.end_on : l.end_on,
+    match_pattern: b.match_pattern ?? l.match_pattern, closed: b.closed ?? l.closed ?? false });
+};
+on('POST', '/liabilities', (_m, b) => { const z = { minor: 0, currency: b.currency };
+  const l = liab({ id: id(), kind: b.kind, name: b.name, lender: '', currency: b.currency, principal: z, outstanding: z, rate_bp: 0, emi: z, due_day: null, start_on: null, end_on: null,
+    paid_pct: 0, payoff_month: null, interest_month: z, account_id: null, contact_id: null }, b);
+  liabilities.push(l); return l; });
+on('PATCH', '/liabilities/{id}', (m, b) => liab(liabilities.find(x => x.id === m[1])!, b));
+on('DELETE', '/liabilities/{id}', m => { liabilities.splice(liabilities.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('GET', '/commitments', () => ({ items: commitments }));
 on('GET', '/commitments/detect', () => ({ items: detected }));
-on('POST', '/commitments', (_m, b) => { const c = C(id(), b.name, b.kind, { minor: b.amount_minor, currency: b.currency }, b.cycle_months || 1, b.next_due || day(30), 'upcoming');
+on('POST', '/commitments', (_m, b) => { const c = C(id(), b.name, b.kind, { minor: b.amount_minor, currency: b.currency }, b.cycle_months || 1, b.next_due || day(30), 'upcoming', {
+    country: b.country ?? null, shares: (b.shares || []).map((s: any) => ({ ...s, share: { minor: s.share_minor, currency: b.currency }, paid_this_cycle: false,
+      name: people().find(p => p.id === (s.member_id || s.contact_id))?.name || '' })) });
   commitments.push(c); detected = detected.filter(d => d.name !== b.name); return c; });
 on('PATCH', '/commitments/{id}', (m, b) => Object.assign(commitments.find(x => x.id === m[1])!, b));
 on('DELETE', '/commitments/{id}', m => { commitments.splice(commitments.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('POST', '/commitments/{id}/paid', (m, b) => { const c = commitments.find(x => x.id === m[1])!;
   if (b.payer) { const s = c.shares.find(s => (s.contact_id || s.member_id) === b.payer.id); if (s) s.paid_this_cycle = true; } else c.status = 'paid'; return c; });
 on('GET', '/funds', () => ({ items: funds }));
-on('POST', '/funds', (_m, b) => { const f: Fund = { id: id(), name: b.name, target: { minor: b.amount_minor, currency: b.currency }, due_on: b.due_on, saved: { minor: 0, currency: b.currency },
-  monthly: { minor: Math.round(b.amount_minor / 6), currency: b.currency }, on_track: true, commitment_id: null }; funds.push(f); return f; });
+on('POST', '/funds', (_m, b) => { const f: Fund = { id: id(), name: b.name, target: { minor: b.target_minor, currency: b.currency }, due_on: b.due_on, saved: { minor: 0, currency: b.currency },
+  monthly: { minor: Math.round(b.target_minor / 6), currency: b.currency }, on_track: true, commitment_id: null }; funds.push(f); return f; });
 on('POST', '/funds/{id}/move', (m, b) => { const f = funds.find(x => x.id === m[1])!; f.saved = { ...f.saved, minor: f.saved.minor + b.amount_minor }; return f; });
 on('GET', '/assets', () => ({ items: assets }));
 on('GET', '/assets/{id}', m => assets.find(a => a.id === m[1]));
+on('POST', '/assets/{id}/costs', (m, b) => { if (!b.txn_id || !b.cost_type) throw new Err(400, 'cost_type is required (fuel, service, insurance…)'); return assets.find(a => a.id === m[1]); });
 on('GET', '/claims', () => ({ items: claims, pending: [SAR(2912)] }));
 on('POST', '/claims', (_m, b) => { const c: Claim = { id: id(), name: b.name, payer: b.payer || 'Company', status: 'draft', member_id: 'm1', items: [], expected: SAR(0), received: SAR(0), age_days: 0, submitted_on: null }; claims.unshift(c); return c; });
 on('POST', '/claims/{id}/items', (m, b) => { const c = claims.find(x => x.id === m[1])!; for (const tid of b.txn_ids) { const t = txns.find(x => x.id === tid)!; t.purpose = 'claim'; t.claim_id = c.id; c.items.push(t); c.expected = { ...c.expected, minor: c.expected.minor + t.amount.minor }; } return c; });
