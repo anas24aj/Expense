@@ -64,9 +64,11 @@ function Sankey({ f }: { f: Flows }) {
   }, []);
   const perCol = Math.max(...['inflow', 'account', 'spending'].map(k => f.nodes.filter(n => (k === 'spending' ? n.kind === 'spending' || n.kind === 'outflow' : n.kind === k)).length));
   const height = Math.max(320, perCol * 40);
-  const padL = 112, padR = 112;
+  const narrow = width < 500; // phones: tighter label gutters so a 3-column flow fits without sideways scrolling
+  const padL = narrow ? 82 : 112, padR = narrow ? 82 : 112;
   const cols = useMemo(() => layoutSankey(f, 600, height).cols, [f, height]);
-  const w = Math.max(width, padL + padR + (cols - 1) * 130); // narrow phones scroll the chart sideways, never the page
+  const step = narrow && cols <= 3 ? 88 : 130; // a deeper chain of accounts scrolls sideways, never the page
+  const w = Math.max(width, padL + padR + (cols - 1) * step);
   const L = useMemo(() => layoutSankey(f, w - padL - padR, height), [f, w, height]);
   const halo = { paintOrder: 'stroke', stroke: 'var(--glass-solid)', strokeWidth: 3, strokeLinejoin: 'round' } as const;
   return (
@@ -82,7 +84,7 @@ function Sankey({ f }: { f: Flows }) {
           const right = n.col === L.cols - 1, left = n.col === 0;
           const tx = right ? n.x + L.nodeW + 6 : left ? n.x - 6 : n.x + L.nodeW + 4;
           const anchor = right || !left ? 'start' : 'end';
-          const short = n.name.length > 15 ? n.name.slice(0, 14) + '…' : n.name;
+          const name = n.name.replace(/ Bank\b/, ''), max = narrow && step < 130 ? 13 : 17, short = name.length > max ? name.slice(0, max - 1) + '…' : name;
           return (
             <g key={n.id} onPointerEnter={() => setHover(n.id)} onPointerLeave={() => setHover(null)} onClick={() => setHover(hover === n.id ? null : n.id)}>
               <rect x={n.x} y={n.y} width={L.nodeW} height={n.h} rx={3} fill={COLOR[n.kind]} />
@@ -106,8 +108,12 @@ export function FlowsPage() {
   const from = range === 'month' ? `${month}-01` : range === '3m' ? `${shiftMonth(month, -2)}-01` : `${month.slice(0, 4)}-01-01`;
   const q = useApi<Flows>('/insights/flows', { from, to: end });
   const f = q.data;
-  const sum = (kind: FlowNode['kind'], dir: 'source' | 'target') =>
-    f ? f.links.filter(l => f.nodes.find(n => n.id === l[dir])?.kind === kind).reduce((s, l) => s + l.amount.minor, 0) : 0;
+  const kindOf = (id: string) => f?.nodes.find(n => n.id === id)?.kind;
+  // transfers (account → account, or the other side not found) are neither income nor spending
+  const sum = (ok: (l: Flows['links'][number]) => boolean) => (f ? f.links.filter(ok).reduce((s, l) => s + l.amount.minor, 0) : 0);
+  const cameIn = sum(l => kindOf(l.source) === 'inflow' && l.source !== 'in:transfer');
+  const spent = sum(l => kindOf(l.target) === 'spending');
+  const moved = sum(l => (kindOf(l.source) === 'account' && kindOf(l.target) === 'account') || l.source === 'in:transfer' || l.target === 'out:transfer');
   return (
     <Page title="Money flow" back="/more" subtitle="Where money came in, which accounts it passed through, and where it went.">
       <div className="between" style={{ flexWrap: 'wrap' }}>
@@ -125,18 +131,19 @@ export function FlowsPage() {
       ) : (
         <>
           <div className="grid-2">
-            <div className="glass card stat"><span className="k"><i className="dot" style={{ background: COLOR.inflow }} />Came in</span><span className="v pos"><Money m={{ minor: sum('inflow', 'source'), currency: f!.currency }} compact /></span></div>
-            <div className="glass card stat"><span className="k"><i className="dot" style={{ background: COLOR.spending }} />Spent</span><span className="v"><Money m={{ minor: sum('spending', 'target'), currency: f!.currency }} compact /></span></div>
+            <div className="glass card stat"><span className="k"><i className="dot" style={{ background: COLOR.inflow }} />Came in</span><span className="v pos"><Money m={{ minor: cameIn, currency: f!.currency }} compact /></span></div>
+            <div className="glass card stat"><span className="k"><i className="dot" style={{ background: COLOR.spending }} />Spent</span><span className="v"><Money m={{ minor: spent, currency: f!.currency }} compact /></span></div>
           </div>
           <div className="glass card">
             <Sankey f={f!} />
-            <p className="footnote" style={{ marginTop: 8 }}>In {f!.currency}. Transfers between your accounts are the links between blue bars — they’re never spending.{' '}
+            <p className="footnote" style={{ marginTop: 8 }}>In {f!.currency}, rupees converted at today’s rate. {moved > 0 && <><b>{fmt({ minor: moved, currency: f!.currency }, { compact: true })}</b> moved between your own accounts (the links between blue bars): not counted as income or spending.</>}{' '}
               <span className="desktop-only">Hover a bar to trace it.</span></p>
           </div>
           <Section title="Biggest flows">
             <List>{f!.links.slice(0, 8).map((l, i) => {
               const s = f!.nodes.find(n => n.id === l.source)!, t = f!.nodes.find(n => n.id === l.target)!;
-              return <ListRow key={i} title={<>{s.name} <span className="muted">→</span> {t.name}</>} end={<Money m={l.amount} />} />;
+              return <ListRow key={i} icon={s.kind === 'inflow' ? <Tile icon="arrowDown" color={COLOR.inflow} /> : t.kind === 'account' ? <Tile icon="transfer" color={COLOR.account} /> : <Tile icon="arrowUp" color={COLOR[t.kind]} />}
+                title={t.name} sub={`from ${s.name}`} end={<Money m={l.amount} />} />;
             })}</List>
           </Section>
         </>

@@ -35,7 +35,9 @@ def flows(req):
         raise ApiError(400, 'from must be before to')
     rate = fx(req.db, end)['SAR_INR']
     rows = ledger.visible_txns(hh, req.member['id'], 'AND t.day >= :s AND t.day <= :e', s=start, e=end)
-    paired = {r['from_txn']: r['to_txn'] for r in hh.run("SELECT from_txn, to_txn FROM txn_links WHERE household_id = :hid AND kind = 'transfer'")}
+    paired = {}  # both directions: either side of a linked transfer finds the other
+    for r in hh.run("SELECT from_txn, to_txn FROM txn_links WHERE household_id = :hid AND kind = 'transfer'"):
+        paired[r['from_txn']], paired[r['to_txn']] = r['to_txn'], r['from_txn']
     by_id = {r['id']: r for r in rows}
     links, nodes = defaultdict(int), {}
 
@@ -50,18 +52,20 @@ def flows(req):
             return 0
 
     for r in rows:
-        acc = node('acc:' + (r['account_id'] or 'none'), r['account_name'] or 'Unknown account', 'account')
+        acc = node('acc:' + (r['account_id'] or 'none'), ledger.bank_label(r) or 'Unknown account', 'account')
         purpose, v = r['purpose'] or 'spend', amount(r)
         if not v or purpose == 'ignore':
             continue
-        if purpose == 'transfer':
+        if purpose == 'transfer' or r['id'] in paired:  # a linked pair is a transfer even if one side was retagged
             other = by_id.get(paired.get(r['id']))
-            if r['direction'] == 'debit' and other:  # each pair drawn once, from the sending side
-                links[(acc, node('acc:' + (other['account_id'] or 'none'), other['account_name'] or 'Unknown account', 'account'))] += v
-            elif r['direction'] == 'debit':
-                links[(acc, node('out:transfer', 'Transfers out (unmatched)', 'outflow'))] += v
-            elif not paired.get(r['id']) and r['id'] not in paired.values():
-                links[(node('in:transfer', 'Transfers in (unmatched)', 'inflow'), acc)] += v
+            if other and r['direction'] == 'debit':  # each pair drawn once, from the sending side
+                links[(acc, node('acc:' + (other['account_id'] or 'none'), ledger.bank_label(other) or 'Unknown account', 'account'))] += v
+            elif other:
+                pass  # the credit side: already drawn from its debit
+            elif r['direction'] == 'debit':  # the other side isn't found, or falls outside this period
+                links[(acc, node('out:transfer', 'Moved to other accounts', 'outflow'))] += v
+            else:
+                links[(node('in:transfer', 'Moved in from other accounts', 'inflow'), acc)] += v
             continue
         if r['direction'] == 'credit':
             src = node('in:' + purpose, {'income': 'Income', 'reimbursement': 'Reimbursements', 'repaid': 'Paid back to you',

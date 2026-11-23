@@ -35,11 +35,11 @@ export function MorePage({ me }: { me: Me }) {
 export const KIND_LABEL: Record<string, string> = { bank: 'Bank accounts', wallet: 'Wallets', credit_card: 'Credit cards', debit_card: 'Debit cards', bnpl: 'Pay later', loan: 'Loans', cash: 'Cash', investment: 'Investments' };
 export const KIND_TILE: Record<string, [string, string]> = { bank: ['bank', '#0a84ff'], wallet: ['wallet', '#5e5ce6'], credit_card: ['card', '#ff9f0a'], debit_card: ['card', '#30b0c7'], bnpl: ['wallet', '#bf5af2'], loan: ['bank', '#8e8e93'], cash: ['coin', '#34c759'], investment: ['chart', '#30d158'] };
 
-const COUNTRIES = [{ code: 'SA', name: 'Saudi Arabia', flag: '🇸🇦' }, { code: 'IN', name: 'India', flag: '🇮🇳' }, { code: 'QA', name: 'Qatar', flag: '🇶🇦' },
+export const COUNTRIES = [{ code: 'SA', name: 'Saudi Arabia', flag: '🇸🇦' }, { code: 'IN', name: 'India', flag: '🇮🇳' }, { code: 'QA', name: 'Qatar', flag: '🇶🇦' },
   { code: 'AE', name: 'UAE', flag: '🇦🇪' }, { code: 'XX', name: 'Other', flag: '🌍' }];
 const CUR_COUNTRY: Record<string, string> = { SAR: 'SA', INR: 'IN', QAR: 'QA', AED: 'AE' };
-const countryOf = (a: Account) => { const c = (a.country || CUR_COUNTRY[a.currency] || 'XX').toUpperCase(); return COUNTRIES.some(x => x.code === c) ? c : 'XX'; };
-const CASH = ['bank', 'wallet', 'cash', 'debit_card', 'investment'], DEBT = ['credit_card', 'bnpl', 'loan'];
+export const countryOf = (a: Account) => { const c = (a.country || CUR_COUNTRY[a.currency] || 'XX').toUpperCase(); return COUNTRIES.some(x => x.code === c) ? c : 'XX'; };
+export const CASH = ['bank', 'wallet', 'cash', 'debit_card', 'investment'], DEBT = ['credit_card', 'bnpl', 'loan'];
 
 // One card per country: what you hold there and what you owe there, in that country's currency. Tap to show only that country.
 function CountryCards({ items, country, onPick }: { items: Account[]; country: string; onPick: (c: string) => void }) {

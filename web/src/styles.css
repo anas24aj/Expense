@@ -235,7 +235,8 @@ p { margin: 0; }
 }
 .list-row + .list-row::before { content: ""; position: absolute; top: 0; right: 0; left: 64px; border-top: .5px solid var(--hairline); }
 .list-row.no-icon + .list-row.no-icon::before { left: 16px; }
-button.list-row:active, a.list-row:active { background: var(--fill); }
+button.list-row, a.list-row { transition: background .25s; }
+button.list-row:active, a.list-row:active { background: var(--fill); transition-duration: 0s; }
 @media (hover: hover) { button.list-row:hover, a.list-row:hover { background: var(--fill); } }
 .list-row .body { flex: 1; min-width: 0; }
 .list-row .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -427,6 +428,13 @@ table.look td { text-align: right; padding: 10px 6px; border-top: .5px solid var
 .table-wrap { overflow-x: auto; margin: 0 -18px; padding: 0 18px; }
 
 .page-enter { animation: page-in .45s var(--spring) both; }
+/* Tap feedback on everything tappable that isn't a .btn or list row: a quick press-in, a springy release. */
+a.glass, .pill-cta, .icon-btn, .chip, .tabbar a, .link-btn { transition: transform .35s var(--spring), background .25s, opacity .2s; }
+a.glass:active, .pill-cta:active { transform: scale(.98); transition-duration: .08s; }
+.icon-btn:active, .chip:active, .tabbar a:active { transform: scale(.92); transition-duration: .08s; }
+.link-btn:active { opacity: .5; transition-duration: 0s; }
+/* Content that replaces a skeleton fades in instead of popping. */
+.main .glass, .main .section-title { animation: fade .35s ease backwards; }
 @keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
 
 @media (prefers-reduced-motion: reduce) {
@@ -444,6 +452,13 @@ table.look td { text-align: right; padding: 10px 6px; border-top: .5px solid var
 .stackbar.thin { height: 6px; margin: 0; gap: 1.5px; }
 .legend.three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .legend.three .stat .v { font-size: 16px; }
+/* Home: Saudi | India side by side, each in its own currency */
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.split-col { display: flex; flex-direction: column; gap: 10px; padding: 2px 14px 2px 0; min-width: 0; }
+.split-col + .split-col { border-left: .5px solid var(--hairline); padding-left: 14px; padding-right: 0; }
+.split-col .card-title { margin-bottom: 0; text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--text); }
+.split-col .stat .v { font-size: 17px; }
+.split-total { border-top: .5px solid var(--hairline); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .day-head.sticky {
   position: sticky; top: calc(52px + var(--safe-t)); z-index: 5; margin: 10px -4px 6px; padding: 8px; border-radius: 12px;
   background: color-mix(in srgb, var(--bg) 90%, transparent); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);

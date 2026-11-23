@@ -285,16 +285,18 @@ def month(req, ctx, m):
     pending = sum(to_cur(v, c, ctx) for c, v in claims_pending(ctx).items())
     v = engine.month_view(ctx['txns'], ctx['commits'], ctx['funds'], ctx['loans'], ctx['eng_settings'], m, ctx['today'], cur, ctx['r'],
                           owes, owed, pending)
-    by_cat = defaultdict(float)
+    by_cat, by_ccy = defaultdict(float), defaultdict(int)
     for t in ctx['txns']:
         if t['day'].startswith(m) and engine.counted(t):
             by_cat[t['category']] += engine.conv(engine.counted(t), t['currency'], cur, ctx['r'])
+            by_ccy[t['currency']] += engine.counted(t)
     kinds = defaultdict(float)
     for l in ctx['loans']:
         kinds[{'credit_card': 'cards', 'bnpl': 'bnpl'}.get(l['liability_kind'], 'loans')] += to_cur(l['balance_now'], l['currency'], ctx)
     kinds['people'] = owed
     v['owed_by_you'] = {**{k: M(kinds[k], cur) for k in ('loans', 'cards', 'bnpl', 'people')}, 'total': M(sum(kinds.values()), cur)}
     v['by_category'] = [{'category': k, 'amount': M(x, cur)} for k, x in sorted(by_cat.items(), key=lambda kv: -kv[1])]
+    v['spent_by_currency'] = [M(x, c) for c, x in sorted(by_ccy.items())]  # as spent, never converted: the Saudi / India split
     v['interest_month'] = v.pop('interest_this_month')
     v['fx'] = ctx['rate']
     return v

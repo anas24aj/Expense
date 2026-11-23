@@ -99,6 +99,7 @@ export interface MonthInsight {
   by_category: { category: string; amount: Money }[]; by_purpose: Record<string, Money> | { purpose: string; amount: Money }[]; other_out?: Money;
   owed_by_you: { loans: Money; cards: Money; bnpl: Money; people: Money; total: Money };
   owed_to_you: { people: Money; claims: Money; total: Money }; interest_month: Money; fx: { SAR_INR: number; at: string };
+  spent_by_currency?: Money[]; // this month's spending as spent, per currency (the Saudi / India split)
 }
 export interface LookMonth { month: string; income: Money; commitments: Money; funds: Money; everyday: Money; free: Money; warnings: string[] }
 export interface Lookahead { months: LookMonth[]; debt_free: { month: string | null; months: number | null }; interest_per_month: Money }

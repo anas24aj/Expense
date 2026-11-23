@@ -1,6 +1,7 @@
 import { Link, Navigate } from 'react-router-dom';
 import { useApi } from '../api/client';
-import type { Account, Commitment, Home, HouseholdFull, Items, Settings, Statement, Trip } from '../api/types';
+import type { Account, Commitment, Home, HouseholdFull, Items, Money as MoneyT, Settings, Statement, Trip } from '../api/types';
+import { CASH, COUNTRIES, countryOf, DEBT } from './More';
 import { dueLabel, fmt, monthLabel, today } from '../lib/format';
 import { AreaChart, ErrorCard, Icon, List, ListRow, Money, PageSkeleton, Page, ProgressRing, Section, StatusBadge, Tile } from '../ui';
 
@@ -49,8 +50,51 @@ export default function HomePage() {
   return (
     <Page title="Home" subtitle={q.data ? monthLabel(q.data.month.month, true) : ' '}
       trail={<Link to="/more/profile" className="icon-btn" aria-label="Profile"><Icon name="person" /></Link>}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : <HomeBody h={q.data!} setup={setup} payday={daysTo(settings.data?.salary_day ?? null)} trip={trips.data?.items.find(t => t.start_on <= today() && today() <= t.end_on)} />}
+      {q.isLoading || accounts.isLoading || stmts.isLoading || settings.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : <HomeBody h={q.data!} setup={setup} accounts={(accounts.data?.items || []).filter(a => !a.archived)} homeCur={hh.data?.household.home_currency || 'INR'} payday={daysTo(settings.data?.salary_day ?? null)} trip={trips.data?.items.find(t => t.start_on <= today() && today() <= t.end_on)} />}
     </Page>
+  );
+}
+
+/** Saudi and India side by side, each in its own currency; then both together in the home currency. */
+function CountrySplit({ accounts, spent, fx, homeCur }: { accounts: Account[]; spent: MoneyT[]; fx: number; homeCur: string }) {
+  const conv = (x: MoneyT): number | null => (x.currency === homeCur ? x.minor : !fx ? null
+    : x.currency === 'SAR' && homeCur === 'INR' ? x.minor * fx : x.currency === 'INR' && homeCur === 'SAR' ? x.minor / fx : null);
+  const sides = COUNTRIES.map(c => {
+    const here = accounts.filter(a => countryOf(a) === c.code);
+    const cur = here[0]?.currency || spent.find(x => countryOf({ currency: x.currency, country: '' } as Account) === c.code)?.currency;
+    if (!cur) return null;
+    const bal = (kinds: string[]) => here.filter(a => kinds.includes(a.kind) && a.balance?.currency === cur).reduce((s, a) => s + Math.abs(a.balance!.minor), 0);
+    const owing = (k: string) => here.some(a => a.kind === k && a.balance?.minor);
+    return { ...c, cur, held: { minor: bal(CASH), currency: cur } as MoneyT, owed: { minor: bal(DEBT), currency: cur } as MoneyT,
+      owedLabel: owing('loan') ? (owing('credit_card') || owing('bnpl') ? 'Loans & cards' : 'Loans') : owing('credit_card') || owing('bnpl') ? 'Card dues' : 'Owed', spent: spent.find(x => x.currency === cur) || { minor: 0, currency: cur } as MoneyT };
+  }).filter(Boolean) as { code: string; name: string; flag: string; held: MoneyT; owed: MoneyT; owedLabel: string; spent: MoneyT }[];
+  const total = (k: 'held' | 'owed' | 'spent') => {
+    const v = sides.map(x => conv(x[k]));
+    return v.some(x => x === null) ? null : { minor: Math.round(v.reduce((a, b) => a! + b!, 0)!), currency: homeCur } as MoneyT;
+  };
+  const rows: ['held' | 'owed' | 'spent', string][] = [['held', 'In accounts'], ['owed', ''], ['spent', 'Spent this month']];
+  return (
+    <section className="glass card span-2 stack-sm" aria-label="By country">
+      <div className="split">
+        {sides.map(x => (
+          <Link key={x.code} to="/more/accounts" className="split-col" style={{ color: 'inherit' }}>
+            <div className="card-title">{x.flag} {x.name}</div>
+            {rows.map(([k, label]) => (
+              <div key={k} className="stat"><span className="k">{label || x.owedLabel}</span>
+                <span className={`v ${k === 'owed' && x.owed.minor ? 'neg' : ''}`}><Money m={x[k]} compact /></span></div>
+            ))}
+          </Link>
+        ))}
+      </div>
+      {sides.length > 1 && (
+        <div className="split-total">
+          <span className="caption">Together, in {homeCur}{fx ? ` · 1 SAR = ₹${fx.toFixed(2)}` : ''}</span>
+          <div className="legend three">
+            {rows.map(([k, label]) => <div key={k} className="stat"><span className="k">{label ? label.replace(' this month', '') : 'Owed'}</span><span className="v"><Money m={total(k)} compact /></span></div>)}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -68,7 +112,7 @@ function GetStarted({ steps }: { steps: Step[] }) {
   );
 }
 
-function HomeBody({ h, setup, payday, trip }: { h: Home; setup: Step[] | null; payday: number | null; trip?: Trip }) {
+function HomeBody({ h, setup, accounts, homeCur, payday, trip }: { h: Home; setup: Step[] | null; accounts: Account[]; homeCur: string; payday: number | null; trip?: Trip }) {
   const m = h.month;
   const fresh = !m.income.minor && !m.spent.minor && !m.owed_by_you.total.minor && !m.owed_to_you.total.minor && !h.next_dues.length;
   if (setup && fresh) return <div className="stack"><GetStarted steps={setup} /></div>;
@@ -108,7 +152,7 @@ function HomeBody({ h, setup, payday, trip }: { h: Home; setup: Step[] | null; p
         </div>
       </section>}
 
-      {m.currency !== 'INR' && fx ? <p className="footnote span-2" style={{ margin: '-4px 4px 0' }}>Totals in {m.currency}. Rupee amounts are counted at 1 SAR = ₹{fx.toFixed(2)}; each account and transaction keeps its own currency.</p> : null}
+      {!accounts.length && m.currency !== 'INR' && fx ? <p className="footnote span-2" style={{ margin: '-4px 4px 0' }}>Totals in {m.currency}. Rupee amounts are counted at 1 SAR = ₹{fx.toFixed(2)}; each account and transaction keeps its own currency.</p> : null}
 
       {trip && (
         <Link to={`/more/trips/${trip.id}`} className="glass pill-cta span-2" aria-label={`Current trip: ${trip.name}`}>
@@ -130,7 +174,15 @@ function HomeBody({ h, setup, payday, trip }: { h: Home; setup: Step[] | null; p
         </Link>
       )}
 
-      {(m.owed_by_you.total.minor !== 0 || m.owed_to_you.total.minor !== 0) && <div className="span-2 stack-sm"><div className="grid-2">
+      {accounts.length > 0 && <CountrySplit accounts={accounts} spent={m.spent_by_currency || []} fx={fx} homeCur={homeCur} />}
+      {accounts.length > 0 && m.owed_to_you.total.minor > 0 && (
+        <Link to="/people?tab=claims" className="glass pill-cta span-2">
+          <Tile icon="arrowDown" color="#30d158" />
+          <span style={{ flex: 1, minWidth: 0 }}><b>Owed to you</b><br /><span className="caption">Friends <Money m={m.owed_to_you.people} compact /> · Claims <Money m={m.owed_to_you.claims} compact /></span></span>
+          <span className="num pos" style={{ fontWeight: 600 }}><Money m={m.owed_to_you.total} compact /></span>
+        </Link>
+      )}
+      {!accounts.length && (m.owed_by_you.total.minor !== 0 || m.owed_to_you.total.minor !== 0) && <div className="span-2 stack-sm"><div className="grid-2">
         <Link to="/plan#debts" className="glass card" style={{ color: 'inherit' }}>
           <div className="card-title" style={{ marginBottom: 6 }}>You owe</div>
           <div className="stat"><span className="v" style={{ fontSize: 22 }}><Money m={m.owed_by_you.total} compact /></span>

@@ -306,6 +306,7 @@ function month() {
     by_purpose: [{ purpose: 'spend', amount: SAR(9747) }, { purpose: 'support', amount: SAR(1409) }, { purpose: 'fee', amount: SAR(84) }],
     owed_by_you: { loans: SAR(206102), cards: SAR(8490), bnpl: SAR(900), people: SAR(120), total: SAR(215612) },
     owed_to_you: { people: SAR(385), claims: SAR(2912), total: SAR(3297) }, interest_month: SAR(1498), fx: { SAR_INR: 23.42, at: day(0) },
+    spent_by_currency: [INR(54420), SAR(8916)],
   };
 }
 const look = (n: number) => {

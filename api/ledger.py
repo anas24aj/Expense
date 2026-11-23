@@ -21,7 +21,7 @@ TXN_SELECT = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id
               'LEFT JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id ')
 
 
-def _bank_label(r):
+def bank_label(r):
     """'Al Rajhi Bank ··0785', as the app shows it: the bank first, so every expense names the account it came from."""
     bank, last4 = r.get('account_institution'), r.get('account_last4')  # absent when a caller selects its own columns
     if not bank:
@@ -56,7 +56,7 @@ def txn_views(hh, rows):
                     'direction': r['direction'], 'merchant': r['merchant'], 'category': r['category'] or 'Uncategorized',
                     'purpose': r['purpose'] or ('spend' if r['direction'] == 'debit' else 'income'),
                     'confidence': float(r['confidence']) if r['confidence'] is not None else 0.0,
-                    'account_id': r['account_id'], 'account_name': _bank_label(r), 'member_id': r['member_id'], 'note': r['note'],
+                    'account_id': r['account_id'], 'account_name': bank_label(r), 'member_id': r['member_id'], 'note': r['note'],
                     'source': r['source'], 'person': person,
                     'split_mine': valid.money(r['amount_minor'] - shared[r['id']], r['currency']) if r['id'] in shared else None,
                     'claim_id': r['claim_id'], 'commitment_id': r['commitment_id'], 'liability_id': r['liability_id'],

@@ -216,10 +216,22 @@ export function Sheet({ open, onClose, title, children, detent = 'auto', lead, t
 
   const close = useCallback(() => {
     setClosing(true);
-    setTimeout(() => { setClosing(false); setDrag(null); onClose(); }, 280);
+    setTimeout(onClose, 280); // the effect below clears `closing` once the parent has closed it
   }, [onClose]);
 
   useEffect(() => { if (open) setSize(detent); }, [open, detent]);
+  // closed by the parent (after a save, say): slide out instead of vanishing, showing what was there
+  const [shown, setShown] = useState(open);
+  const last = useRef({ children, title });
+  if (open) last.current = { children, title };
+  useEffect(() => {
+    if (open) { setShown(true); setClosing(false); return; }
+    if (!shown) return;
+    if (closing) { setClosing(false); setDrag(null); setShown(false); return; } // already slid out by close()
+    setClosing(true);
+    const t = setTimeout(() => { setClosing(false); setDrag(null); setShown(false); }, 280);
+    return () => clearTimeout(t);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
@@ -240,7 +252,7 @@ export function Sheet({ open, onClose, title, children, detent = 'auto', lead, t
     return () => { document.removeEventListener('keydown', key); document.body.style.overflow = overflow; prev?.focus?.(); };
   }, [open, close]);
 
-  if (!open) return null;
+  if (!open && !shown) return null;
   const onDown = (e: React.PointerEvent) => { start.current = { y: e.clientY, t: Date.now() }; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); setDrag(0); };
   const onMove = (e: React.PointerEvent) => { if (start.current) setDrag(e.clientY - start.current.y); };
   const onUp = (e: React.PointerEvent) => {
@@ -256,16 +268,16 @@ export function Sheet({ open, onClose, title, children, detent = 'auto', lead, t
   const stretch = drag !== null && drag < 0 ? Math.min(40, -drag / 3) : 0;
   return createPortal(
     <>
-      <div className="sheet-backdrop" onClick={close} style={{ opacity: closing ? 0 : 1, transition: 'opacity .28s' }} />
+      <div className="sheet-backdrop" onClick={close} style={{ opacity: closing ? 0 : 1, transition: 'opacity .28s', pointerEvents: closing ? 'none' : undefined }} />
       <div ref={ref} className={`sheet ${drag !== null ? 'dragging' : ''}`} role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined} tabIndex={-1}
         style={{ height, maxHeight: 'calc(100dvh - var(--safe-t) - 14px)', transform: `translateY(${offset})`, paddingTop: stretch }}>
         <div className="grabber" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}><i /></div>
         <div className="sheet-head" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
           <div className="lead" onPointerDown={e => e.stopPropagation()}>{lead}</div>
-          {title && <h2 id={titleId}>{title}</h2>}
+          {last.current.title && <h2 id={titleId}>{last.current.title}</h2>}
           <div className="trail" onPointerDown={e => e.stopPropagation()}>{trail ?? <button className="icon-btn" style={{ width: 36, height: 36 }} onClick={close} aria-label="Close"><Icon name="close" size={18} /></button>}</div>
         </div>
-        <div className="sheet-body">{children}</div>
+        <div className="sheet-body">{last.current.children}</div>
       </div>
     </>,
     document.body,

@@ -78,6 +78,12 @@ class PlanTest(unittest.TestCase):
     def spent(self):
         return self.ok('GET', '/insights/month', query='month=' + self.today[:7])['spent']['minor']
 
+    def test_month_spent_split_by_currency(self):
+        self.txn(120_00, 'debit', 'Panda')
+        self.txn(2400_00, 'debit', 'KSEB', currency='INR')
+        m = self.ok('GET', '/insights/month', query='month=' + self.today[:7])
+        self.assertEqual(m['spent_by_currency'], [M(2400_00, 'INR'), M(120_00)])  # each as spent, never converted
+
     def test_card_used_by_someone_else_for_a_period(self):
         inside, outside = self.txn(5000, 'debit', 'Hotel', '2026-04-25'), self.txn(700, 'debit', 'Cafe', '2026-06-01')
         refund = self.txn(300, 'credit', 'Hotel refund', '2026-04-26')
