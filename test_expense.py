@@ -310,6 +310,16 @@ class StoreMixin:
         self.assertEqual((stored['amount_minor'], stored['currency'], stored['direction']), (2545000, 'SAR', 'credit'))
         self.assertEqual(server.transactions(db)[0]['category'], 'Salary')
 
+    def test_card_limit_is_kept(self):
+        db = self.db
+        server.save_holding(db, {'id': None, 'kind': 'card', 'name': 'Visa card', 'currency': 'SAR', 'balance_minor': 820000, 'rate_bp': 0, 'emi_minor': 0,
+                                 'due_day': 25, 'pattern': '2080', 'as_of': '2026-11-01', 'auto': 0, 'limit_minor': 1000000})
+        server.card_statement(db, 'Payment on your VISA Card ending 2080 is due on 25/11/2026 for SAR 900.00 total amount due SAR 8,300.00', '2026-11-20T10:00:00+03:00')
+        card = next(h for h in server.money(db, 'SAR', rate=24.9)['holdings'] if h['kind'] == 'card')
+        self.assertEqual((card['balance_now'], card['limit_minor']), (830000, 1000000))  # the reminder updates what's owed, not the limit
+        server.save_holding(db, {**{k: card[k] for k in ('id', 'kind', 'name', 'currency', 'balance_minor', 'rate_bp', 'emi_minor', 'due_day', 'pattern', 'as_of', 'auto')}})
+        self.assertEqual(db.run('SELECT limit_minor FROM holdings')[0]['limit_minor'], 0)  # a save without a limit clears it (the form always sends it)
+
     def test_latest_balance_per_account(self):
         db = self.db
         for sender, body, at in (

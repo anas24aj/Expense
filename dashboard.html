@@ -180,6 +180,7 @@
   .owed-bars small { font-size: 10px; color: var(--muted); margin-top: 4px; }
   .owed-bars b { font-size: 9px; font-weight: 600; color: var(--text-2); white-space: nowrap; margin-bottom: 2px; }
   details.lb.late > summary .rk .nm small { color: var(--bad, #b42318); }
+  details.lb .over { color: var(--bad, #b42318); font-weight: 600; }
   details.lb .rk .nm b, details.lb .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
   details.lb .rk .v { font-size: 13px; } details.lb .rk .v small { font-size: 11px; }
   .banner.warn { border-color: #d97706; }
@@ -1165,6 +1166,7 @@ function holdingForm(h, kind) {
       `<label>${card ? 'You pay a month' : 'EMI a month'} <small class="muted">(optional)</small><input type="text" inputmode="decimal" name="emi" value="${h?.emi_minor ? num(h.emi_minor) : ''}" placeholder="none"></label></div>` +
       `<div class="two"><label>Due day<input type="text" inputmode="numeric" name="due_day" value="${h?.due_day || ''}" placeholder="1-31"></label>` +
       `<label>${card ? 'Owed as on' : 'Balance as on'}<input type="date" name="as_of" value="${v('as_of', today())}" max="${today()}"></label></div>` +
+      (card ? `<label>Credit limit <small class="muted">(warns above 70% used)</small><input type="text" inputmode="decimal" name="limit" value="${h?.limit_minor ? num(h.limit_minor) : ''}" placeholder="e.g. 20000"></label>` : '') +
       `<label>${card ? 'Card’s last 4 digits' : 'Words in the EMI SMS'}<input type="text" name="match" maxlength="40" value="${v('pattern')}" placeholder="${card ? 'e.g. 4455' : 'e.g. the loan account’s last 4 digits'}"></label>` +
       `<label class="check"><input type="checkbox" name="auto" ${(h ? h.auto : !card) ? 'checked' : ''}>${card ? 'Paid automatically from my account each month' : 'EMI is auto-debited each month'}</label>` +
       (card ? '<p class="muted small">SMS after "Owed as on" with these digits: purchases add to what you owe, payments to the card take it off.</p>'
@@ -1201,7 +1203,7 @@ async function post(path, body, money) {
 }
 const planAct = (kind, ref, status, target = 0, actual = 0) => post('/api/plan', { month: today().slice(0, 7), kind, ref: String(ref), status, target, actual }).then(p => { state.plan = p; });
 const holdingBody = (h, changes) => ({ id: h.id, kind: h.kind, name: h.name, currency: h.currency, balance: h.balance_now / 100, rate: h.rate_bp / 100,
-  emi: h.emi_minor / 100, due_day: h.due_day, match: h.pattern, auto: h.auto ? 1 : 0, as_of: today(), ...changes });
+  emi: h.emi_minor / 100, due_day: h.due_day, match: h.pattern, auto: h.auto ? 1 : 0, limit: (h.limit_minor || 0) / 100, as_of: today(), ...changes });
 const cash = (c, cur) => cur === 'INR' ? rupees(c) : cur === 'USD' ? `$${fmt(c)}` : `SAR ${fmt(c)}`;
 // This month's steps, in order. Each knows whether it's already done (by you, or by an SMS that showed it).
 function planSteps() {
@@ -1788,8 +1790,12 @@ function afford(q) {
     { key: 'save', title: 'Save up for it', ok: saveCut == null ? 'poor' : saveCut <= 3 ? 'good' : saveCut <= 12 ? 'fair' : 'poor',
       lines: [free ? `${esc(money(free))} a month is free after your plan: ready in <b>${plural(saveMonths, 'month')}</b> (${esc(monthName(addM(today().slice(0, 7), saveMonths), 'short'))}).` : 'Nothing is free after your plan each month.',
         C.length ? `With the cuts below (${esc(money(cutTotal))} a month): <b>${plural(saveCut, 'month')}</b>.` : ''] },
-    { key: 'card', title: 'Credit card, paid in full', ok: free >= inSar ? 'good' : free + cutTotal >= inSar ? 'fair' : 'poor',
-      lines: [free >= inSar ? 'Next month’s free money covers the bill.' : `The bill is ${esc(money(inSar))}; only ${esc(money(free))} is free next month. Unpaid, cards charge about 3% a month.`] },
+    { key: 'card', title: 'Credit card, paid in full', ok: (lim => lim != null && lim > 1 ? 'poor' : free >= inSar ? (lim > CARD_WARN ? 'fair' : 'good') : free + cutTotal >= inSar ? 'fair' : 'poor')(
+        // the card that would be least used after it, among those with a limit set
+        M.holdings.filter(h => used(h) != null).reduce((a, h) => Math.min(a ?? Infinity, used(h, inCurOf(h.currency))), null)),
+      lines: [free >= inSar ? 'Next month’s free money covers the bill.' : `The bill is ${esc(money(inSar))}; only ${esc(money(free))} is free next month. Unpaid, cards charge about 3% a month.`,
+        ...M.holdings.filter(h => used(h) != null).map(h => { const u = used(h, inCurOf(h.currency));
+          return `${esc(h.name)}: ${Math.round(used(h) * 100)}% → <b>${Math.round(u * 100)}%</b> of its limit${u > 1 ? ' (over the limit: it would be declined)' : u > CARD_WARN ? ' (above 70%: it lowers your credit score)' : ''}.`; })] },
     { key: 'split', title: 'Split in 4 (Tamara, Tabby)', ok: part <= free && (dtiAfter == null || dtiAfter <= .4) ? 'good' : part <= free + cutTotal ? 'fair' : 'poor',
       lines: [`${esc(money(part))} a month for 4 months${part <= free ? ', within your free money.' : ', more than your free money.'}`,
         dtiAfter == null ? '' : `Debts would take <b>${Math.round(dtiAfter * 100)}%</b> of your salary (now ${Math.round(D.pct * 100)}%; above 40% is stretched).`] },
@@ -1851,6 +1857,9 @@ function liabBoard(m) {
     return { h, paid, got, left: st[0] === 'due' || st[0] === 'late' ? left : 0, dueOn, st: st[0], text: st[1] };
   });
 }
+// How much of a card's limit is used (owed now ÷ limit), or null without a limit.
+const used = (h, extra = 0) => h.kind === 'card' && h.limit_minor > 0 ? (Math.max(0, h.balance_now) + extra) / h.limit_minor : null;
+const CARD_WARN = .7;
 // EMIs and card dues as a share of the salary (both in SAR).
 function dti() {
   const sal = (state.settings?.salary?.amount || 0) * 100;
@@ -1866,6 +1875,8 @@ function liabAlerts() {
     if (r.h.kind === 'card' && r.st === 'due' && dayNum(r.dueOn) - dayNum(td) <= 3) out.push(`Card bill ${r.text.toLowerCase()} · ${r.h.name} ${owed(r.left, r.h.currency)}`);
   for (const h of state.money.holdings.filter(h => h.name.startsWith('Pay later') && h.balance_now > 0 && dayNum(td) - dayNum(h.as_of) <= 7))
     out.push(`New pay-later plan · ${h.name.replace('Pay later · ', '')} ${owed(h.balance_now, h.currency)} left`);
+  for (const h of state.money.holdings) if (used(h) > CARD_WARN)
+    out.push(`${h.name} is ${Math.round(used(h) * 100)}% used · ${owed(h.balance_now, h.currency)} of ${owed(h.limit_minor, h.currency)} limit`);
   const D = dti();
   if (D.pct > .4) out.push(`Debts take ${Math.round(D.pct * 100)}% of your salary`);
   return out;
@@ -1877,7 +1888,8 @@ function liabPage(rt, P) {
   const proof = r => r.paid.map(p => { const t = p.source === 'sms' && txn(p.id);
     return `<div class="ev-t"><b>${esc(owed(Math.round(p.amount * 100), r.h.currency))}</b><span>${esc(dayLabel(p.date))} · ${p.source === 'auto' ? 'taken automatically on its due day (no SMS seen)' : p.source === 'sms' ? 'from the bank SMS' : 'recorded by you'}</span>${t ? `<pre>${esc(t.body)}</pre>` : ''}</div>`; }).join('');
   const rows = B.sort((a, b) => ['late', 'due', 'unknown', 'paid', 'none'].indexOf(a.st) - ['late', 'due', 'unknown', 'paid', 'none'].indexOf(b.st)).map(r =>
-    `<details class="fl lb ${r.st}"><summary>` + rk({ icon: icon[r.st], name: r.h.name, sub: esc(r.text) + (r.dueOn && r.st !== 'none' ? ` · due ${esc(dayLabel(r.dueOn))}` : ''),
+    `<details class="fl lb ${r.st}"><summary>` + rk({ icon: icon[r.st], name: r.h.name, sub: esc(r.text) + (r.dueOn && r.st !== 'none' ? ` · due ${esc(dayLabel(r.dueOn))}` : '') +
+        (used(r.h) == null ? '' : ` · <span class="${used(r.h) > CARD_WARN ? 'over' : ''}">${Math.round(used(r.h) * 100)}% of limit used</span>`),
       valueText: r.h.emi_minor ? esc(owed(r.h.emi_minor, r.h.currency)) : '', vsub: `${esc(owed(r.h.balance_now, r.h.currency))} owed` }) +
     `</summary><div class="ev">${proof(r) || '<small class="muted">No payment seen this month.</small>'}<a class="sublink" href="#/debt">Edit on the Debt tab ›</a></div></details>`).join('');
   const left = B.reduce((a, r) => a + toInr(r.left, r.h.currency), 0), late = B.filter(r => r.st === 'late').length;

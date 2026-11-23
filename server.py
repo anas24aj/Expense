@@ -169,6 +169,8 @@ class DB:
         if 'auto' not in cols:
             self.run('ALTER TABLE holdings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0')
             self.run("UPDATE holdings SET auto = 1 WHERE kind = 'loan'")
+        if 'limit_minor' not in cols:  # a card's credit limit, for the 70%-used warning
+            self.run('ALTER TABLE holdings ADD COLUMN limit_minor BIGINT NOT NULL DEFAULT 0')
         # transactions.statement_id: the statement a row came from (none for SMS)
         cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions'")}
                 if self.pg else {r['name'] for r in self.run('PRAGMA table_info(transactions)')})
@@ -1063,14 +1065,15 @@ def save_action(db, a):
 
 
 def save_holding(db, h):
+    h = {'limit_minor': 0, **h}
     if h.get('id'):
         if not db.run('SELECT id FROM holdings WHERE id = :id', id=h['id']):
             raise KeyError('no such loan or saving')
         db.run('UPDATE holdings SET kind = :kind, name = :name, currency = :currency, balance_minor = :balance_minor, rate_bp = :rate_bp, '
-               'emi_minor = :emi_minor, due_day = :due_day, pattern = :pattern, as_of = :as_of, auto = :auto WHERE id = :id', **h)
+               'emi_minor = :emi_minor, due_day = :due_day, pattern = :pattern, as_of = :as_of, auto = :auto, limit_minor = :limit_minor WHERE id = :id', **h)
     else:
-        db.run('INSERT INTO holdings (kind, name, currency, balance_minor, rate_bp, emi_minor, due_day, pattern, as_of, auto) '
-               'VALUES (:kind, :name, :currency, :balance_minor, :rate_bp, :emi_minor, :due_day, :pattern, :as_of, :auto)',
+        db.run('INSERT INTO holdings (kind, name, currency, balance_minor, rate_bp, emi_minor, due_day, pattern, as_of, auto, limit_minor) '
+               'VALUES (:kind, :name, :currency, :balance_minor, :rate_bp, :emi_minor, :due_day, :pattern, :as_of, :auto, :limit_minor)',
                **{k: v for k, v in h.items() if k != 'id'})
 
 
@@ -1312,7 +1315,7 @@ def read_holding(environ):
          'currency': msg['currency'], 'balance_minor': minor(msg.get('balance')), 'rate_bp': minor(msg.get('rate')),
          'emi_minor': minor(msg.get('emi')), 'due_day': int(msg.get('due_day') or 0), 'pattern': ' '.join(str(msg.get('match') or '').split()),
          'as_of': str(msg.get('as_of') or datetime.now(timezone.utc).date().isoformat()),
-         'auto': 1 if msg.get('auto') in (True, 1, '1', 'on', 'true') else 0}
+         'auto': 1 if msg.get('auto') in (True, 1, '1', 'on', 'true') else 0, 'limit_minor': minor(msg.get('limit'))}
     datetime.strptime(h['as_of'], '%Y-%m-%d')
     if h['currency'] in ('USD', 'GOLD') and h['kind'] != 'saving':
         raise ValueError('USD and gold are for savings and investments')
@@ -1321,7 +1324,7 @@ def read_holding(environ):
         raise ValueError(f'purity must be one of {sorted(KARATS)} karat')
     if (h['kind'] not in ('loan', 'card', 'saving') or h['currency'] not in ('SAR', 'INR', 'USD', 'GOLD') or not 0 < len(h['name']) <= 40
             or not 0 <= h['balance_minor'] < 10 ** 13 or not 0 <= h['rate_bp'] <= 6000 or not 0 <= h['emi_minor'] < 10 ** 11
-            or not 0 <= h['due_day'] <= 31 or len(h['pattern']) > 40):
+            or not 0 <= h['due_day'] <= 31 or len(h['pattern']) > 40 or not 0 <= h['limit_minor'] < 10 ** 13):
         raise ValueError('check the name (1-40 letters), amounts, rate (0-60 %) and due day (1-31)')
     return h
 
