@@ -86,3 +86,38 @@ Pipeline per message: parse.py → account match (last4/sender) or auto-create a
 ## MCP (`api/mcp.py`)
 JSON-RPC 2.0 over POST (`initialize`, `tools/list`, `tools/call`, `ping`). Tools read the same functions as the API:
 `get_home, get_month, get_lookahead, what_if, list_transactions, search_transactions, get_people, get_commitments, get_liabilities, get_claims, get_assets, get_advice, add_transaction, set_purpose`.
+
+## Implementation notes (core: auth, households, ledger, ingest)
+Additions and decisions beyond the tables above; the UI may rely on them.
+- **Auth**: `POST /auth/login` also accepts `invite` (an existing user joins that household). Wrong `current` on
+  `POST /auth/password` → 403 (not 401, so the UI doesn't think it was signed out). Passwords 8–200 chars.
+  Signup with `invite` does not require the invite's email to match.
+- **Reset/invite/MCP links** carry `<row id>.<hmac>`; only sha256 is stored. Without RESEND_API_KEY+MAIL_FROM,
+  `GET /households/current` adds `resets: [{member_id, name, email, expires_at, link}]` for owners/admins. `invites`
+  (with `link`) are listed to owners/admins only (empty list for others).
+- **Members**: `POST /members` with `email` returns Member + `invite` (Invite with `link`); `PATCH /members/{id}` with
+  `email` invites a login-less member. Owner can't be removed or re-roled; removing a member revokes their phones.
+- **Devices**: `POST /devices` → 201. `GET /mcp-key` makes a key on first call; POST rotates (old URL stops working).
+- **Accounts**: POST/PATCH fields `kind, name, currency, institution, country, last4, visibility, owner_member_id,
+  credit_limit_minor, opening_balance_minor, opening_as_of, due_day, statement_day, rate_bp`; PATCH also `archived`
+  (bool). `GET /accounts?archived=1` includes archived. Balance sign: negative = owed (cards). `balance` is the last
+  balance an SMS/statement stated, else opening + movements since `opening_as_of`, else null. A card's "Avl limit" SMS
+  sets a balance only once `credit_limit_minor` is known.
+- **Transactions**: `next_before` is an opaque cursor. Detail `links: [{id, kind, other_txn_id, role: from|to, set_by}]`,
+  `splits: [{id, member_id, contact_id, name, share: Money, settled}]`, `claim: {id, name, status}|null`.
+  Purposes also include `refund` and `ignore`. Unlinking a transfer re-guesses both sides without pairing and pins it.
+- **Review**: items with confidence < 0.7 that the user hasn't set (classify.REVIEW_BELOW), lowest first, 100 max.
+- **Settle**: returns `{ok, person: <People item>}`. Splits are marked settled; lend/repaid/borrow/repay movements
+  recorded before the settle time stop counting (settings key `settled.<kind>.<id>.<CUR>`).
+- **People**: `support_month` = this (UTC) month's `support` debits for that member; `support_plan` from active
+  `support` commitments with `for_member_id` (amount / cycle_months). One Money, in the biggest currency.
+- **Ingest**: `POST /ingest/statement` → 201. Outcomes in `/ingest/log`: `stored`, `duplicate` (not logged again),
+  `already in a statement`, `card statement` (updates/creates the credit_card account's owed balance and due day),
+  `pay later plan` (creates a `bnpl` liability), `skipped: security code` (body not kept), `skipped: advert`,
+  `not a transaction`. Accounts are auto-created from sender + last 4 (`institution ••1234`).
+- **Classification** sets `txn_meta.commitment_id/liability_id/asset_id`; it does not write `commitment_payments`
+  (plan.py derives paid status). Schema addition: `migrations/002_core.sql` (`mcp_keys`).
+- **For plan/insights/mcp** (Python): `classify.reclassify(hh, txn_ids=None)`, `classify.save_meta(hh, txn_id, meta, set_by)`,
+  `ledger.visible_txns(hh, member_id, where='', order=..., limit=None, **params)` + `ledger.txn_views(hh, rows)` → Txn,
+  `ledger.get_txn(hh, member_id, id)`, `ledger.account_views(hh, member_id)`, `households.people(hh, db)`,
+  `households.balances(hh)`, `households.person_of(req, {kind,id})`, `auth.mcp_user(key, db=None)`, `api/valid.py` checks.
