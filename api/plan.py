@@ -15,14 +15,15 @@ from api.db import now
 M = engine.money
 LIAB_KINDS = ('loan', 'credit_card', 'bnpl', 'person', 'other')
 COMMIT_KINDS = ('rent', 'bill', 'subscription', 'emi', 'insurance', 'school', 'support', 'milestone', 'other')
-ASSET_KINDS = ('property', 'vehicle', 'investment', 'gold', 'other')
+ASSET_KINDS = ('property', 'vehicle', 'home', 'investment', 'gold', 'other')  # home: a rented home (no purchase, no verdict)
 CLAIM_STATUS = ('draft', 'submitted', 'paid', 'partly', 'rejected')
-REFS = {'account_id': 'accounts', 'contact_id': 'contacts', 'member_id': 'members', 'for_member_id': 'members',
+REFS = {'account_id': 'accounts', 'contact_id': 'contacts', 'holder_contact_id': 'contacts', 'member_id': 'members', 'for_member_id': 'members',
         'liability_id': 'liabilities', 'asset_id': 'assets', 'paid_txn_id': 'transactions'}
 SPECS = {
     'liabilities': ({'kind': LIAB_KINDS, 'name': 'text', 'lender': 'text', 'currency': 'cur', 'principal_minor': 'int',
                      'opening_balance_minor': 'int', 'as_of': 'day', 'rate_bp': 'int', 'emi_minor': 'int', 'due_day': 'int',
-                     'start_on': 'day', 'end_on': 'day', 'emi_from': 'day', 'match_pattern': 'text', 'account_id': 'ref', 'contact_id': 'ref', 'member_id': 'ref'},
+                     'start_on': 'day', 'end_on': 'day', 'emi_from': 'day', 'match_pattern': 'text', 'account_id': 'ref', 'contact_id': 'ref', 'member_id': 'ref',
+                     'holder_contact_id': 'ref', 'my_share_pct': 'int'},
                     ('kind', 'name', 'currency')),
     'commitments': ({'name': 'text', 'kind': COMMIT_KINDS, 'amount_minor': 'int', 'currency': 'cur', 'cycle_months': (0, 1, 3, 6, 12),
                      'next_due': 'day', 'end_on': 'day', 'country': 'text', 'match_pattern': 'text', 'account_id': 'ref',
@@ -159,7 +160,27 @@ def liability_json(l, ctx):
             'interest_month': M(out * l['rate_bp'] / 120000, cur), 'account_id': l['account_id'], 'contact_id': l['contact_id'],
             'member_id': l['member_id'], 'match_pattern': l['match_pattern'], 'closed': bool(l['closed_at']),
             'payments': [{'txn_id': p['txn_id'], 'day': p['day'], 'amount': M(p['amount'], cur), 'interest': M(p['interest'], cur),
-                          'principal': M(p['amount'] - p['interest'], cur)} for p in l['payments']]}
+                          'principal': M(p['amount'] - p['interest'], cur)} for p in l['payments']],
+            'holder_contact_id': l.get('holder_contact_id'), 'my_share_pct': l.get('my_share_pct') or 100, 'shared': _shared_loan(l, ctx)}
+
+
+def _shared_loan(l, ctx):
+    """A loan in someone else's name (holder) that you share: the whole loan's numbers (the rest of the shape is your
+    share) and whether this month's part was sent to the holder."""
+    if not l.get('holder_contact_id') and (l.get('my_share_pct') or 100) == 100:
+        return None
+    cur, month = l['currency'], ctx['today'][:7]
+    names = ctx.setdefault('names', _people(ctx['hh']))
+    sent = [p for p in l['payments'] if p['day'][:7] == month]
+    return {'holder': {'id': l['holder_contact_id'], 'name': names.get(l['holder_contact_id'], '')} if l.get('holder_contact_id') else None,
+            'loan_principal': M(l['loan']['principal_minor'], cur), 'loan_opening_balance': M(l['loan']['opening_balance_minor'], cur),
+            'loan_emi': M(l['loan']['emi_minor'], cur), 'sent_this_month': bool(sent), 'sent_txn_id': sent[-1]['txn_id'] if sent else None}
+
+
+def _share_pct(cols):
+    if 'my_share_pct' in cols and not 1 <= cols['my_share_pct'] <= 100:
+        raise ApiError(400, 'my_share_pct must be 1-100')
+    return cols
 
 
 def _one_liability(req, id):
@@ -187,7 +208,7 @@ def liability(req):
 
 @route('POST', '/api/liabilities')
 def liability_add(req):
-    cols = clean(req.hh, 'liabilities', req.json, True)
+    cols = _share_pct(clean(req.hh, 'liabilities', req.json, True))
     cols.setdefault('opening_balance_minor', cols.get('principal_minor', 0))
     cols.setdefault('as_of', insights.today_in(None))
     row = req.hh.insert('liabilities', created_at=now(), **cols)
@@ -198,7 +219,7 @@ def liability_add(req):
 @route('PATCH', '/api/liabilities/{id}')
 def liability_edit(req):
     _get(req.hh, 'liabilities', req.params['id'], 'liability')
-    cols = clean(req.hh, 'liabilities', req.json, False)
+    cols = _share_pct(clean(req.hh, 'liabilities', req.json, False))
     if 'closed' in req.json:
         cols['closed_at'] = now() if req.json['closed'] else None
     req.hh.update('liabilities', req.params['id'], **cols)
@@ -583,6 +604,106 @@ def pot_month(req):
 
 # ---------- assets ----------
 
+HOME_AUTO_TAG = {'currency': 'SAR', 'country': 'SA', 'categories': {'Rent & EMI': 'rent', 'Bills & Utilities': 'utilities',
+                                                                     'Telecom & Internet': 'internet', 'Groceries': 'groceries'}}
+
+
+def asset_cost_rows(hh):
+    """Every asset cost: the ones tagged by hand (asset_costs), plus spending a rented home's auto-tag rule picks up
+    (details.auto_tag: {currency, country, categories: {category: cost_type}, from?}), marked auto. A cost tagged by
+    hand wins; spending from a rent pot is the pot's, never auto-tagged."""
+    rows = [dict(c) for c in hh.run('SELECT * FROM asset_costs WHERE household_id = :hid')]
+    rules = [(a['id'], json.loads(a['details'] or '{}').get('auto_tag'))
+             for a in hh.run("SELECT id, details FROM assets WHERE household_id = :hid AND sold_at IS NULL AND kind = 'home' ORDER BY created_at, id")]
+    rules = [(aid, r) for aid, r in rules if r and r.get('categories')]
+    if not rules:
+        return rows
+    tagged = {c['txn_id'] for c in rows}
+    for t in hh.run("SELECT t.id, t.day, t.category, t.currency, a.country, m.purpose, m.fund_id FROM transactions t "
+                    "LEFT JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id "
+                    "LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id "
+                    "WHERE t.household_id = :hid AND t.deleted_at IS NULL AND t.direction = 'debit'"):
+        if t['id'] in tagged or t['fund_id'] or (t['purpose'] or 'spend') != 'spend':
+            continue
+        for aid, r in rules:
+            kind = r['categories'].get(t['category'])
+            if kind and t['currency'] == r.get('currency', t['currency']) and (not r.get('country') or t['country'] == r['country']) \
+                    and t['day'] >= (r.get('from') or ''):
+                rows.append({'id': 'auto:' + t['id'], 'asset_id': aid, 'txn_id': t['id'], 'cost_type': kind, 'auto': True})
+                break
+    return rows
+
+
+def borrowed(hh):
+    """{txn id: account_borrowers row} for plain spending on a lent card inside a saved range (POST /accounts/{id}/used-by)
+    that the user hasn't set themselves. Fees, interest and card charges are purpose fee, so they stay yours."""
+    out = {}
+    for r in hh.run("SELECT b.*, t.id AS txn_id, t.day, t.created_at AS txn_created_at, t.amount_minor, t.currency FROM account_borrowers b "
+                    "JOIN transactions t ON t.account_id = b.account_id AND t.household_id = b.household_id "
+                    "LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id "
+                    "WHERE b.household_id = :hid AND t.deleted_at IS NULL AND t.direction = 'debit' AND t.day >= b.from_day AND t.day <= b.to_day "
+                    "AND (m.txn_id IS NULL OR (m.set_by != 'user' AND m.purpose = 'spend')) ORDER BY b.created_at"):
+        out.setdefault(r['txn_id'], r)
+    return out
+
+
+def shared_costs(hh):
+    """What sharers owe the household for shared costs it paid (+), or it owes them for ones they paid (-):
+    [{key: (member|contact, id), currency, minor, day, created_at, what}]. Each asset sharer's % of a tagged cost (a cost a
+    sharer paid for you, purpose borrow, gives them back everyone's parts but yours), and each commitment sharer's share of
+    every payment since the commitment was added, less what they marked paid. A split transaction (the splits say who
+    owes), one in a rent pot (the pot splits it) and an asset cost of a commitment that has sharers are left out here."""
+    txns = {t['id']: t for t in hh.run(
+        "SELECT t.id, t.day, t.created_at, t.amount_minor, t.currency, t.direction, t.merchant, m.purpose, m.person_member_id, m.person_contact_id, "
+        "m.fund_id, m.commitment_id FROM transactions t LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id "
+        "WHERE t.household_id = :hid AND t.deleted_at IS NULL")}
+    split = {s['txn_id'] for s in hh.run('SELECT txn_id FROM splits WHERE household_id = :hid')}
+    pot = {f['id'] for f in hh.run('SELECT id FROM funds WHERE household_id = :hid AND tenant_contact_id IS NOT NULL')}
+    key = lambda s: ('member', s['member_id']) if s['member_id'] else ('contact', s['contact_id'])
+    skip = lambda t: t['id'] in split or t['fund_id'] in pot
+    shares = defaultdict(list)
+    for s in hh.run('SELECT * FROM commitment_shares WHERE household_id = :hid ORDER BY id'):
+        shares[s['commitment_id']].append(s)
+    out = []
+    line = lambda k, cur, minor, day, created, what: out.append({'key': k, 'currency': cur, 'minor': round(minor), 'day': day, 'created_at': created, 'what': what})
+    sharers = defaultdict(list)
+    for s in hh.run('SELECT * FROM asset_sharers WHERE household_id = :hid'):
+        sharers[s['asset_id']].append(s)
+    for c in asset_cost_rows(hh):
+        t = txns.get(c['txn_id'])
+        ss = [s for s in sharers[c['asset_id']] if s['cost_type'] in (c['cost_type'], '*')]
+        if not t or not ss or skip(t) or shares.get(t['commitment_id']):
+            continue
+        v = t['amount_minor'] * (1 if t['direction'] == 'debit' else -1)
+        payer = (t['person_member_id'] or t['person_contact_id']) if t['purpose'] == 'borrow' else None
+        what = f"{t['merchant']} ({c['cost_type']})"
+        if payer:
+            pk = ('member', payer) if t['person_member_id'] else ('contact', payer)
+            line(pk, t['currency'], v * min(100, sum(s['share_pct'] for s in ss)) / 100, t['day'], t['created_at'], what)
+        else:
+            for s in ss:
+                line(key(s), t['currency'], v * s['share_pct'] / 100, t['day'], t['created_at'], what)
+    pays = defaultdict(list)
+    for p in hh.run('SELECT * FROM commitment_payments WHERE household_id = :hid'):
+        pays[p['commitment_id']].append(p)
+    for c in hh.run('SELECT * FROM commitments WHERE household_id = :hid'):
+        if not shares[c['id']]:
+            continue
+        keys = {(s['member_id'], s['contact_id']) for s in shares[c['id']]}
+        since = (c['created_at'] or '')[:10]
+        mine = [(t['day'], t['created_at']) for t in txns.values() if t['commitment_id'] == c['id'] and t['direction'] == 'debit'
+                and t['currency'] == c['currency'] and t['day'] >= since and not skip(t)]
+        mine += [(p['paid_on'], p['paid_on']) for p in pays[c['id']] if not p['txn_id'] and (p['payer_member_id'], p['payer_contact_id']) not in keys]
+        for day, created in mine:
+            for s in shares[c['id']]:
+                line(key(s), c['currency'], s['share_minor'], day, created, c['name'])
+        for p in pays[c['id']]:
+            if (p['payer_member_id'], p['payer_contact_id']) in keys and (txns.get(p['txn_id']) or {}).get('purpose') not in ('repaid', 'repay'):
+                line(('member', p['payer_member_id']) if p['payer_member_id'] else ('contact', p['payer_contact_id']), c['currency'],
+                     -p['amount_minor'], p['paid_on'], p['paid_on'], f"{c['name']} (paid)")
+    return out
+
+
 def asset_json(a, ctx, names):
     hh_cur, cur, r = ctx['cur'], a['currency'], ctx['r']
     conv = lambda minor, c: engine.conv(minor, c, cur, r)
@@ -609,15 +730,33 @@ def asset_json(a, ctx, names):
     ms = lambda m: {'id': m['id'], 'name': m['name'], 'due_on': m['due_on'], 'amount': M(m['amount_minor'], cur),
                     'paid': bool(m['paid_on'] or m['paid_txn_id'] or m['disbursed_on']), 'paid_on': m['paid_on'], 'paid_txn_id': m['paid_txn_id'],
                     'liability_id': m['liability_id'], 'disbursed_on': m['disbursed_on']}
-    cost_rows = sorted(((c, ctx['by_id'][c['txn_id']]) for c in ctx['costs'] if c['asset_id'] == a['id'] and c['txn_id'] in ctx['by_id']),
-                       key=lambda ct: ct[1]['day'], reverse=True)
-    totals, parts = defaultdict(float), {}  # all-time cost per type; each sharer's part of them
-    for c, t in cost_rows:
+    pot = next((p for p in pots(ctx['hh'], ctx['today']) if p['fund']['id'] == details.get('fund_id')), None) if a['kind'] == 'home' else None
+    cost_rows = [(c, ctx['by_id'][c['txn_id']]) for c in ctx['costs'] if c['asset_id'] == a['id'] and c['txn_id'] in ctx['by_id']]
+    if pot:  # the home's groceries and the like, paid from its rent pot (split by the pot, not by the sharers here)
+        cost_rows += [({'cost_type': 'groceries', 'pot': True}, ctx['by_id'][t['id']]) for t in ctx['raw_txns']
+                      if t['id'] in ctx['by_id'] and ctx['by_id'][t['id']]['fund_id'] == pot['fund']['id'] and t['direction'] == 'debit']
+    cost_rows.sort(key=lambda ct: ct[1]['day'], reverse=True)
+    split_of = defaultdict(dict)
+    for s in ctx['splits']:
+        split_of[s['txn_id']][s['member_id'] or s['contact_id']] = s['share_minor']
+    totals, parts, net, months_ = defaultdict(float), {}, defaultdict(float), defaultdict(lambda: [0.0, 0.0])
+    for c, t in cost_rows:  # all-time cost per type; each sharer's part; what each owes you net (+) or you owe them (-)
         v = conv(t['amount_minor'], t['currency']) * (1 if t['direction'] == 'debit' else -1)
         totals[c['cost_type']] += v
-        for s in sharers:
-            if s['cost_type'] in (c['cost_type'], '*'):
-                parts.setdefault(s['member_id'] or s['contact_id'], [s, 0])[1] += v * s['share_pct'] / 100
+        payer = (t['person_member_id'] or t['person_contact_id']) if t['purpose'] == 'borrow' else None
+        ss = [] if c.get('pot') else [s for s in sharers if s['cost_type'] in (c['cost_type'], '*')]
+        theirs = 0
+        for s in ss:
+            k = s['member_id'] or s['contact_id']
+            part = conv(split_of[t['id']][k], t['currency']) if t['id'] in split_of and k in split_of[t['id']] else v * s['share_pct'] / 100
+            parts.setdefault(k, [s, 0])[1] += part
+            theirs += part
+            if not payer:
+                net[k] += part
+        if payer and ss:
+            net[payer] -= v - min(v, theirs)
+        months_[t['day'][:7]][0] += v
+        months_[t['day'][:7]][1] += v - theirs
     return {'id': a['id'], 'kind': a['kind'], 'name': a['name'], 'currency': cur, 'cost': M(a['cost_minor'], cur),
             'value_as_of': a['value_as_of'], 'paid': M(paid, cur), 'financed': M(financed, cur),
             'remaining': M(max(0, a['cost_minor'] - paid - financed), cur), 'milestones': [ms(m) for m in stones],
@@ -626,13 +765,26 @@ def asset_json(a, ctx, names):
             'sharers': [{'id': s['id'], 'cost_type': s['cost_type'], 'member_id': s['member_id'], 'contact_id': s['contact_id'],
                          'name': names.get(s['member_id'] or s['contact_id'], ''), 'share_pct': s['share_pct']} for s in sharers],
             'costs': [{'txn_id': t['id'], 'day': t['day'], 'merchant': t['merchant'], 'cost_type': c['cost_type'],
-                       'amount': M(conv(t['amount_minor'], t['currency']), cur)} for c, t in cost_rows],
+                       'amount': M(conv(t['amount_minor'], t['currency']), cur), 'auto': bool(c.get('auto')), 'from_pot': bool(c.get('pot')),
+                       'paid_by': names.get(t['person_member_id'] or t['person_contact_id'], '') if t['purpose'] == 'borrow' else None}
+                      for c, t in cost_rows],
+            'cost_by_month': [{'month': m, 'total': M(v[0], cur), 'mine': M(v[1], cur)} for m, v in sorted(months_.items())[-12:]],
             'cost_totals': {k: M(v, cur) for k, v in sorted(totals.items())}, 'cost_total': M(sum(totals.values()), cur),
-            'sharer_totals': [{'member_id': s['member_id'], 'contact_id': s['contact_id'], 'name': names.get(k, ''), 'amount': M(v, cur)}
-                              for k, (s, v) in parts.items()],
+            'sharer_totals': [{'member_id': s['member_id'], 'contact_id': s['contact_id'], 'name': names.get(k, ''), 'amount': M(v, cur),
+                               'net_owes_you': M(net[k], cur)} for k, (s, v) in parts.items()],
             'my_cost_total': M(sum(totals.values()) - sum(v for _, v in parts.values()), cur),
             'liability_id': a['liability_id'], 'match_pattern': a['match_pattern'], 'details': details,
-            **_asset_worth(a, ctx, details, stones, counted, loan, conv, sum(totals.values()) - sum(v for _, v in parts.values()))}
+            **(_home(a, ctx, names, pot) if a['kind'] == 'home' else
+               _asset_worth(a, ctx, details, stones, counted, loan, conv, sum(totals.values()) - sum(v for _, v in parts.values())))}
+
+
+def _home(a, ctx, names, pot):
+    """A rented home: its rent (commitments linked to it, with their schedule), the tenant's rent and pending months from
+    its rent pot (details.fund_id), and the auto-tag rule. No purchase, value or verdict."""
+    return {'value': M(0, a['currency']), 'status': 'owned', 'verdict': None, 'valuation': None, 'funding': None,
+            'rent': [commitment_json(c, ctx, names) for c in ctx['commits'] if c['asset_id'] == a['id']],
+            'pot': {'fund_id': pot['fund']['id'], 'name': pot['fund']['name'], **pot_json(pot, names)} if pot else None,
+            'auto_tag': json.loads(a['details'] or '{}').get('auto_tag')}
 
 
 def _asset_worth(a, ctx, details, stones, counted, loan, conv, my_running):
@@ -720,6 +872,13 @@ DETAIL_CHECKS = {  # the details the asset pages read; other keys stay free-form
     'depreciation_pct': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100,
     'bought_on': _day, 'paid_cash_minor': _int, 'builder': _text,
     'photo_url': lambda v: _text(v, 500) and re.fullmatch(r'https://[^\s"<>]+', v) is not None,
+    # an uploaded photo, resized on the phone: an inline image only, under 90 KB
+    'photo': lambda v: _text(v, 90_000) and re.fullmatch(r'data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+', v) is not None,
+    'fund_id': lambda v: _text(v, 32),  # a rented home's rent pot
+    'auto_tag': lambda v: isinstance(v, dict) and set(v) <= {'currency', 'country', 'categories', 'from'}
+    and (not v.get('currency') or (_text(v['currency'], 3) and v['currency'].isalpha())) and _text(v.get('country', ''), 3)
+    and (not v.get('from') or _day(v['from'])) and isinstance(v.get('categories'), dict) and len(v['categories']) <= 20
+    and all(_text(k, 40) and _text(x, 40) and x.strip() for k, x in v['categories'].items()),
 }
 
 
@@ -740,7 +899,10 @@ def _details(cols, old=None):
 
 @route('POST', '/api/assets')
 def asset_add(req):
-    row = req.hh.insert('assets', created_at=now(), **_details(clean(req.hh, 'assets', req.json, True)))
+    cols = clean(req.hh, 'assets', req.json, True)
+    if cols['kind'] == 'home':  # a rented home starts with the usual auto-tag rule, shown and editable on its page
+        cols['details'] = json.dumps({'auto_tag': HOME_AUTO_TAG, **json.loads(cols.get('details') or '{}')})
+    row = req.hh.insert('assets', created_at=now(), **_details(cols))
     return 201, _one_asset(req, row['id'])
 
 
@@ -963,7 +1125,7 @@ def claim_paid(req):
 
 # ---------- trips ----------
 
-TRIP_STATUS = ('personal', 'missed', 'claimed', 'unreviewed')
+TRIP_STATUS = ('personal', 'missed', 'claimed', 'unreviewed', 'excluded')  # excluded: taken off the trip
 COUNTRY_CUR = {'sa': 'SAR', 'saudi arabia': 'SAR', 'ksa': 'SAR', 'in': 'INR', 'india': 'INR', 'ae': 'AED', 'uae': 'AED',
                'united arab emirates': 'AED', 'us': 'USD', 'usa': 'USD', 'united states': 'USD', 'gb': 'GBP', 'uk': 'GBP',
                'united kingdom': 'GBP', 'qa': 'QAR', 'qatar': 'QAR', 'bh': 'BHD', 'bahrain': 'BHD', 'kw': 'KWD', 'kuwait': 'KWD',
@@ -985,6 +1147,8 @@ def trip_expenses(trip, ctx):
     for t in ctx['raw_txns']:
         inside = (t['direction'] == 'debit' and trip['start_on'] <= t['day'] <= trip['end_on'] and t['purpose'] not in NOT_EXPENSE
                   and (not cur or t['currency'] == cur or (t['currency'] == ctx['cur'] and cur != home)))
+        if tags.get(t['id']) == 'excluded':
+            continue
         if inside or t['id'] in tags:
             out.append((t, 'claimed' if t['id'] in ctx['claimed'] else tags.get(t['id'], 'unreviewed')))
     return out
@@ -1082,7 +1246,7 @@ def trip_tag(req):
     _get(req.hh, 'trips', req.params['id'], 'trip')
     ids, status = req.json.get('txn_ids'), req.json.get('status')
     if status not in TRIP_STATUS or not isinstance(ids, list) or not ids:
-        raise ApiError(400, 'send txn_ids and status: personal, missed, claimed or unreviewed')
+        raise ApiError(400, 'send txn_ids and status: personal, missed, claimed, unreviewed or excluded')
     with req.db.tx():
         for tid in ids:
             _txn(req.hh, tid)

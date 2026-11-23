@@ -75,6 +75,10 @@ trips(id, household_id, name, city, country, start_on, end_on, kind business|per
 trip_txns(trip_id, txn_id, status personal|missed|claimed|unreviewed, set_by)
 salary_history(id, household_id, member_id, from_month YYYY-MM, amount_minor, currency, kind base|arrears|bonus, note)  -- 006
 liabilities.emi_from   -- day full EMIs start on a construction loan (pre-EMI before it); 006
+liabilities.holder_contact_id, liabilities.my_share_pct (default 100)   -- a loan in someone else's name you share; 009
+account_borrowers(id, household_id, account_id, member_id|contact_id, from_day, to_day, purpose lend|support, created_at)   -- "someone else used this card", kept as a rule; 009
+assets.kind += home   -- a rented home: no purchase or verdict; details.auto_tag {currency, country, categories {category: cost_type}, from?}, details.fund_id (its rent pot), details.photo (data URL < 90 KB)
+trip_txns.status += excluded   -- taken off a trip it would count on by its dates
 ```
 
 ## Why this fixes the complaints

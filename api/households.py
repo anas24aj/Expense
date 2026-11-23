@@ -278,21 +278,47 @@ def settle_key(kind, pid, cur):
     return f'settled.{kind}.{pid}.{cur}'
 
 
+def after_settle(cutoff, day, created_at, tz=None):
+    """Whether a movement counts after the last settle-up (`cutoff`, when it was done, UTC): by the transaction's day
+    (in the household's timezone), so an old loan imported later stays settled; on the settle-up day itself, only what
+    was recorded after it."""
+    if not cutoff:
+        return True
+    try:
+        local = datetime.fromisoformat(cutoff).astimezone(ZoneInfo(tz or 'Asia/Riyadh')).date().isoformat()
+    except (ValueError, ZoneInfoNotFoundError):
+        local = cutoff[:10]
+    return day > local or (day == local and (created_at or '') > cutoff)
+
+
+def _tz(hh):
+    return (hh.db.one('SELECT timezone FROM households WHERE id = :id', id=hh.hid) or {}).get('timezone')
+
+
 def balances(hh):
     """{(kind, id): {currency: net minor}}: + they owe the household, - it owes them. Unsettled splits of the household's
-    payments, plus lend/repaid/borrow/repay movements recorded after the last settle-up with that person."""
-    out = defaultdict(lambda: defaultdict(int))
+    payments, lend/repaid/borrow/repay movements and shared costs (plan.shared_costs: asset sharers, commitment sharers)
+    after the last settle-up with that person, spending on a card they used (plan.borrowed), and rent pots."""
+    from api import plan
+    out, tz = defaultdict(lambda: defaultdict(int)), _tz(hh)
     for s in hh.run('SELECT s.member_id, s.contact_id, s.share_minor, t.currency, t.direction FROM splits s JOIN transactions t ON t.id = s.txn_id '
                     'WHERE s.household_id = :hid AND t.household_id = :hid AND s.settled_at IS NULL AND t.deleted_at IS NULL'):
         key = ('member', s['member_id']) if s['member_id'] else ('contact', s['contact_id'])
         out[key][s['currency']] += s['share_minor'] if s['direction'] == 'debit' else -s['share_minor']
     cutoffs = {r['key']: r['value'] for r in hh.run("SELECT key, value FROM settings WHERE household_id = :hid AND key LIKE 'settled.%'")}
-    for r in hh.run("SELECT m.purpose, m.person_member_id, m.person_contact_id, t.amount_minor, t.currency, t.created_at FROM txn_meta m "
+    for r in hh.run("SELECT m.purpose, m.person_member_id, m.person_contact_id, t.amount_minor, t.currency, t.day, t.created_at FROM txn_meta m "
                     "JOIN transactions t ON t.id = m.txn_id WHERE m.household_id = :hid AND t.household_id = :hid AND t.deleted_at IS NULL "
                     "AND m.purpose IN ('lend', 'repaid', 'borrow', 'repay')"):
         key = ('member', r['person_member_id']) if r['person_member_id'] else ('contact', r['person_contact_id']) if r['person_contact_id'] else None
-        if key and r['created_at'] > cutoffs.get(settle_key(*key, r['currency']), ''):
+        if key and after_settle(cutoffs.get(settle_key(*key, r['currency'])), r['day'], r['created_at'], tz):
             out[key][r['currency']] += PERSON_SIGN[r['purpose']] * r['amount_minor']
+    for r in plan.borrowed(hh).values():
+        key = ('member', r['member_id']) if r['member_id'] else ('contact', r['contact_id'])
+        if r['purpose'] == 'lend' and after_settle(cutoffs.get(settle_key(*key, r['currency'])), r['day'], r['txn_created_at'], tz):
+            out[key][r['currency']] += r['amount_minor']
+    for c in plan.shared_costs(hh):
+        if after_settle(cutoffs.get(settle_key(*c['key'], c['currency'])), c['day'], c['created_at'], tz):
+            out[c['key']][c['currency']] += c['minor']
     for p in _pots(hh):  # a co-owner's part of what a shared pot overspent (the household paid it)
         for s in p['shares']:
             out[('member', s['member_id']) if s['member_id'] else ('contact', s['contact_id'])][p['fund']['currency']] += p['owes'][s['member_id'] or s['contact_id']]
@@ -369,11 +395,16 @@ def shared_with_me(req):
         lines = hh.run('SELECT t.day, t.merchant, t.merchant_raw, t.direction, t.currency, s.share_minor FROM splits s JOIN transactions t ON t.id = s.txn_id '
                        'WHERE s.household_id = :hid AND t.household_id = :hid AND s.contact_id = :c AND s.settled_at IS NULL AND t.deleted_at IS NULL '
                        'ORDER BY t.day DESC', c=c['id'])
+        from api import plan
+        cut = {r['key']: r['value'] for r in hh.run("SELECT key, value FROM settings WHERE household_id = :hid AND key LIKE 'settled.contact.%'")}
+        costs = [x for x in plan.shared_costs(hh) if x['key'] == ('contact', c['id'])
+                 and after_settle(cut.get(settle_key('contact', c['id'], x['currency'])), x['day'], x['created_at'], _tz(hh))]
         items.append({'household': c['name'], 'you_owe': [valid.money(v, k) for k, v in sorted(bal.items()) if v > 0],
                       'owed_to_you': [valid.money(-v, k) for k, v in sorted(bal.items()) if v < 0],
                       'lines': [{'day': r['day'], 'what': r['merchant'] or r['merchant_raw'],
                                  'your_share': valid.money(r['share_minor'] if r['direction'] == 'debit' else -r['share_minor'], r['currency'])}
-                                for r in lines]})
+                                for r in lines] + [{'day': x['day'], 'what': x['what'], 'your_share': valid.money(x['minor'], x['currency'])}
+                                                   for x in sorted(costs, key=lambda x: x['day'], reverse=True)]})
     return {'items': items}
 
 

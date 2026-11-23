@@ -246,3 +246,31 @@ A fund with a tenant: rent from a tenant (a contact) fills it, groceries tagged 
 - That owed amount is added to `balances()` (People, /shared, settle) and `people_totals`; nothing is written as splits, so it is counted once. Settling up stores what was owed then (`settings` key `settled.pot.{fund}.{person}`); later changes show as the difference, either way.
 - A month from `rent_from` (once its day has come) with no money in and not waived is pending; `rent_due` = pending × rent, also on the tenant in /people (`rent_due`).
 - Month insights count only the household's part: co-owners' pct of a tagged spend is `theirs_minor`, and of tagged rent is taken off the income.
+
+## Feature gaps (feat-gaps, 2026-11-23; migration 009_shared_loans_borrowers.sql)
+**Balances, once, in `households.balances()`** (People, /shared, settle-up and Home's `owed_*.people` via `insights.people_totals`, which now reuses it):
+- `plan.shared_costs()`: each asset sharer's `share_pct` of a tagged cost you paid (+). A cost a sharer paid for you (purpose `borrow` with them) puts the whole amount on them as before, and gives back every sharer's part, so you owe them only yours. Each commitment sharer's `share_minor` for every payment of it since the commitment was added (debits tagged to it, or "mark paid" by you without a transaction), less what the sharer marked paid (`/commitments/{id}/paid` with `payer`, unless its transaction is already a `repaid`). Left out: split transactions (splits say who owes), rent-pot transactions (the pot splits them) and asset costs of a commitment that has sharers.
+- `plan.borrowed()`: spending on a card in a saved used-by range (below) is a `lend` to that contact.
+- Settle-up cutoff is by the transaction's **day** in the household timezone (`after_settle`): older movements imported later stay settled; on the settle day itself only rows recorded after it count.
+- /shared `lines` also list those shared-cost lines `{day, what, your_share}`.
+- A split on a transaction in a rent pot, or putting a split transaction into a rent pot: **400** (the pot already splits it).
+
+**Shared loan in someone else's name** (Liability adds `holder_contact_id`, `my_share_pct` 1-100, `shared`):
+- POST/PATCH /liabilities take `holder_contact_id` (a contact) and `my_share_pct`. Enter the whole loan (principal, opening balance, EMI); `principal`, `opening_balance`, `outstanding`, `emi`, `paid_pct`, `payoff_month`, `emi_total` and the look-ahead use **your share**.
+- `shared: {holder: {id, name}|null, loan_principal, loan_opening_balance, loan_emi: Money, sent_this_month: bool, sent_txn_id|null}` (null for an ordinary loan).
+- Your part sent to the holder is matched as the loan's payment when not set by you: a debit whose text has the holder's name, same currency, between half and twice your EMI share, classified as plain spending. `match_pattern` and PATCH /transactions `liability_id` still work.
+
+**Card used by someone else, as a rule**:
+| GET | /accounts/{id}/used-by | `{items: [{id, account_id, person: {kind,id,name}, from, to, purpose: lend|support}]}` |
+| POST | /accounts/{id}/used-by | `{person, from, to, purpose?}` saves the range and tags plain spending in it now → `{account_id, tagged, rule}`. Later rows in the window (imports, SMS) follow the rule at read time; fees, interest and card charges (purpose `fee`) and anything you set yourself stay yours |
+| DELETE | /accounts/{id}/used-by/{rid} | removes it; what it tagged is classified again → `{id, deleted, untagged}` |
+
+**Transactions**: PATCH /transactions/{id} takes `account_id` (an account you can see, 404 otherwise; null = cash). GET /transactions/{id} adds `trips: [{id, name, status}]`. POST /trips/{id}/tag takes `status: excluded` to take a transaction off a trip.
+
+**What-if**: /insights/whatif adds `free_per_month: Money` (average free money over the next 12 months) and `recover_months` (ceil(amount / that), null when there is none).
+
+**Places: car and rented home** (Asset):
+- Every asset adds `costs[].paid_by` (name when a sharer paid it, purpose borrow), `costs[].auto`, `costs[].from_pot`, `cost_by_month: [{month, total, mine}]` (last 12) and `sharer_totals[].net_owes_you` (their part of what you paid, less your part of what they paid; split amounts where a cost is split).
+- `kind: home` (a rented home): `verdict`, `valuation`, `funding` are null; adds `rent: [Commitment]` (commitments with its `asset_id`), `pot` (its rent pot from `details.fund_id`: pot fields + `fund_id`, `name`) and `auto_tag`. Pot spending shows as `groceries` costs (`from_pot`), split by the pot not by the sharers.
+- `details.auto_tag: {currency?, country?, categories: {category: cost_type}, from?}`: debits of plain spending in those categories, currency and account country (not in a pot, not tagged by hand) are the home's costs, applied at read time (`plan.asset_cost_rows`). A new home starts with SAR / SA / Rent & EMI → rent, Bills & Utilities → utilities, Telecom & Internet → internet, Groceries → groceries; edit or clear it with PATCH details.
+- `details.photo`: an uploaded `data:image/jpeg|png|webp;base64,…` under 90 KB (people photos go to PATCH /members|/contacts `photo`).

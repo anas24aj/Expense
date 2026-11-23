@@ -45,11 +45,14 @@ def txn_views(hh, rows):
         return []
     members, contacts = _names(hh)
     sql, p = valid.inlist('s', [r['id'] for r in rows])
-    shared = defaultdict(int)
+    shared, lent = defaultdict(int), plan.borrowed(hh)
     for s in hh.run(f'SELECT txn_id, share_minor FROM splits WHERE household_id = :hid AND txn_id IN {sql}', **p):
         shared[s['txn_id']] += s['share_minor']
     out = []
     for r in rows:
+        if r['id'] in lent:  # a card lent for a period (account_borrowers): theirs
+            b = lent[r['id']]
+            r = {**r, 'purpose': b['purpose'], 'person_member_id': b['member_id'], 'person_contact_id': b['contact_id']}
         person = ({'kind': 'member', 'id': r['person_member_id'], 'name': members.get(r['person_member_id'], '')} if r['person_member_id'] else
                   {'kind': 'contact', 'id': r['person_contact_id'], 'name': contacts.get(r['person_contact_id'], '')} if r['person_contact_id'] else None)
         out.append({'id': r['id'], 'day': r['day'], 'occurred_at': r['occurred_at'], 'amount': valid.money(r['amount_minor'], r['currency']),
@@ -203,21 +206,59 @@ def archive_account(req):
     return {'id': a['id'], 'deleted': True}
 
 
+def _borrower_view(hh, r):
+    members, contacts = _names(hh)
+    person = ({'kind': 'member', 'id': r['member_id'], 'name': members.get(r['member_id'], '')} if r['member_id'] else
+              {'kind': 'contact', 'id': r['contact_id'], 'name': contacts.get(r['contact_id'], '')})
+    return {'id': r['id'], 'account_id': r['account_id'], 'person': person, 'from': r['from_day'], 'to': r['to_day'], 'purpose': r['purpose']}
+
+
+@route('GET', '/api/accounts/{id}/used-by')
+def used_by_list(req):
+    a = get_account(req.hh, req.member['id'], req.params['id'])
+    return {'items': [_borrower_view(req.hh, r) for r in req.hh.run(
+        'SELECT * FROM account_borrowers WHERE household_id = :hid AND account_id = :a ORDER BY from_day DESC, id', a=a['id'])]}
+
+
 @route('POST', '/api/accounts/{id}/used-by')
 def used_by(req):
-    """Someone else used this card between two days: every money-out row then is theirs (they owe you)."""
+    """Someone else used this card between two days: saved as a rule, so plain spending on it then (now, and imported or
+    texted later) is theirs: they owe you (lend) or it was family support. Fees, interest and card charges stay yours."""
     a, b = get_account(req.hh, req.member['id'], req.params['id']), req.json
     mid, cid = households.person_of(req, b.get('person'))
     start, end = valid.day(b.get('from'), 'from'), valid.day(b.get('to'), 'to')
     if end < start:
         raise ApiError(400, 'to is before from')
     purpose = valid.choice(b.get('purpose'), {'lend', 'support'}, 'purpose', default='support' if mid else 'lend')
-    rows = req.hh.run("SELECT id FROM transactions WHERE household_id = :hid AND account_id = :a AND direction = 'debit' "
-                      'AND deleted_at IS NULL AND day >= :f AND day <= :t', a=a['id'], f=start, t=end)
-    for r in rows:
-        meta = req.hh.one('SELECT * FROM txn_meta WHERE txn_id = :t AND household_id = :hid', t=r['id']) or {}
-        classify.save_meta(req.hh, r['id'], {**dict(meta), 'purpose': purpose, 'person_member_id': mid, 'person_contact_id': cid, 'confidence': 1.0}, 'user')
-    return {'account_id': a['id'], 'tagged': len(rows)}
+    with req.db.tx():
+        rule = req.hh.insert('account_borrowers', account_id=a['id'], member_id=mid, contact_id=cid, from_day=start, to_day=end, purpose=purpose,
+                             created_at=now())
+        rows = [r for r in plan.borrowed(req.hh).values() if r['id'] == rule['id']]
+        for r in rows:  # the ones there now are tagged for good (later ones follow the rule as they arrive)
+            meta = req.hh.one('SELECT * FROM txn_meta WHERE txn_id = :t AND household_id = :hid', t=r['txn_id']) or {}
+            classify.save_meta(req.hh, r['txn_id'], {**dict(meta), 'purpose': purpose, 'person_member_id': mid, 'person_contact_id': cid, 'confidence': 1.0}, 'user')
+    return {'account_id': a['id'], 'tagged': len(rows), 'rule': _borrower_view(req.hh, rule)}
+
+
+@route('DELETE', '/api/accounts/{id}/used-by/{rid}')
+def used_by_delete(req):
+    """Forget the range: what it tagged goes back to being yours (and is classified again)."""
+    a = get_account(req.hh, req.member['id'], req.params['id'])
+    r = req.hh.one('SELECT * FROM account_borrowers WHERE id = :id AND household_id = :hid AND account_id = :a', id=valid.ident(req.params['rid'], 'rule'), a=a['id'])
+    if not r:
+        raise ApiError(404, 'no such range')
+    ids = [x['id'] for x in req.hh.run(
+        "SELECT t.id FROM transactions t JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id WHERE t.household_id = :hid "
+        "AND t.account_id = :a AND t.day >= :f AND t.day <= :t AND m.set_by = 'user' AND m.purpose = :p "
+        "AND COALESCE(m.person_member_id, '') = :pm AND COALESCE(m.person_contact_id, '') = :pc",
+        a=a['id'], f=r['from_day'], t=r['to_day'], p=r['purpose'], pm=r['member_id'] or '', pc=r['contact_id'] or '')]
+    with req.db.tx():
+        req.hh.run('DELETE FROM account_borrowers WHERE id = :id AND household_id = :hid', id=r['id'])
+        if ids:
+            sql, p = valid.inlist('u', ids)
+            req.hh.run(f'DELETE FROM txn_meta WHERE household_id = :hid AND txn_id IN {sql}', **p)
+    classify.reclassify(req.hh, ids)
+    return {'id': r['id'], 'deleted': True, 'untagged': len(ids)}
 
 
 # ---------- transactions ----------
@@ -280,8 +321,15 @@ def get_transaction(req):
     out.update(raw={'sender': raw['sender'], 'body': raw['body']} if raw else None,
                links=[{'id': l['id'], 'kind': l['kind'], 'other_txn_id': l['to_txn'] if l['from_txn'] == row['id'] else l['from_txn'],
                        'role': 'from' if l['from_txn'] == row['id'] else 'to', 'set_by': l['set_by']} for l in links],
-               splits=_splits(req.hh, row['id'], row['currency']), claim=claim or None)
+               splits=_splits(req.hh, row['id'], row['currency']), claim=claim or None, trips=_trips_of(req, row['id']))
     return out
+
+
+def _trips_of(req, tid):
+    """The trips this transaction counts on (by their dates, or tagged by hand), with its status there."""
+    from api import insights
+    ctx = insights.load(req)
+    return [{'id': tr['id'], 'name': tr['name'], 'status': st} for tr in ctx['trips'] for t, st in plan.trip_expenses(tr, ctx) if t['id'] == tid]
 
 
 @route('POST', '/api/transactions')
@@ -327,16 +375,20 @@ def patch_transaction(req):
         changed['liability_id'] = lid or None
         if lid and 'purpose' not in b:
             changed['purpose'] = 'loan_payment'
+    if 'account_id' in b:  # the bank account it came from; null for cash
+        req.hh.update('transactions', row['id'], account_id=get_account(req.hh, req.member['id'], b['account_id'])['id'] if b['account_id'] else None)
     if 'note' in b:
         req.hh.update('transactions', row['id'], note=valid.text(b['note'], 'note', 500, required=False))
     fund = None
     if 'fund_id' in b:  # into or out of a pot (rent in, groceries out); null takes it out
-        fund = b['fund_id'] and req.hh.one('SELECT id, currency FROM funds WHERE id = :f AND household_id = :hid AND closed_at IS NULL',
+        fund = b['fund_id'] and req.hh.one('SELECT id, currency, tenant_contact_id FROM funds WHERE id = :f AND household_id = :hid AND closed_at IS NULL',
                                            f=valid.ident(b['fund_id'], 'fund_id'))
         if b['fund_id'] and not fund:
             raise ApiError(400, 'unknown fund_id')
         if fund and fund['currency'] != row['currency']:
             raise ApiError(400, f"this fund keeps {fund['currency']}; the transaction is in {row['currency']}")
+        if fund and fund['tenant_contact_id'] and req.hh.one('SELECT id FROM splits WHERE household_id = :hid AND txn_id = :t AND settled_at IS NULL', t=row['id']):
+            raise ApiError(400, 'this payment is split with people already; a rent pot splits it with its co-owners, so remove the split first')
         changed.setdefault('purpose', meta['purpose'])
     if changed:
         classify.save_meta(req.hh, row['id'], {**meta, **changed, 'confidence': 1.0}, 'user')
@@ -359,6 +411,8 @@ def split(req):
             raise ApiError(400, 'each share needs member_id or contact_id')
         who = households._member(req, s['member_id'])['id'] if s.get('member_id') else households._contact(req, s['contact_id'])['id']
         clean.append((s.get('member_id') and who, s.get('contact_id') and who, valid.minor(s.get('share_minor'), 'share_minor', positive=True)))
+    if clean and row['fund_id'] and req.hh.one('SELECT id FROM funds WHERE id = :f AND household_id = :hid AND tenant_contact_id IS NOT NULL', f=row['fund_id']):
+        raise ApiError(400, 'this payment is in a shared rent pot, which already splits it with its co-owners; take it out of the pot first')
     if sum(c[2] for c in clean) > row['amount_minor']:
         raise ApiError(400, 'the shares add up to more than the amount')
     with req.db.tx():

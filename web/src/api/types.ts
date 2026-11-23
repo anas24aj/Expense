@@ -34,7 +34,10 @@ export interface Txn {
   split_mine: Money | null; claim_id: string | null; commitment_id: string | null; liability_id?: string | null; fund_id?: string | null;
 }
 export interface TxnDetail extends Txn { raw: { sender: string; body: string } | null; links: { id: string; kind: string; other_txn_id: string; role: 'from' | 'to'; set_by: string }[];
-  splits: { id: string; member_id: string | null; contact_id: string | null; name: string; share: Money; settled: boolean }[]; claim: { id: string; name: string; status: string } | null }
+  splits: { id: string; member_id: string | null; contact_id: string | null; name: string; share: Money; settled: boolean }[]; claim: { id: string; name: string; status: string } | null;
+  trips?: { id: string; name: string; status: string }[] }
+/** "Someone else used this card" kept as a rule (api-v3.md "Ledger"). */
+export interface UsedBy { id: string; account_id: string; person: { kind: string; id: string; name: string }; from: string; to: string; purpose: 'lend' | 'support' }
 export interface Suggestion { purpose: Purpose; category: string | null; person: { kind: string; id: string; name: string } | null; label: string }
 export interface ReviewTxn extends Txn { suggestions: Suggestion[] }
 export interface Category { id: string; name: string; parent: string | null; kind: 'spend' | 'income' | 'excluded'; icon: string | null }
@@ -45,6 +48,9 @@ export interface Liability {
   paid_pct: number; payoff_month: string | null; interest_month: Money; account_id: string | null; contact_id: string | null;
   match_pattern?: string | null; closed?: boolean;
   emi_from?: string | null; construction?: Construction | null;
+  // a loan in someone else's name that you share: principal/outstanding/emi above are your share; shared has the whole loan
+  holder_contact_id?: string | null; my_share_pct?: number;
+  shared?: { holder: { id: string; name: string } | null; loan_principal: Money; loan_opening_balance: Money; loan_emi: Money; sent_this_month: boolean; sent_txn_id: string | null } | null;
 }
 /** A loan paid out in tranches while a property is built: pre-EMI (interest on what is out) until full EMIs start. */
 export interface Construction {
@@ -68,15 +74,18 @@ export interface Pot {
   pending_months: string[]; rent_due: Money; waived_months: string[];
 }
 export interface Milestone { id: string; name: string; due_on: string; amount: Money; paid: boolean; paid_on?: string | null; paid_txn_id?: string | null; liability_id?: string | null; disbursed_on?: string | null }
-export interface AssetCost { txn_id: string; day: string; merchant: string; cost_type: string; amount: Money }
+export interface AssetCost { txn_id: string; day: string; merchant: string; cost_type: string; amount: Money; auto?: boolean; from_pot?: boolean; paid_by?: string | null }
 export interface AssetSharer { id?: string; cost_type: string; name: string; member_id?: string | null; contact_id?: string | null; share_pct: number }
 export interface AssetDetails {
   market_value?: { minor: number; as_of: string; source?: string }; disposal?: { status: 'sold' | 'written_off'; on: string; proceeds_minor: number; note?: string };
   area_sqft?: number; depreciation_pct?: number; bought_on?: string; builder?: string; photo_url?: string; paid_cash_minor?: number;
+  photo?: string; fund_id?: string; auto_tag?: AutoTag;
   [label: string]: unknown;
 }
+/** A rented home's rule: spending in these categories, currency and account country is the home's (cost type per category). */
+export interface AutoTag { currency?: string; country?: string; categories: Record<string, string>; from?: string }
 export interface Asset {
-  id: string; kind: 'property' | 'vehicle' | 'investment'; name: string; currency: Currency; cost: Money; value: Money; paid: Money; financed: Money;
+  id: string; kind: 'property' | 'vehicle' | 'home' | 'investment'; name: string; currency: Currency; cost: Money; value: Money; paid: Money; financed: Money;
   remaining: Money; milestones: Milestone[]; next_milestone: Milestone | null; monthly_cost: Money; my_monthly_cost: Money;
   costs_by_type: Record<string, Money>; sharers: AssetSharer[];
   liability_id: string | null; details: AssetDetails; value_as_of?: string;
@@ -87,7 +96,10 @@ export interface Asset {
   verdict?: { cost: Money; gain: Money; fd_gain: Money; edge: Money; net_cost: Money; annual_pct: number | null; fd_rate_bp: number; provisional: boolean;
     tone: 'good' | 'warn' | 'bad' | 'info'; text: string; assumptions: string[] };
   costs?: AssetCost[]; cost_totals?: Record<string, Money>; cost_total?: Money; my_cost_total?: Money;
-  sharer_totals?: { member_id: string | null; contact_id: string | null; name: string; amount: Money }[];
+  sharer_totals?: { member_id: string | null; contact_id: string | null; name: string; amount: Money; net_owes_you?: Money }[];
+  cost_by_month?: { month: string; total: Money; mine: Money }[];
+  // kind home only: its rent commitments, its rent pot and the auto-tag rule
+  rent?: Commitment[]; pot?: (Pot & { fund_id: string; name: string }) | null; auto_tag?: AutoTag | null;
 }
 export interface Claim { id: string; name: string; payer: string; status: 'draft' | 'submitted' | 'paid' | 'partly'; member_id: string; items: Txn[]; expected: Money; received: Money; age_days: number; submitted_on: string | null;
   suggestion?: { txn_id: string; day: string; amount: Money } | null; reimbursement_txn_ids?: string[] }
@@ -103,7 +115,8 @@ export interface MonthInsight {
 }
 export interface LookMonth { month: string; income: Money; commitments: Money; funds: Money; everyday: Money; free: Money; warnings: string[] }
 export interface Lookahead { months: LookMonth[]; debt_free: { month: string | null; months: number | null }; interest_per_month: Money }
-export interface WhatIf { verdict: 'ok' | 'tight' | 'no'; why: string; month_free_after: Money; debt_free_before: DebtFree | string | null; debt_free_after: DebtFree | string | null; delay_months: number; extra_interest: Money }
+export interface WhatIf { verdict: 'ok' | 'tight' | 'no'; why: string; month_free_after: Money; debt_free_before: DebtFree | string | null; debt_free_after: DebtFree | string | null; delay_months: number; extra_interest: Money;
+  free_per_month?: Money; recover_months?: number | null }
 export type DebtFree = { month: string | null; months: number | null };
 export interface Advice { note?: string; emergency: { months_covered: number | null; target: Money }; steps: { title: string; why: string; amount: Money | null }[] }
 export interface Alert { level: 'info' | 'warn' | 'bad'; text: string; link: string | null }

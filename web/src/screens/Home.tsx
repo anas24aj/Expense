@@ -185,6 +185,13 @@ function HomeBody({ h, setup, accounts, homeCur, payday, trip }: { h: Home; setu
           <span className="num pos" style={{ fontWeight: 600 }}><Money m={m.owed_to_you.total} compact /></span>
         </Link>
       )}
+      {accounts.length > 0 && m.owed_by_you.total.minor !== 0 && (
+        <Link to={m.owed_by_you.people.minor && !m.owed_by_you.cards.minor && !m.owed_by_you.loans.minor ? '/people' : '/plan#debts'} className="glass pill-cta span-2">
+          <Tile icon="arrowUp" color="#ff9f0a" />
+          <span style={{ flex: 1, minWidth: 0 }}><b>You owe</b><br /><span className="caption">People <Money m={m.owed_by_you.people} compact /> · Cards <Money m={m.owed_by_you.cards} compact /> · Loans <Money m={m.owed_by_you.loans} compact /></span></span>
+          <span className="num neg" style={{ fontWeight: 600 }}><Money m={m.owed_by_you.total} compact /></span>
+        </Link>
+      )}
       {!accounts.length && (m.owed_by_you.total.minor !== 0 || m.owed_to_you.total.minor !== 0) && <div className="span-2 stack-sm"><div className="grid-2">
         <Link to="/plan#debts" className="glass card" style={{ color: 'inherit' }}>
           <div className="card-title" style={{ marginBottom: 6 }}>You owe</div>

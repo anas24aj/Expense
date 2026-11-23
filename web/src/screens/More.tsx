@@ -5,9 +5,9 @@ import { api, useApi, useWrite } from '../api/client';
 import type { Account, Asset, Coverage, DeviceCreated, Device, HouseholdFull, Liability, Me, Milestone, Money as MoneyT, SalaryEntry, Settings, Statement, Txn } from '../api/types';
 import { fmt, major, monthLabel, shortDate, thisMonth, toMinor, today } from '../lib/format';
 import {
-  AmountInput, Avatar, BrandTile, brandOf, CategoryTile, logoOf, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
+  AmountInput, Avatar, BarChart, BrandTile, brandOf, CategoryTile, logoOf, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
 } from '../ui';
-import { copy, InviteSheet } from './People';
+import { copy, InviteSheet, PhotoField } from './People';
 import { readFile } from './files';
 
 export function MorePage({ me }: { me: Me }) {
@@ -209,8 +209,10 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
 }
 
 /* ---------- Assets ---------- */
-const ASSET_TILE: Record<string, [string, string]> = { property: ['building', '#a2845e'], vehicle: ['car', '#0a84ff'], investment: ['chart', '#30d158'] };
+const ASSET_TILE: Record<string, [string, string]> = { property: ['building', '#a2845e'], vehicle: ['car', '#0a84ff'], home: ['house', '#ff9f0a'], investment: ['chart', '#30d158'] };
 const COST_TYPES = ['fuel', 'service', 'insurance', 'registration', 'parking', 'tolls', 'repairs', 'other'];
+const HOME_COST_TYPES = ['rent', 'electricity', 'utilities', 'internet', 'maid', 'groceries', 'furnishing', 'other'];
+const costTypes = (a: Asset) => (a.kind === 'home' ? HOME_COST_TYPES : COST_TYPES);
 const pctOf = (a: MoneyT, b: MoneyT) => (a.minor / Math.max(1, b.minor)) * 100;
 
 export function AssetsPage() {
@@ -220,16 +222,16 @@ export function AssetsPage() {
     <Page title="Assets" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add property, vehicle or investment"><Icon name="plus" /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !q.data!.items.length
         ? <EmptyState icon="building" title="Nothing yet" text="Property, vehicles and investments show here." action={<button className="btn" onClick={() => setAdding(true)}><Icon name="plus" />Add one</button>} /> : (
-        (['property', 'vehicle', 'investment'] as const).map(k => {
+        (['property', 'vehicle', 'home', 'investment'] as const).map(k => {
           const items = q.data!.items.filter(a => a.kind === k);
           if (!items.length) return null;
           return (
-            <Section key={k} title={{ property: 'Property', vehicle: 'Vehicles', investment: 'Investments' }[k]}>
+            <Section key={k} title={{ property: 'Property', vehicle: 'Vehicles', home: 'Homes you rent', investment: 'Investments' }[k]}>
               <List>{items.map(a => (
                 <ListRow key={a.id} to={`/assets/${a.id}`} icon={<Tile icon={ASSET_TILE[k][0]} color={ASSET_TILE[k][1]} />} title={a.name}
                   sub={a.status && a.status !== 'owned' ? <>{STATUS_LABEL[a.status]} · net cost <Money m={a.verdict?.net_cost} compact /></>
-                    : k === 'property' ? `${Math.round(pctOf(a.paid, a.cost))}% paid · next: ${a.next_milestone?.name || '—'}` : k === 'vehicle' ? <>Costs <Money m={a.my_monthly_cost} />/mo (your share)</> : <>Invested <Money m={a.cost} compact /></>}
-                  end={<Money m={a.value} compact />} endSub={k === 'investment' && a.cost.minor ? <span className={a.value.minor >= a.cost.minor ? 'pos' : 'neg'}>{a.value.minor >= a.cost.minor ? '+' : ''}{(((a.value.minor - a.cost.minor) / a.cost.minor) * 100).toFixed(1)}%</span>
+                    : k === 'property' ? `${Math.round(pctOf(a.paid, a.cost))}% paid · next: ${a.next_milestone?.name || '—'}` : k === 'vehicle' || k === 'home' ? <>Costs <Money m={a.my_monthly_cost} />/mo (your share)</> : <>Invested <Money m={a.cost} compact /></>}
+                  end={k === 'home' ? <Money m={a.my_cost_total} compact /> : <Money m={a.value} compact />} endSub={k === 'home' ? 'yours so far' : k === 'investment' && a.cost.minor ? <span className={a.value.minor >= a.cost.minor ? 'pos' : 'neg'}>{a.value.minor >= a.cost.minor ? '+' : ''}{(((a.value.minor - a.cost.minor) / a.cost.minor) * 100).toFixed(1)}%</span>
                     : a.verdict?.annual_pct != null && a.verdict.cost.minor ? <span className={a.verdict.annual_pct >= 0 ? 'pos' : 'neg'}>{a.verdict.annual_pct > 0 ? '+' : ''}{a.verdict.annual_pct}% a yr</span> : 'value'} />
               ))}</List>
             </Section>
@@ -242,7 +244,7 @@ export function AssetsPage() {
 }
 
 function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [kind, setKind] = useState<'vehicle' | 'property' | 'investment'>('vehicle');
+  const [kind, setKind] = useState<'vehicle' | 'property' | 'home' | 'investment'>('vehicle');
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('SAR');
   const [cost, setCost] = useState('');
@@ -253,7 +255,7 @@ function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }
   const toast = useToast();
   const save = async () => {
     try {
-      const a = await add.mutateAsync({ kind, name, currency, cost_minor: toMinor(Number(cost) || 0, currency), value_minor: toMinor(Number(value || cost) || 0, currency), value_as_of: asOf,
+      const a = await add.mutateAsync(kind === 'home' ? { kind, name, currency } : { kind, name, currency, cost_minor: toMinor(Number(cost) || 0, currency), value_minor: toMinor(Number(value || cost) || 0, currency), value_as_of: asOf,
         // a vehicle or investment is bought outright (a car loan is linked later); a property is paid in stages
         details: { bought_on: asOf, ...(kind !== 'property' ? { paid_cash_minor: toMinor(Number(cost) || 0, currency) } : {}),
           ...(value ? { market_value: { minor: toMinor(Number(value) || 0, currency), as_of: today(), source: 'Entered when added' } } : {}) } });
@@ -263,14 +265,16 @@ function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }
   return (
     <Sheet open={open} onClose={onClose} title="Add what you own">
       <div className="stack">
-        <Segmented label="Kind" value={kind} onChange={setKind} options={[{ value: 'vehicle', label: 'Vehicle' }, { value: 'property', label: 'Property' }, { value: 'investment', label: 'Investment' }]} />
-        <Field label="Name"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder={{ vehicle: 'Camry 2022', property: 'Flat in Kochi', investment: 'Index fund SIP' }[kind]} /></Field>
+        <Segmented label="Kind" value={kind} onChange={setKind} options={[{ value: 'vehicle', label: 'Vehicle' }, { value: 'property', label: 'Property' }, { value: 'home', label: 'Rented home' }, { value: 'investment', label: 'Invest' }]} />
+        <Field label="Name"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder={{ vehicle: 'Camry 2022', property: 'Flat in Kochi', home: 'Riyadh flat', investment: 'Index fund SIP' }[kind]} /></Field>
         <Segmented label="Currency" value={currency} onChange={setCurrency} options={[{ value: 'SAR', label: 'SAR' }, { value: 'INR', label: 'INR ₹' }]} />
+        {kind === 'home' ? <p className="footnote">A home you rent: nothing to buy or value. Its rent, bills, groceries and who shares them gather on its page; Saudi rent, utilities, internet and groceries are tagged to it by a rule you can change there.</p> : <>
         <div className="grid-2">
           <Field label={kind === 'investment' ? 'Invested' : kind === 'property' ? 'Total cost' : 'Bought for'}><input className="input" inputMode="decimal" value={cost} onChange={e => setCost(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0" /></Field>
           <Field label="Worth now"><input className="input" inputMode="decimal" value={value} onChange={e => setValue(e.target.value.replace(/[^\d.]/g, ''))} placeholder={cost || '0'} /></Field>
         </div>
         <Field label="Bought on"><input className="input" type="date" value={asOf} onChange={e => setAsOf(e.target.value)} /></Field>
+        </>}
         {add.error && <p className="error" role="alert">{add.error.message}</p>}
         <button className="btn block" disabled={!name.trim() || add.isPending} onClick={save}>Add</button>
       </div>
@@ -292,15 +296,15 @@ export function AssetPage() {
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : a && (
         <div className="grid-desktop stack">
           <AssetHeader a={a} />
-          <section className="glass hero span-2 row-flex" style={{ gap: 18 }}>
+          {a.kind === 'home' ? <HomeHero a={a} /> : <section className="glass hero span-2 row-flex" style={{ gap: 18 }}>
             <ProgressRing pct={pctOf(a.paid, a.cost)} size={96} stroke={10} color="var(--green-fill)" />
             <div className="stack-sm" style={{ flex: 1, minWidth: 0 }}>
               <span className="hero-label">{a.kind === 'investment' ? 'Current value' : 'Paid so far'}</span>
               <span style={{ font: '700 30px var(--font-display)', letterSpacing: '-.03em' }} className="num">{fmt(a.kind === 'investment' ? a.value : a.paid)}</span>
               <span className="caption">of <Money m={a.cost} /> {a.kind === 'investment' ? 'invested' : 'total cost'}{a.kind === 'vehicle' ? <> · worth <Money m={a.value} /></> : null}</span>
             </div>
-          </section>
-          {a.kind !== 'investment' && (
+          </section>}
+          {a.kind !== 'investment' && a.kind !== 'home' && (
             <div className="grid-2 span-2">
               <div className="glass card stat"><span className="k">By loan</span><span className="v"><Money m={a.financed} compact /></span></div>
               <div className="glass card stat"><span className="k">Still to pay</span><span className="v warn"><Money m={a.remaining} compact /></span></div>
@@ -329,8 +333,10 @@ export function AssetPage() {
               ) : <p className="caption" style={{ marginLeft: 4 }}>Add the builder’s stages: each is paid by you or disbursed by the bank.</p>}
             </Section>
           )}
-          {a.kind === 'vehicle' && <VehicleCosts a={a} />}
-          {a.kind !== 'vehicle' && Object.keys(a.costs_by_type).length > 0 && (
+          {a.kind === 'home' && <HomeRent a={a} />}
+          {(a.kind === 'vehicle' || a.kind === 'home') && <PlaceCosts a={a} />}
+          {a.kind === 'home' && <AutoTagCard a={a} />}
+          {a.kind !== 'vehicle' && a.kind !== 'home' && Object.keys(a.costs_by_type).length > 0 && (
             <Section title="Monthly costs">
               <div className="glass card stack-sm">
                 {Object.entries(a.costs_by_type).map(([k, v]) => (
@@ -345,7 +351,7 @@ export function AssetPage() {
               <dl className="kv glass card">{labels.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{String(v ?? '—')}</dd></Fragment>)}</dl>
             </Section>
           )}
-          {a.kind !== 'investment' && <DisposalCard a={a} />}
+          {a.kind !== 'investment' && a.kind !== 'home' && <DisposalCard a={a} />}
         </div>
       )}
       {a && <MilestoneSheet key={stone === 'new' ? 'new' : stone?.id || 'none'} a={a} m={stone === 'new' ? null : stone} open={stone !== null} onClose={() => setStone(null)} />}
@@ -353,7 +359,7 @@ export function AssetPage() {
   );
 }
 
-const DETAIL_KEYS = ['market_value', 'disposal', 'area_sqft', 'depreciation_pct', 'bought_on', 'builder', 'photo_url', 'paid_cash_minor'];
+const DETAIL_KEYS = ['market_value', 'disposal', 'area_sqft', 'depreciation_pct', 'bought_on', 'builder', 'photo_url', 'paid_cash_minor', 'photo', 'fund_id', 'auto_tag'];
 const TONE: Record<string, [string, string]> = { good: ['check', '#30d158'], warn: ['warn', '#ff9f0a'], bad: ['warn', '#ff453a'], info: ['info', '#0a84ff'] };
 const STATUS_LABEL = { sold: 'Sold', written_off: 'Written off' } as const;
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
@@ -365,12 +371,12 @@ function AssetHeader({ a }: { a: Asset }) {
   const [tileIcon, tileColor] = ASSET_TILE[a.kind] || ['building', '#a2845e'];
   return (
     <section className="glass card span-2 stack-sm" style={{ padding: 0, overflow: 'hidden' }}>
-      {d.photo_url && <img src={d.photo_url} alt={`Photo of ${a.name}`} referrerPolicy="no-referrer" loading="lazy" style={{ width: '100%', height: 168, objectFit: 'cover', display: 'block' }} />}
+      {(d.photo || d.photo_url) && <img src={d.photo || d.photo_url} alt={`Photo of ${a.name}`} referrerPolicy="no-referrer" loading="lazy" style={{ width: '100%', height: 168, objectFit: 'cover', display: 'block' }} />}
       <div className="row-flex" style={{ padding: '14px 16px', gap: 12 }}>
         {maker && (brandOf(maker) || logoOf(maker)) ? <BrandTile name={maker} /> : maker ? <span className="icon-tile brand-tile" aria-hidden style={{ background: tileColor, color: '#fff', fontSize: 15 }}>{initials(maker)}</span> : <Tile icon={tileIcon} color={tileColor} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{maker || a.name}</b>
-          <span className="caption">{a.kind === 'property' ? (a.under_construction ? 'Under construction' : 'Property') : a.kind === 'vehicle' ? 'Vehicle' : 'Investment'}
+          <span className="caption">{a.kind === 'property' ? (a.under_construction ? 'Under construction' : 'Property') : a.kind === 'vehicle' ? 'Vehicle' : a.kind === 'home' ? 'Rented home' : 'Investment'}
             {a.valuation?.bought_on ? ` · bought ${shortDate(a.valuation.bought_on)}` : ''}</span>
         </div>
         {a.status && a.status !== 'owned' ? <span className="badge red">{STATUS_LABEL[a.status]}</span> : <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>}
@@ -392,10 +398,11 @@ function HeaderSheet({ a, onClose }: { a: Asset; onClose: () => void }) {
   return (
     <Sheet open onClose={onClose} title="About this asset">
       <div className="stack">
-        <Field label={a.kind === 'vehicle' ? 'Make' : 'Builder'}><input className="input" value={builder} onChange={e => setBuilder(e.target.value)} placeholder={a.kind === 'vehicle' ? 'Toyota' : 'Shriram Properties'} /></Field>
+        <PhotoField name={a.name} photo={a.details.photo} path={`/assets/${a.id}`} field="details" size={640} maxChars={88_000} />
+        <Field label={a.kind === 'vehicle' ? 'Make' : a.kind === 'home' ? 'Landlord or building' : 'Builder'}><input className="input" value={builder} onChange={e => setBuilder(e.target.value)} placeholder={a.kind === 'vehicle' ? 'Toyota' : 'Shriram Properties'} /></Field>
         <Field label="Bought on"><input className="input" type="date" value={bought} onChange={e => setBought(e.target.value)} /></Field>
-        <Field label="Photo link (https, optional)"><input className="input" type="url" inputMode="url" value={photo} onChange={e => setPhoto(e.target.value)} placeholder="https://…/my-flat.jpg" /></Field>
-        <p className="footnote">Use a photo you took and host yourself (an iCloud or Google Photos share link, for example). Uploading photos here isn’t supported yet.</p>
+        <Field label="Or a photo link (https, optional)"><input className="input" type="url" inputMode="url" value={photo} onChange={e => setPhoto(e.target.value)} placeholder="https://…/my-flat.jpg" /></Field>
+        <p className="footnote">An uploaded photo is shrunk on your phone and kept with the asset; it wins over a link.</p>
         {save.error && <p className="error" role="alert">{save.error.message}</p>}
         <button className="btn block" disabled={save.isPending || (!!photo.trim() && !photo.trim().startsWith('https://'))} onClick={submit}>Save</button>
       </div>
@@ -663,41 +670,136 @@ function MilestoneSheet({ a, m, open, onClose }: { a: Asset; m: Milestone | null
   );
 }
 
-/** A vehicle's running costs by type, each cost, and who shares them (and their part so far). */
-function VehicleCosts({ a }: { a: Asset }) {
+/** A rented home at a glance: what it costs you a month and in all, and the rent still due from the tenant. */
+function HomeHero({ a }: { a: Asset }) {
+  return (
+    <section className="glass hero span-2 stack-sm" aria-label="What this home costs you">
+      <span className="hero-label">Costs you a month</span>
+      <span style={{ font: '700 30px var(--font-display)', letterSpacing: '-.03em' }} className="num">{fmt(a.my_monthly_cost)}</span>
+      <span className="caption">your share, last 3 months · all-time <Money m={a.my_cost_total} /> of <Money m={a.cost_total} /></span>
+      {a.pot && a.pot.pending_months.length > 0 && <span className="badge orange" style={{ alignSelf: 'flex-start' }}>{a.pot.tenant.name} owes <Money m={a.pot.rent_due} /> rent</span>}
+    </section>
+  );
+}
+
+/** Rent (the commitments linked to this home, with their schedule) and the tenant's rent from the linked rent pot. */
+function HomeRent({ a }: { a: Asset }) {
+  const funds = useApi<{ items: { id: string; name: string; pot?: unknown }[] }>(a.pot ? null : '/funds');
+  const link = useWrite<Record<string, unknown>>('PATCH', `/assets/${a.id}`);
+  const toast = useToast();
+  const pots = (funds.data?.items || []).filter(f => f.pot);
+  const cycle = (n: number) => (n === 1 ? 'monthly' : n === 12 ? 'yearly' : `every ${n} months`);
+  return (
+    <>
+      <Section title="Rent" action={<Link className="link-btn" to="/plan">Plan</Link>}>
+        {a.rent?.length ? <List>{a.rent.map(c => (
+          <ListRow key={c.id} to={`/plan?commitment=${c.id}`} icon={<Tile icon="house" color="#ff9f0a" />} title={c.name}
+            sub={`${cycle(c.cycle_months)} · next ${shortDate(c.next_due)}${c.last_paid ? ` · paid ${shortDate(c.last_paid.day)}` : ''}`}
+            end={<Money m={c.amount} />} endSub={<span className={`badge ${c.status === 'paid' ? 'green' : c.status === 'overdue' ? 'red' : 'orange'}`}>{c.status}</span>} />
+        ))}</List> : <p className="caption" style={{ marginLeft: 4 }}>Add the rent under Plan › Commitments and link it to this home (paid 6 months ahead? pick “Every 6 months”).</p>}
+      </Section>
+      <Section title="Tenant’s rent">
+        {a.pot ? (
+          <div className="glass card stack-sm">
+            <div className="between"><span>{a.pot.tenant.name} pays</span><b><Money m={a.pot.rent} />/mo</b></div>
+            <div className="grid-2">
+              <div className="stat"><span className="k">Received</span><span className="v pos"><Money m={a.pot.received} compact /></span></div>
+              <div className="stat"><span className="k">Spent from it</span><span className="v"><Money m={a.pot.spent} compact /></span></div>
+            </div>
+            <span className="caption">{a.pot.pending_months.length ? <>Pending: {a.pot.pending_months.map(m => monthLabel(m)).join(', ')}</> : 'No rent pending.'}</span>
+          </div>
+        ) : (
+          <div className="glass card stack-sm">
+            <Field label="Rent pot for this home">
+              <select className="input" value="" onChange={e => e.target.value && link.mutateAsync({ details: { fund_id: e.target.value } }).then(() => toast('Rent pot linked'))}>
+                <option value="">{pots.length ? 'Link a rent pot…' : 'Add a rent pot under Plan › Funds first'}</option>
+                {pots.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </Field>
+            <p className="footnote">The tenant’s rent and the groceries paid from it then show here.</p>
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
+/** The home's auto-tag rule, in plain words and editable: which categories of spending (in which currency, from which
+ * country's accounts) are this home's. */
+function AutoTagCard({ a }: { a: Asset }) {
+  const rule = a.auto_tag || { categories: {} };
+  const save = useWrite<Record<string, unknown>>('PATCH', `/assets/${a.id}`);
+  const toast = useToast();
+  const options: [string, string][] = [['Rent & EMI', 'rent'], ['Bills & Utilities', 'utilities'], ['Telecom & Internet', 'internet'], ['Groceries', 'groceries'], ['Shopping', 'furnishing']];
+  const toggle = async (cat: string, kind: string) => {
+    const categories = { ...rule.categories };
+    if (categories[cat]) delete categories[cat]; else categories[cat] = kind;
+    await save.mutateAsync({ details: { auto_tag: { currency: rule.currency || a.currency, country: rule.country || 'SA', categories } } });
+    toast('Rule saved');
+  };
+  return (
+    <Section title="Tagged automatically">
+      <div className="glass card stack-sm">
+        <span className="caption">Spending in {rule.currency || a.currency}{rule.country ? ` from ${rule.country === 'SA' ? 'Saudi' : rule.country} accounts` : ''} in these categories counts as this home’s:</span>
+        <div className="chips" style={{ flexWrap: 'wrap' }}>{options.map(([cat, kind]) => <Chip key={cat} on={!!rule.categories[cat]} onClick={() => toggle(cat, kind)}>{cat}</Chip>)}</div>
+        {save.error && <p className="error" role="alert">{save.error.message}</p>}
+        <p className="footnote">Spending from the rent pot is the pot’s; anything you tag by hand (Add, above) wins over the rule.</p>
+      </div>
+    </Section>
+  );
+}
+
+/** A vehicle's or rented home's costs: by type and by month, each cost with who paid it, and who shares them (with what
+ * they owe you, net of what they paid for you). */
+function PlaceCosts({ a }: { a: Asset }) {
   const [adding, setAdding] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [view, setView] = useState<'type' | 'month'>('type');
   const totals = Object.entries(a.cost_totals || {}).sort((x, y) => y[1].minor - x[1].minor);
   const people = [...new Map(a.sharers.map(s => [s.member_id || s.contact_id || '', s])).values()];
   const keyOf = (s: { member_id?: string | null; contact_id?: string | null }) => s.member_id || s.contact_id;
+  const months = a.cost_by_month || [];
+  const noun = a.kind === 'home' ? 'home' : 'vehicle';
   return (
     <>
       <Section title="Costs" action={<button className="link-btn" onClick={() => setAdding(true)}>Add</button>}>
         {totals.length ? (
           <div className="glass card stack-sm">
-            {totals.map(([k, v]) => (
+            <Segmented label="Show costs" value={view} onChange={setView} options={[{ value: 'type', label: 'By type' }, { value: 'month', label: 'By month' }]} />
+            {view === 'type' ? totals.map(([k, v]) => (
               <div key={k} className="stack-sm"><div className="between"><span style={{ textTransform: 'capitalize' }}>{k}</span><Money m={v} /></div><Meter pct={pctOf(v, a.cost_total!)} /></div>
-            ))}
+            )) : (
+              <div role="group" aria-label={`${noun} costs by month`}>
+                <BarChart data={months.map(m => ({ month: m.month, value: m.total.minor / 100 }))} highlight={months.length - 1} />
+                <dl className="kv" style={{ fontSize: 14 }}>{months.slice().reverse().map(m => <Fragment key={m.month}><dt>{monthLabel(m.month, true)}</dt><dd><Money m={m.total} /> <span className="caption">· yours <Money m={m.mine} /></span></dd></Fragment>)}</dl>
+              </div>
+            )}
             <div className="between" style={{ marginTop: 6 }}><b>All costs</b><b><Money m={a.cost_total} /></b></div>
             {(a.sharer_totals || []).length > 0 && <div className="between"><span>Your part</span><span><Money m={a.my_cost_total} /></span></div>}
             {a.monthly_cost.minor > 0 && <span className="caption">Last 3 months: <Money m={a.my_monthly_cost} /> a month is yours{a.financed.minor ? ' (with the EMI)' : ''}.</span>}
           </div>
-        ) : <p className="caption" style={{ marginLeft: 4 }}>Tag fuel, service, insurance and other payments to see what this vehicle costs.</p>}
+        ) : <p className="caption" style={{ marginLeft: 4 }}>{a.kind === 'home' ? 'Tag rent, electricity, internet, the maid and furnishing to see what this home costs.' : 'Tag fuel, service, insurance and other payments to see what this vehicle costs.'} Costs someone paid for you count too.</p>}
         {!!a.costs?.length && (
-          <List>{a.costs.slice(0, 25).map(c => (
-            <ListRow key={c.txn_id} icon={<CategoryTile category={c.cost_type === 'fuel' ? 'Fuel' : null} merchant={c.merchant} />} title={c.merchant}
-              sub={<><span style={{ textTransform: 'capitalize' }}>{c.cost_type}</span> · {shortDate(c.day)}</>} end={<Money m={c.amount} />} />
+          <List>{a.costs.slice(0, 40).map(c => (
+            <ListRow key={c.txn_id} icon={<CategoryTile category={c.cost_type === 'fuel' ? 'Fuel' : c.cost_type === 'groceries' ? 'Groceries' : null} merchant={c.merchant} />} title={c.merchant}
+              sub={<><span style={{ textTransform: 'capitalize' }}>{c.cost_type}</span> · {shortDate(c.day)}{c.paid_by ? ` · ${c.paid_by} paid` : ''}{c.from_pot ? ' · from the rent pot' : c.auto ? ' · by rule' : ''}</>}
+              end={<Money m={c.amount} />} endSub={c.paid_by ? <span className="badge blue">{c.paid_by}</span> : undefined} />
           ))}</List>
         )}
       </Section>
       <Section title="Shared with" action={<button className="link-btn" onClick={() => setSharing(true)}>{a.sharers.length ? 'Edit' : 'Add'}</button>}>
         {people.length ? (
-          <List>{people.map(p => (
-            <ListRow key={keyOf(p)} icon={<Avatar name={p.name || '?'} />} title={p.name}
-              sub={a.sharers.filter(s => keyOf(s) === keyOf(p)).map(s => `${s.share_pct}% of ${s.cost_type === '*' ? 'all costs' : s.cost_type}`).join(' · ')}
-              end={<Money m={a.sharer_totals?.find(t => keyOf(t) === keyOf(p))?.amount || { minor: 0, currency: a.currency }} />} endSub="their part" />
-          ))}</List>
-        ) : <p className="caption" style={{ marginLeft: 4 }}>Share fuel or every cost with family or friends: their part leaves your spending.</p>}
+          <List>{people.map(p => {
+            const t = a.sharer_totals?.find(x => keyOf(x) === keyOf(p));
+            const net = t?.net_owes_you;
+            return (
+              <ListRow key={keyOf(p)} icon={<Avatar name={p.name || '?'} />} title={p.name}
+                sub={<>{a.sharers.filter(s => keyOf(s) === keyOf(p)).map(s => `${s.share_pct}% of ${s.cost_type === '*' ? 'all costs' : s.cost_type}`).join(' · ')} · their part <Money m={t?.amount || { minor: 0, currency: a.currency }} /></>}
+                end={net ? <span className={net.minor < 0 ? 'neg' : 'pos'}><Money m={{ ...net, minor: Math.abs(net.minor) }} /></span> : '—'}
+                endSub={!net || !net.minor ? 'even' : net.minor > 0 ? 'owes you' : 'you owe'} />
+            );
+          })}</List>
+        ) : <p className="caption" style={{ marginLeft: 4 }}>Share costs with family or friends: their part leaves your spending and shows under People.</p>}
       </Section>
       <AddCostSheet a={a} open={adding} onClose={() => setAdding(false)} />
       {sharing && <SharersSheet a={a} onClose={() => setSharing(false)} />}
@@ -707,7 +809,7 @@ function VehicleCosts({ a }: { a: Asset }) {
 
 function AddCostSheet({ a, open, onClose }: { a: Asset; open: boolean; onClose: () => void }) {
   const [q, setQ] = useState('');
-  const [type, setType] = useState('fuel');
+  const [type, setType] = useState(costTypes(a)[0]);
   const txns = useApi<{ items: Txn[] }>(open ? '/transactions' : null, { q, limit: 40 });
   const add = useWrite<{ txn_id: string; cost_type: string }>('POST', `/assets/${a.id}/costs`);
   const toast = useToast();
@@ -716,8 +818,8 @@ function AddCostSheet({ a, open, onClose }: { a: Asset; open: boolean; onClose: 
   return (
     <Sheet open={open} onClose={onClose} title="Add a cost" detent="large">
       <div className="stack">
-        <div className="chips" style={{ flexWrap: 'wrap' }} aria-label="Cost type">{COST_TYPES.map(k => <Chip key={k} on={type === k} onClick={() => setType(k)}>{k[0].toUpperCase() + k.slice(1)}</Chip>)}</div>
-        <input className="input" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search payments (Aldrees, Toyota, Tawuniya…)" aria-label="Search payments" />
+        <div className="chips" style={{ flexWrap: 'wrap' }} aria-label="Cost type">{costTypes(a).map(k => <Chip key={k} on={type === k} onClick={() => setType(k)}>{k[0].toUpperCase() + k.slice(1)}</Chip>)}</div>
+        <input className="input" type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={a.kind === 'home' ? 'Search payments (SEC, STC, Ikea…)' : 'Search payments (Aldrees, Toyota, Tawuniya…)'} aria-label="Search payments" />
         {add.error && <p className="error" role="alert">{add.error.message}</p>}
         {txns.isLoading ? <PageSkeleton /> : (
           <List>{(txns.data?.items || []).filter(t => t.direction === 'debit').map(t => (
@@ -735,7 +837,7 @@ function SharersSheet({ a, onClose }: { a: Asset; onClose: () => void }) {
   const [rows, setRows] = useState(() => a.sharers.map(s => ({ who: s.member_id ? 'member_id:' + s.member_id : 'contact_id:' + s.contact_id, type: s.cost_type, pct: String(s.share_pct) })));
   const put = useWrite<{ items: Record<string, unknown>[] }>('PUT', `/assets/${a.id}/sharers`);
   const toast = useToast();
-  const types = [...new Set(['*', ...COST_TYPES, ...Object.keys(a.cost_totals || {}), ...rows.map(r => r.type)])];
+  const types = [...new Set(['*', ...costTypes(a), ...Object.keys(a.cost_totals || {}), ...rows.map(r => r.type)])];
   const setRow = (i: number, k: 'who' | 'type' | 'pct', v: string) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
   const ready = rows.filter(r => r.who && Number(r.pct) > 0);
   const save = async () => {
