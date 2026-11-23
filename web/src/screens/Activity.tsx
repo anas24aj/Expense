@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Account, Asset, Category, Claim, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
+import type { Account, Asset, Category, Claim, Fund, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
 import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, thisMonth, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
@@ -38,7 +38,7 @@ export default function ActivityPage() {
   const [open, setOpen] = useState<Txn | null>(null);
   const [adding, setAdding] = useState(false);
   const list = useApi<{ items: Txn[] }>('/transactions', { month, q, ...f, review: f.review ? 1 : undefined });
-  const accounts = useApi<{ items: Account[] }>('/accounts');
+  const accounts = useApi<{ items: Account[]; recent_ids?: string[] }>('/accounts');
   const cats = useApi<{ items: Category[] }>('/categories');
   const hh = useApi<HouseholdFull>('/households/current');
   const nav = useNavigate();
@@ -102,13 +102,13 @@ export default function ActivityPage() {
         )}
       </Sheet>
       <TxnSheet txn={open} onClose={() => setOpen(null)} />
-      <AddTxnSheet open={adding} onClose={() => setAdding(false)} accounts={accounts.data?.items || []} />
+      <AddTxnSheet open={adding} onClose={() => setAdding(false)} accounts={accounts.data?.items || []} recent={accounts.data?.recent_ids || []} />
     </Page>
   );
 }
 
 /* ---------- transaction detail with one-tap actions ---------- */
-type Mode = null | 'category' | 'person' | 'split' | 'claim' | 'note' | 'loan' | 'asset';
+type Mode = null | 'category' | 'person' | 'split' | 'claim' | 'note' | 'loan' | 'asset' | 'pot';
 type PersonDir = 'give' | 'repay' | 'repaid' | 'borrow';
 // Which way money moved with a person: debits are "I paid for them" or "paying back"; credits "they paid me back" or "they lent me".
 const PERSON_DIRS: Record<'debit' | 'credit', { value: PersonDir; label: string }[]> = {
@@ -124,6 +124,7 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
   const [all, setAll] = useState(false);
   const detail = useApi<TxnDetail>(txn ? `/transactions/${txn.id}` : null);
   const assets = useApi<{ items: Asset[] }>(txn ? '/assets' : null);
+  const pots = (useApi<{ items: Fund[] }>(txn ? '/funds' : null).data?.items || []).filter(f => f.pot && f.pot.rent.currency === txn?.amount.currency);
   const t = detail.data || (txn as TxnDetail | null);
   const toast = useToast();
   const patch = useWrite<Record<string, unknown>, Txn>('PATCH', () => `/transactions/${txn!.id}`);
@@ -144,9 +145,10 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
     { k: 'note', icon: 'note', label: 'Note', on: !!t.note, run: () => setMode('note') },
     { k: 'spend', icon: 'cart', label: 'Spending', on: t.purpose === 'spend', run: () => apply({ purpose: 'spend' }, 'Counted as spending', { purpose: t.purpose }) },
     ...(t.direction === 'debit' ? [{ k: 'loan', icon: 'bank', label: 'Loan payment', on: !!t.liability_id, run: () => setMode('loan') }] : []),
+    ...(pots.length ? [{ k: 'pot', icon: 'house', label: t.direction === 'debit' ? 'Paid from pot' : 'Into pot', on: !!t.fund_id, run: () => setMode('pot') }] : []),
     ...(assets.data?.items.length ? [{ k: 'asset', icon: 'car', label: 'Vehicle / property', run: () => setMode('asset') }] : []),
   ];
-  const titles: Record<string, string> = { category: 'Category', person: 'Who was it with?', split: 'Split with', claim: 'Add to claim', note: 'Note', loan: 'Which loan?', asset: 'Vehicle / property cost' };
+  const titles: Record<string, string> = { category: 'Category', person: 'Who was it with?', split: 'Split with', claim: 'Add to claim', note: 'Note', loan: 'Which loan?', asset: 'Vehicle / property cost', pot: 'Shared pot' };
   return (
     <Sheet open={!!txn} onClose={close} title={mode ? titles[mode] : undefined} detent={mode ? 'medium' : 'auto'}
       lead={mode && <button className="link-btn" onClick={() => setMode(null)}><Icon name="chevL" size={16} /> Back</button>}>
@@ -154,6 +156,13 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
         : mode === 'person' ? <PersonPicker direction={t.direction} onPick={(p, purpose) => apply({ person: { kind: p.kind, id: p.id }, purpose }, personToast(purpose, p.name))} />
         : mode === 'loan' ? <LoanPicker t={t} onPick={l => (l ? apply({ liability_id: l.id }, `Counted as a ${l.name} payment`, { liability_id: t.liability_id ?? null, purpose: t.purpose })
           : apply({ liability_id: null, purpose: 'spend' }, 'Unlinked from the loan'))} />
+        : mode === 'pot' ? (
+          <List>
+            {pots.map(f => <ListRow key={f.id} icon={<Icon name="home" size={22} />} title={f.name} sub={`Shared with ${f.pot!.shares.map(x => x.name).join(', ') || 'no one'}`}
+              end={t.fund_id === f.id ? <Icon name="check" size={22} className="pos" /> : undefined} chevron={false}
+              onClick={() => apply({ fund_id: f.id }, t.direction === 'debit' ? `Paid from ${f.name}` : `Added to ${f.name}`, { fund_id: t.fund_id ?? null })} />)}
+            {t.fund_id && <ListRow icon={<Icon name="close" size={22} />} title="Not from a pot" chevron={false} onClick={() => apply({ fund_id: null }, 'Taken out of the pot', { fund_id: t.fund_id })} />}
+          </List>)
         : mode === 'asset' ? <AssetCostPicker t={t} assets={assets.data?.items || []} onDone={close} />
         : mode === 'split' ? <SplitPicker t={t} onDone={close} />
         : mode === 'claim' ? <ClaimPicker t={t} onDone={close} />
@@ -296,12 +305,21 @@ function NoteEditor({ initial, onSave }: { initial: string; onSave: (n: string) 
 }
 
 /* ---------- manual add: amount first, everything else guessed ---------- */
-function AddTxnSheet({ open, onClose, accounts }: { open: boolean; onClose: () => void; accounts: Account[] }) {
+const SPEND_KINDS = ['bank', 'credit_card', 'debit_card', 'wallet'];
+/** The account a new entry starts on (as the API picks it): the last one used in that currency, else a bank account or card. */
+export function defaultAccount(accounts: Account[], recent: string[], currency: string) {
+  const ok = accounts.filter(a => a.currency === currency && SPEND_KINDS.includes(a.kind));
+  return recent.map(id => ok.find(a => a.id === id)).find(Boolean)
+    || [...ok].sort((a, b) => SPEND_KINDS.indexOf(a.kind) - SPEND_KINDS.indexOf(b.kind))[0];
+}
+
+function AddTxnSheet({ open, onClose, accounts, recent }: { open: boolean; onClose: () => void; accounts: Account[]; recent: string[] }) {
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('SAR');
   const [merchant, setMerchant] = useState('');
   const [dir, setDir] = useState<'debit' | 'credit'>('debit');
-  const [account, setAccount] = useState('');
+  const [picked, setAccount] = useState<string | null>(null);  // null: not chosen yet, '' : cash
+  const account = picked ?? defaultAccount(accounts, recent, currency)?.id ?? '';
   const [day, setDay] = useState(today());
   const [who, setWho] = useState('');
   const [pd, setPd] = useState<PersonDir>('give');
@@ -312,25 +330,25 @@ function AddTxnSheet({ open, onClose, accounts }: { open: boolean; onClose: () =
   const tag = useWrite<Record<string, unknown>>('PATCH', b => `/transactions/${b.id}`);
   const submit = async () => {
     const t = await save.mutateAsync({ day, amount_minor: toMinor(Number(amount), currency), currency, direction: dir,
-      merchant: merchant || (person ? person.name : dir === 'debit' ? 'Cash' : 'Money in'), account_id: account || undefined });
+      merchant: merchant || (person ? person.name : dir === 'debit' ? 'Cash' : 'Money in'), account_id: account || null });
     if (person) {  // an IOU: POST /transactions takes no person, so tag it straight after
       const purpose = personPurpose(pd, person);
       await tag.mutateAsync({ id: t.id, person: { kind: person.kind, id: person.id }, purpose });
       toast(personToast(purpose, person.name));
     } else toast('Added');
-    setAmount(''); setMerchant(''); setWho(''); setDay(today()); onClose();
+    setAmount(''); setMerchant(''); setWho(''); setDay(today()); setAccount(null); onClose();
   };
   const setDirection = (d: 'debit' | 'credit') => { setDir(d); setPd(PERSON_DIRS[d][0].value); };
   return (
     <Sheet open={open} onClose={onClose} title="Add" detent="auto">
       <div className="stack">
         <Segmented label="Direction" value={dir} onChange={setDirection} options={[{ value: 'debit', label: 'Money out' }, { value: 'credit', label: 'Money in' }]} />
-        <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} autoFocus />
+        <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={c => { setCurrency(c); setAccount(null); }} autoFocus />
         <Field label="Where"><input className="input" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="e.g. Panda, taxi, car EMI share" /></Field>
         <Field label={dir === 'debit' ? 'Paid from' : 'Paid into'}>
           <select className="input" value={account} onChange={e => setAccount(e.target.value)}>
-            <option value="">Cash / no account</option>
             {accounts.filter(a => a.currency === currency && a.kind !== 'loan').map(a => <option key={a.id} value={a.id}>{a.institution} · {a.name}</option>)}
+            <option value="">Cash (no account)</option>
           </select>
         </Field>
         <Field label="Date"><input className="input" type="date" value={day} max={today()} onChange={e => setDay(e.target.value)} /></Field>

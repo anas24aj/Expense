@@ -13,7 +13,7 @@ export interface HouseholdFull { household: Household; members: Member[]; contac
 
 export interface Person {
   kind: 'member' | 'contact'; id: string; name: string; relation: string | null; role: string | null; on_app: boolean;
-  owes_you: Money[]; you_owe: Money[]; support_month: Money | null; support_plan: Money | null;
+  owes_you: Money[]; you_owe: Money[]; support_month: Money | null; support_plan: Money | null; rent_due?: Money | null;
 }
 export interface Device { id: string; name: string; platform: 'iphone' | 'android' | 'other'; member_id: string; created_at: string; last_seen: string | null }
 export interface DeviceCreated { device: Device; key: string; sms_url: string; setup: string; shortcut_url: string | null }
@@ -31,7 +31,7 @@ export interface Txn {
   id: string; day: string; occurred_at: string; amount: Money; direction: 'debit' | 'credit'; merchant: string; category: string | null;
   purpose: Purpose; confidence: number; account_id: string | null; account_name: string | null; member_id: string | null; note: string | null;
   source: 'sms' | 'statement' | 'shortcut' | 'manual' | 'peer'; person: { kind: string; id: string; name: string } | null;
-  split_mine: Money | null; claim_id: string | null; commitment_id: string | null; liability_id?: string | null;
+  split_mine: Money | null; claim_id: string | null; commitment_id: string | null; liability_id?: string | null; fund_id?: string | null;
 }
 export interface TxnDetail extends Txn { raw: { sender: string; body: string } | null; links: { id: string; kind: string; other_txn_id: string; role: 'from' | 'to'; set_by: string }[];
   splits: { id: string; member_id: string | null; contact_id: string | null; name: string; share: Money; settled: boolean }[]; claim: { id: string; name: string; status: string } | null }
@@ -59,7 +59,14 @@ export interface Commitment {
   shares: Share[]; status: 'paid' | 'due' | 'overdue' | 'upcoming'; last_paid: { day: string; txn_id: string } | null; fund_id: string | null;
 }
 export type DetectedCommitment = Omit<Commitment, 'id'> & { evidence_txn_ids: string[] };
-export interface Fund { id: string; name: string; target: Money; due_on: string; saved: Money; monthly: Money; on_track: boolean; commitment_id: string | null }
+export interface Fund { id: string; name: string; target: Money; due_on: string; saved: Money; monthly: Money; on_track: boolean; commitment_id: string | null; pot?: Pot | null }
+/** A fund fed by a tenant's rent and shared with co-owners (api-v3.md "Rent pots"). owes_you: + they owe you, − you owe them. */
+export interface Pot {
+  tenant: { id: string; name: string }; rent: Money; rent_from: string; match_pattern: string;
+  received: Money; spent: Money; balance: Money; from_pocket: Money; mine: { share_pct: number; part: Money };
+  shares: { member_id: string | null; contact_id: string | null; name: string; share_pct: number; part: Money; owes_you: Money }[];
+  pending_months: string[]; rent_due: Money; waived_months: string[];
+}
 export interface Milestone { id: string; name: string; due_on: string; amount: Money; paid: boolean; paid_on?: string | null; paid_txn_id?: string | null; liability_id?: string | null; disbursed_on?: string | null }
 export interface AssetCost { txn_id: string; day: string; merchant: string; cost_type: string; amount: Money }
 export interface AssetSharer { id?: string; cost_type: string; name: string; member_id?: string | null; contact_id?: string | null; share_pct: number }

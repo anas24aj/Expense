@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Advice, Commitment, DetectedCommitment, Fund, Liability, Lookahead, Person, WhatIf } from '../api/types';
+import type { Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, Person, Pot, WhatIf } from '../api/types';
 import { fmt, monthLabel, shortDate, today, toMinor } from '../lib/format';
 import {
-  AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
+  AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast,
 } from '../ui';
 import { DueRow, KIND_ICON } from './Home';
 
@@ -235,6 +235,7 @@ function NewCommitmentSheet({ open, onClose }: { open: boolean; onClose: () => v
 function Funds() {
   const q = useApi<{ items: Fund[] }>('/funds');
   const [open, setOpen] = useState<Fund | null>(null);
+  const [pot, setPot] = useState<Fund | null>(null);
   const [amt, setAmt] = useState('');
   const move = useWrite<{ id: string; amount_minor: number }>('POST', b => `/funds/${b.id}/move`);
   const toast = useToast();
@@ -245,6 +246,8 @@ function Funds() {
       {!q.data ? <PageSkeleton /> : !q.data.items.length ? <p className="caption" style={{ marginLeft: 4 }}>Funds appear for anything due every few months (rent, school fees), or tap Add to save toward a goal.</p> : (
         <List>
           {q.data.items.map(f => {
+            if (f.pot) return <ListRow key={f.id} icon={<Tile icon="house" color="var(--green-fill)" />} title={f.name}
+              sub={`Rent from ${f.pot.tenant.name} · ${fmt(f.pot.rent)}/mo`} end={<Money m={f.pot.balance} />} endSub={<PotNote p={f.pot} />} onClick={() => setPot(f)} />;
             const pct = (f.saved.minor / Math.max(1, f.target.minor)) * 100;
             return (
               <ListRow key={f.id} icon={<ProgressRing pct={pct} size={44} stroke={5} color={f.on_track ? 'var(--green-fill)' : 'var(--orange-fill)'} label={<span style={{ fontSize: 11 }}>{Math.round(pct)}%</span>} />}
@@ -255,6 +258,7 @@ function Funds() {
           })}
         </List>
       )}
+      <PotSheet fund={pot} onClose={() => setPot(null)} />
       <Sheet open={!!open} onClose={() => setOpen(null)} title={open ? `Set aside for ${open.name}` : ''}>
         {open && (
           <div className="stack">
@@ -270,7 +274,128 @@ function Funds() {
   );
 }
 
+/** Who owes whom in a pot, signed from your side: + they owe you. */
+const owing = (p: Pot) => p.shares.filter(s => s.owes_you.minor !== 0);
+function PotNote({ p }: { p: Pot }) {
+  const o = owing(p)[0];
+  if (p.pending_months.length) return <span className="badge orange">{fmt(p.rent_due)} rent due</span>;
+  if (o) return <span className="caption">{o.owes_you.minor > 0 ? `${o.name} owes ${fmt(o.owes_you)}` : `you owe ${o.name} ${fmt({ ...o.owes_you, minor: -o.owes_you.minor })}`}</span>;
+  return <span className="caption">in the pot</span>;
+}
+
+function PotSheet({ fund, onClose }: { fund: Fund | null; onClose: () => void }) {
+  const q = useApi<Fund>(fund ? `/funds/${fund.id}` : null);
+  const f = q.data || fund;
+  const mark = useWrite<{ month: string; status: 'received' | 'waived' | 'due' }, Fund>('POST', () => `/funds/${fund!.id}/months`);
+  const toast = useToast();
+  const p = f?.pot;
+  const set = async (month: string, status: 'received' | 'waived' | 'due') => {
+    await mark.mutateAsync({ month, status });
+    toast(status === 'due' ? `${monthLabel(month, true)} is due again` : `${monthLabel(month, true)} marked ${status}`);
+  };
+  const stat = (label: string, m: Pot['balance'], cls = '') => (
+    <div className="glass card"><div className="card-title">{label}</div><div className="stat"><span className={`v ${cls}`}><Money m={m} /></span></div></div>);
+  return (
+    <Sheet open={!!fund} onClose={onClose} title={f?.name}>
+      {f && p && (
+        <div className="stack">
+          <div className="grid-2">
+            {stat('Rent received', p.received, 'pos')}{stat('Groceries paid', p.spent)}
+            {stat('In the pot', p.balance)}{stat('Paid from pocket', p.from_pocket, p.from_pocket.minor ? 'neg' : '')}
+          </div>
+          {p.from_pocket.minor > 0 && <p className="caption">Groceries ran {fmt(p.from_pocket)} over the rent in some months. You paid that, so each co-owner owes their share of it; it shows in People with them.</p>}
+          <Section title="Each person’s part">
+            <List>
+              <ListRow icon={<Avatar name="You" />} title="You" sub={`${p.mine.share_pct}% share`} end={<Money m={p.mine.part} />} chevron={false} />
+              {p.shares.map(s => (
+                <ListRow key={s.member_id || s.contact_id} icon={<Avatar name={s.name} />} title={s.name} sub={`${s.share_pct}% share`} chevron={false}
+                  end={<Money m={s.part} />}
+                  endSub={s.owes_you.minor > 0 ? <span className="pos">owes you {fmt(s.owes_you)}</span>
+                    : s.owes_you.minor < 0 ? <span className="neg">you owe {fmt({ ...s.owes_you, minor: -s.owes_you.minor })}</span> : <span className="caption">settled</span>} />
+              ))}
+            </List>
+          </Section>
+          <Section title={p.pending_months.length ? `Rent due from ${p.tenant.name} · ${fmt(p.rent_due)}` : `Rent from ${p.tenant.name}`}>
+            {p.pending_months.length ? (
+              <List>
+                {p.pending_months.map(m => (
+                  <ListRow key={m} icon={<Tile icon="calendar" color="var(--orange-fill)" />} title={monthLabel(m)} sub={fmt(p.rent)} chevron={false}
+                    end={<span className="row-flex" style={{ gap: 6 }}>
+                      <button className="btn secondary small" disabled={mark.isPending} onClick={() => set(m, 'received')}>Received</button>
+                      <button className="btn secondary small" disabled={mark.isPending} onClick={() => set(m, 'waived')}>Waive</button>
+                    </span>} />
+                ))}
+              </List>
+            ) : <p className="caption" style={{ marginLeft: 4 }}>All paid up since {monthLabel(p.rent_from.slice(0, 7), true)}.</p>}
+            {p.waived_months.map(m => (
+              <p key={m} className="caption between" style={{ marginLeft: 4 }}>{monthLabel(m, true)} waived<button className="link-btn" onClick={() => set(m, 'due')}>Undo</button></p>
+            ))}
+          </Section>
+          <p className="footnote">Money in that mentions “{p.match_pattern}” is added to the pot by itself. To pay groceries from it, open the spend in Activity and tap “Paid from pot”.</p>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function RentForm({ onDone }: { onDone: () => void }) {
+  const hh = useApi<HouseholdFull>('/households/current').data;
+  const [name, setName] = useState('House groceries');
+  const [tenant, setTenant] = useState('');  // a contact id, or '' for a new person
+  const [tName, setTName] = useState('');
+  const [tEmail, setTEmail] = useState('');
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState('SAR');
+  const [from, setFrom] = useState(today().slice(0, 8) + '01');
+  const [owners, setOwners] = useState<string[]>([]);
+  const [words, setWords] = useState('');
+  const [invite, setInvite] = useState(true);
+  const add = useWrite<Record<string, unknown>, Fund>('POST', '/funds');
+  const toast = useToast();
+  const people = [...(hh?.members || []).filter(m => m.relation !== 'self').map(m => ({ id: m.id, name: m.display_name, kind: 'member_id' })),
+    ...(hh?.contacts || []).map(c => ({ id: c.id, name: c.name, kind: 'contact_id' }))].filter(x => x.id !== tenant);
+  const each = Math.floor(100 / (owners.length + 1));
+  const email = tenant ? hh?.contacts.find(c => c.id === tenant)?.email || '' : tEmail.trim();
+  const tenantName = tenant ? hh?.contacts.find(c => c.id === tenant)?.name || '' : tName.trim();
+  const save = async () => {
+    const f = await add.mutateAsync({ name: name.trim(), currency, rent: {
+      tenant: tenant ? { contact_id: tenant } : { name: tName.trim(), ...(tEmail.trim() ? { email: tEmail.trim() } : {}) },
+      amount_minor: toMinor(Number(amount), currency), from, match_pattern: words.trim() || undefined,
+      shares: owners.map(id => ({ [people.find(x => x.id === id)!.kind]: id, share_pct: each })) } });
+    const sent = invite && email ? (await api<{ sent: boolean }>(`/contacts/${f.pot!.tenant.id}/invite`, { method: 'POST', body: {} }).catch(() => null))?.sent : false;
+    toast(`${f.name} set up${sent ? ` — invite sent to ${email}` : invite && email ? ' — mail is off; invite them from People' : ''}`); onDone();
+  };
+  return (
+    <div className="stack">
+      <Field label="Tenant">
+        <select className="input" value={tenant} onChange={e => setTenant(e.target.value)}>
+          <option value="">New person…</option>
+          {(hh?.contacts || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </Field>
+      {!tenant && <div className="grid-2">
+        <Field label="Name"><input className="input" value={tName} onChange={e => setTName(e.target.value)} placeholder="Afaq" /></Field>
+        <Field label="Email (optional)"><input className="input" type="email" value={tEmail} onChange={e => setTEmail(e.target.value)} placeholder="name@example.com" /></Field>
+      </div>}
+      <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} label="Rent each month" />
+      <Field label="First month"><input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></Field>
+      <Field label="Owned with">
+        <div className="chips" style={{ flexWrap: 'wrap' }}>
+          {people.map(x => <Chip key={x.id} on={owners.includes(x.id)} onClick={() => setOwners(owners.includes(x.id) ? owners.filter(o => o !== x.id) : [...owners, x.id])}>{x.name}</Chip>)}
+        </div>
+      </Field>
+      <p className="caption">{owners.length ? <>Split equally: you {100 - each * owners.length}% · {owners.map(o => `${people.find(x => x.id === o)?.name} ${each}%`).join(' · ')}</> : 'Just yours — pick anyone it belongs to as well.'}</p>
+      <Field label="Fund it feeds"><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
+      <Field label="Bank text to look for (optional)"><input className="input" value={words} onChange={e => setWords(e.target.value)} placeholder={tenantName || 'their name as the bank shows it'} /></Field>
+      {email && <List><Toggle label={`Invite ${tenantName || 'them'} to the app`} sub={`A sign-up link to ${email}; they see only what you share`} checked={invite} onChange={setInvite} /></List>}
+      <button className="btn block" disabled={!name.trim() || !(tenant || tName.trim()) || !Number(amount) || !from || add.isPending} onClick={save}>Set up rent</button>
+      {add.error && <p className="error" role="alert">{add.error.message}</p>}
+    </div>
+  );
+}
+
 function NewFundSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [kind, setKind] = useState<'goal' | 'rent'>('goal');
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('SAR');
@@ -284,12 +409,15 @@ function NewFundSheet({ open, onClose }: { open: boolean; onClose: () => void })
   return (
     <Sheet open={open} onClose={onClose} title="New fund">
       <div className="stack">
+        <Segmented label="Kind" value={kind} onChange={setKind} options={[{ value: 'goal', label: 'Saving goal' }, { value: 'rent', label: 'Rent from a tenant' }]} />
+        {kind === 'rent' ? <RentForm onDone={onClose} /> : <>
         <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} label="Target" />
         <Field label="Saving for"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Emergency, car service, Onam trip…" /></Field>
         <Field label="Needed by"><input className="input" type="date" min={today()} value={due} onChange={e => setDue(e.target.value)} /></Field>
         <button className="btn block" disabled={!name.trim() || !Number(amount) || !due || add.isPending} onClick={save}>Start fund</button>
         {add.error && <p className="error" role="alert">{add.error.message}</p>}
         <p className="footnote" style={{ textAlign: 'center' }}>We work out how much to set aside each month to get there on time.</p>
+        </>}
       </div>
     </Sheet>
   );

@@ -143,6 +143,26 @@ def fund_projection(f, first, months):
     return out
 
 
+def pot(lines, others_pct, due_months=()):
+    """A shared pot (rent that pays for groceries), month by month. lines: [(day, minor)], + money in, - spent from it.
+    A month's money in pays that month's spending and a surplus carries on; a shortfall was paid from pocket by the
+    household, so each co-owner owes their pct of it (`owed`), and the pot restarts at 0. others_pct: {person: pct}.
+    due_months: months rent was due; those with no money in at all come back as `missing`."""
+    months = defaultdict(lambda: [0, 0])
+    for d, v in lines:
+        months[d[:7]][v < 0] += abs(v)
+    bal = short = 0
+    for m in sorted(months):
+        bal += months[m][0] - months[m][1]
+        if bal < 0:
+            short, bal = short - bal, 0
+    part = lambda v: {p: round(v * pct / 100) for p, pct in others_pct.items()}
+    parts = part(bal)
+    return {'in': sum(v[0] for v in months.values()), 'out': sum(v[1] for v in months.values()), 'balance': bal, 'short': short,
+            'parts': parts, 'my_part': bal - sum(parts.values()), 'owed': part(short),
+            'missing': [m for m in due_months if not (m in months and months[m][0])]}
+
+
 def commitment_status(c, txns, today):
     """Roll a commitment's due date past the payments matched to it (a payment up to 15 days early counts).
     {next_due, status: paid|due|overdue|upcoming, last_paid_txn}."""

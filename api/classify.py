@@ -126,6 +126,10 @@ def infer(hh, t, ctx):
         for a in ctx['assets']:
             if a['match_pattern'] and a['match_pattern'].lower() in text:
                 return out('asset', t['category'] or 'Other', 0.85, asset_id=a['id'])
+    if not debit:  # a tenant's rent goes to its pot
+        for f in ctx.get('pots', ()):
+            if f['match_pattern'].lower() in text and f['currency'] == t['currency']:
+                return out('income', 'Income', 0.9, fund_id=f['id'], person_contact_id=f['tenant_contact_id'])
     rule = _rule_for(ctx['rules'], t['merchant'])
     if rule and (rule['purpose'] or rule['category']):
         return out(rule['purpose'] or ('spend' if debit else 'income'), rule['category'] or t['category'] or 'Uncategorized', 0.9,
@@ -153,6 +157,7 @@ def _context(hh, pair=True):
             'commitments': hh.run('SELECT * FROM commitments WHERE household_id = :hid AND ended_at IS NULL'),
             'liabilities': hh.run('SELECT * FROM liabilities WHERE household_id = :hid AND closed_at IS NULL'),
             'assets': hh.run('SELECT * FROM assets WHERE household_id = :hid AND sold_at IS NULL'),
+            'pots': hh.run("SELECT * FROM funds WHERE household_id = :hid AND closed_at IS NULL AND tenant_contact_id IS NOT NULL AND match_pattern != ''"),
             'rules': {r['pattern']: r for r in hh.run('SELECT * FROM merchant_rules WHERE household_id = :hid')}}
 
 

@@ -244,6 +244,19 @@ def delete_contact(req):
     return {'id': c['id'], 'deleted': True}
 
 
+@route('POST', '/api/contacts/{id}/invite')
+def invite_contact(req):
+    """Email a contact a sign-up link. They get their own household; what they share with this one shows under Shared
+    (matched by this email), so it never opens this household's books to them."""
+    c = _contact(req, req.params['id'])
+    if not c['email']:
+        raise ApiError(400, 'add their email first')
+    link = f"{auth.base_url(req)}/signup"
+    sent = emailer.send(c['email'], f"{req.user['name']} shares money with you", f"{req.user['name']} added you to share costs on the app. "
+                        f"Sign up with {c['email']} to see what you share:\n{link}")
+    return {'email': c['email'], 'link': link, 'sent': sent}
+
+
 # ---------- people and what they owe ----------
 
 def settle_key(kind, pid, cur):
@@ -265,7 +278,16 @@ def balances(hh):
         key = ('member', r['person_member_id']) if r['person_member_id'] else ('contact', r['person_contact_id']) if r['person_contact_id'] else None
         if key and r['created_at'] > cutoffs.get(settle_key(*key, r['currency']), ''):
             out[key][r['currency']] += PERSON_SIGN[r['purpose']] * r['amount_minor']
+    for p in _pots(hh):  # a co-owner's part of what a shared pot overspent (the household paid it)
+        for s in p['shares']:
+            out[('member', s['member_id']) if s['member_id'] else ('contact', s['contact_id'])][p['fund']['currency']] += p['owes'][s['member_id'] or s['contact_id']]
     return out
+
+
+def _pots(hh):
+    from api import insights, plan
+    h = hh.db.one('SELECT timezone FROM households WHERE id = :id', id=hh.hid) or {}
+    return plan.pots(hh, insights.today_in(h.get('timezone')))
 
 
 def _monthly(rows):
@@ -279,6 +301,9 @@ def _monthly(rows):
 
 def people(hh, db):
     bal, month = balances(hh), now()[:7]
+    rent_due = defaultdict(lambda: defaultdict(int))  # tenant -> rent still owed for past months
+    for p in _pots(hh):
+        rent_due[p['fund']['tenant_contact_id']][p['fund']['currency']] += len(p['calc']['missing']) * p['fund']['rent_minor']
     support, plan = defaultdict(lambda: defaultdict(int)), defaultdict(lambda: defaultdict(int))
     for r in hh.run("SELECT m.person_member_id AS p, t.amount_minor, t.currency FROM txn_meta m JOIN transactions t ON t.id = m.txn_id "
                     "WHERE m.household_id = :hid AND t.household_id = :hid AND m.purpose = 'support' AND t.deleted_at IS NULL "
@@ -301,7 +326,8 @@ def people(hh, db):
     for c in hh.run('SELECT * FROM contacts WHERE household_id = :hid AND removed_at IS NULL ORDER BY name'):
         k = ('contact', c['id'])
         items.append({'kind': 'contact', 'id': c['id'], 'name': c['name'], 'relation': 'other', 'role': None, 'on_app': on_app(db, c['email']),
-                      'owes_you': owe(k, 1), 'you_owe': owe(k, -1), 'support_month': None, 'support_plan': None})
+                      'owes_you': owe(k, 1), 'you_owe': owe(k, -1), 'support_month': None, 'support_plan': None,
+                      'rent_due': _monthly(rent_due[c['id']])})
     return items
 
 
