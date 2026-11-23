@@ -269,6 +269,13 @@ def patch_transaction(req):
         changed['purpose'] = valid.choice(b['purpose'], PURPOSES, 'purpose')
     if 'person' in b:
         changed['person_member_id'], changed['person_contact_id'] = households.person_of(req, b['person']) if b['person'] else (None, None)
+    if 'liability_id' in b:  # pay a loan by hand: a catch-up EMI the match rule missed
+        lid = b['liability_id'] and valid.ident(b['liability_id'], 'liability_id')
+        if lid and not req.hh.one('SELECT id FROM liabilities WHERE id = :l AND household_id = :hid', l=lid):
+            raise ApiError(400, 'unknown liability_id')
+        changed['liability_id'] = lid or None
+        if lid and 'purpose' not in b:
+            changed['purpose'] = 'loan_payment'
     if 'note' in b:
         req.hh.update('transactions', row['id'], note=valid.text(b['note'], 'note', 500, required=False))
     if changed:

@@ -48,7 +48,7 @@ Member: `{id, display_name, relation, role, user_id|null, email|null}`. Contact:
 | GET | /transactions | query `month, account_id, category, purpose, member_id, q, review=1, limit, before` → `{items: [Txn], next_before}` |
 | GET | /transactions/{id} | → Txn + `{raw: sender/body|null, links: [...], splits: [...], claim|null}` |
 | POST | /transactions | manual `{account_id?, day, amount_minor, currency, direction, merchant, category?, purpose?, note?}` |
-| PATCH | /transactions/{id} | `{category?, purpose?, person: {kind, id}?, note?, apply_to_merchant?: bool}` → Txn (writes merchant_rules when apply_to_merchant) |
+| PATCH | /transactions/{id} | `{category?, purpose?, person: {kind, id}?, note?, liability_id?: id|null (link to a loan; implies purpose loan_payment), apply_to_merchant?: bool}` → Txn (writes merchant_rules when apply_to_merchant) |
 | POST | /transactions/{id}/split | `{shares: [{member_id|contact_id, share_minor}]}` → Txn |
 | POST | /transactions/{id}/link | `{to_txn_id, kind: transfer|refund|repayment}` / DELETE /transactions/{id}/link/{link_id} |
 | DELETE | /transactions/{id} | soft delete |
