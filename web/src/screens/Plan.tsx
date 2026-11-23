@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, Money as MoneyT, Person, Pot, WhatIf } from '../api/types';
+import type { Account, Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, MonthPlan, Money as MoneyT, Person, PlanLine, PlanMonth, Pot, WhatIf } from '../api/types';
 import { fmt, monthLabel, shortDate, sumByCurrency, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast,
 } from '../ui';
 import { DueRow, KIND_ICON } from './Home';
+import { PersonAvatar } from './People';
 
 const GROUPS: [string, string][] = [['rent', 'Rent'], ['bill', 'Bills'], ['subscription', 'Subscriptions'], ['emi', 'EMIs'], ['support', 'Family support'],
   ['insurance', 'Insurance'], ['school', 'School'], ['milestone', 'Property milestones']];
@@ -22,17 +23,87 @@ export default function PlanPage() {
   return (
     <Page title="Plan">
       <div className="grid-desktop stack">
+        <div className="span-2"><MonthPlanner /></div>
+        <div className="span-2"><Commitments q={commits} /></div>
+        <Debts />
+        <Funds />
         <Section title="Next 12 months">
           <div id="lookahead" style={{ scrollMarginTop: 80 }} />
           {look.isLoading ? <PageSkeleton /> : look.error ? <ErrorCard error={look.error} retry={look.refetch} /> : <LookaheadCard l={look.data!} />}
         </Section>
-        <div className="span-2"><Commitments q={commits} /></div>
-        <Funds />
-        <Debts />
-        <AdviceCard />
         <Afford />
+        <AdviceCard />
       </div>
     </Page>
+  );
+}
+
+const LINE_GROUPS: [PlanLine['kind'], string][] = [['commitment', 'Bills & commitments'], ['emi', 'Loan EMIs'], ['card', 'Credit card bills'], ['person', 'Owed to people'], ['fund', 'Set aside']];
+const when = (d: string | null) => (d ? new Date(d + 'T00:00:00').toLocaleDateString('en', { day: 'numeric', month: 'short' }) : '');
+
+/** This month or next: salary minus everything due → left over or short; then who pays what, from which account, and what to send home. */
+function MonthPlanner() {
+  const q = useApi<MonthPlan>('/insights/plan');
+  const accounts = useApi<{ items: Account[] }>('/accounts');
+  const [params, setParams] = useSearchParams();
+  if (q.isLoading) return <PageSkeleton />;
+  if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
+  const months = q.data!.months;
+  const pick = params.get('month');
+  const m: PlanMonth = months.find(x => x.month === pick) || months[0];
+  const name = (id: string | null) => { const a = accounts.data?.items.find(x => x.id === id); return a ? `${a.institution}${a.last4 ? ' ··' + a.last4 : ''}` : ''; };
+  const short = !!m.short;
+  return (
+    <section className="stack" aria-label="Month plan" id="month">
+      <Segmented label="Month" value={m.month} onChange={v => setParams(v === months[0].month ? {} : { month: v }, { replace: true })}
+        options={months.map((x, i) => ({ value: x.month, label: `${i ? 'Next' : 'This'} month · ${monthLabel(x.month)}` }))} />
+      <div className="glass card stack-sm">
+        <div className="between plan-line"><span><b>Salary</b></span><b className="num pos">+{fmt(m.income)}</b></div>
+        {LINE_GROUPS.map(([kind, label]) => {
+          const xs = m.lines.filter(l => l.kind === kind);
+          if (!xs.length) return null;
+          const total = xs.filter(l => l.counted).reduce((a, l) => a + l.base.minor, 0);
+          return (
+            <details key={kind} className="plan-group" open={kind !== 'fund'}>
+              <summary className="between plan-line"><span>{label} <span className="caption">· {xs.length}</span></span><span className="num neg">−{fmt({ minor: total, currency: m.out.currency })}</span></summary>
+              <List>{xs.map((l, i) => (
+                <Link key={i} to={l.link} className="list-row no-icon" style={{ minHeight: 48, opacity: l.paid ? .55 : 1 }}>
+                  <div className="body"><div className="title">{l.paid ? <s>{l.name}</s> : l.name}</div>
+                    <div className="sub">{[l.paid ? 'paid' : l.day ? `due ${when(l.day)}` : '', l.account_name ? `from ${l.account_name}` : '', l.counted || l.paid ? '' : 'from its fund'].filter(Boolean).join(' · ')}</div></div>
+                  <div className="end"><span className="amt"><Money m={l.amount} /></span></div>
+                </Link>
+              ))}</List>
+            </details>
+          );
+        })}
+        <div className={`between plan-total ${short ? 'neg' : 'pos'}`}><b>{short ? 'Short by' : 'Left over'}</b><b className="num">{fmt(short ? m.short : m.surplus)}</b></div>
+      </div>
+
+      <Section title={`The plan for ${monthLabel(m.month, true)}`}>
+        <List>
+          {m.move_to_india && (
+            <div className="list-row plan-step">
+              <span className="step-n">1</span>
+              <div className="body"><div className="title">Move <Money m={m.move_to_india.amount} /> to India</div>
+                <div className="sub wrap">≈ <Money m={m.move_to_india.inr} />{m.move_to_india.from ? ` from ${name(m.move_to_india.from)}` : ''}{m.move_to_india.to ? ` to ${name(m.move_to_india.to)}` : ''}{m.move_to_india.by ? ` by ${when(m.move_to_india.by)}` : ''}.
+                  Covers <Money m={m.india.due} /> of Indian dues; <Money m={m.india.cash} /> is already there.</div></div>
+            </div>
+          )}
+          {m.pay_from.map((p, i) => (
+            <div key={p.account_id} className="list-row plan-step">
+              <span className="step-n">{i + 1 + (m.move_to_india ? 1 : 0)}</span>
+              <div className="body"><div className="title">Pay <Money m={p.total} /> from {p.account_name}</div>
+                <div className="sub wrap">{p.items.map(x => `${x.name}${x.day ? ' ' + when(x.day) : ''}`).join(' · ')}</div></div>
+            </div>
+          ))}
+          <div className={`list-row plan-step ${short ? 'bad' : 'good'}`}>
+            <span className="step-n"><Icon name={short ? 'warn' : 'check'} size={16} /></span>
+            <div className="body"><div className="title">{short ? <>Short by <Money m={m.short} /></> : <>Keep <Money m={m.surplus} /> free</>}</div>
+              <div className="sub wrap">{short ? 'Move a fund’s set-aside, delay a big buy, or pay the card in part.' : 'After every bill, EMI and card above. Card spending this month shows up as next month’s card bill.'}</div></div>
+          </div>
+        </List>
+      </Section>
+    </section>
   );
 }
 
@@ -106,7 +177,7 @@ function LookaheadCard({ l }: { l: Lookahead }) {
 function Commitments({ q }: { q: ReturnType<typeof useApi<{ items: Commitment[] }>> }) {
   const detect = useApi<{ items: DetectedCommitment[] }>('/commitments/detect');
   const add = useWrite('POST', '/commitments');
-  const markPaid = useWrite<{ id: string }>('POST', b => `/commitments/${b.id}/paid`);
+  const markPaid = useWrite<{ id: string; payer?: { kind: string; id: string } }>('POST', b => `/commitments/${b.id}/paid`);
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState<Commitment | null>(null);
@@ -167,8 +238,12 @@ function Commitments({ q }: { q: ReturnType<typeof useApi<{ items: Commitment[] 
             {open.shares.length > 0 && (
               <Section title="Shared with">
                 <List>{open.shares.map(s => (
-                  <ListRow key={s.member_id || s.contact_id} icon={<Avatar name={s.name || '?'} size={32} />} title={s.name} sub={<>Share <Money m={s.share} /></>}
-                    end={s.paid_this_cycle ? <span className="badge green">Paid</span> : <span className="badge orange">Not paid</span>} />
+                  <ListRow key={s.member_id || s.contact_id} icon={<PersonAvatar id={s.member_id || s.contact_id} name={s.name || '?'} size={32} />} title={s.name} sub={<>Share <Money m={s.share} />{s.paid_this_cycle ? '' : ' · tap when they pay'}</>}
+                    end={s.paid_this_cycle ? <span className="badge green">Paid</span> : <span className="badge orange">Not paid</span>} chevron={false}
+                    onClick={s.paid_this_cycle ? undefined : async () => {
+                      await markPaid.mutateAsync({ id: open.id, payer: { kind: s.member_id ? 'member' : 'contact', id: (s.member_id || s.contact_id)! } });
+                      toast(`${s.name} paid`); setOpen(null);
+                    }} />
                 ))}</List>
               </Section>
             )}
@@ -266,6 +341,7 @@ function Funds() {
   const [creating, setCreating] = useState(false);
   return (
     <Section title="Funds" action={<button onClick={() => setCreating(true)}>Add</button>}>
+      <div id="funds" style={{ scrollMarginTop: 80 }} />
       <NewFundSheet open={creating} onClose={() => setCreating(false)} />
       {!q.data ? <PageSkeleton /> : !q.data.items.length ? <div className="glass card caption">Money set aside each month for bills that come every few months, like rent or school fees, appears here. Tap Add to save toward a goal.</div> : (
         <List>
@@ -332,7 +408,7 @@ function PotSheet({ fund, onClose }: { fund: Fund | null; onClose: () => void })
             <List>
               <ListRow icon={<Avatar name="You" />} title="You" sub={`${p.mine.share_pct}% share`} end={<Money m={p.mine.part} />} chevron={false} />
               {p.shares.map(s => (
-                <ListRow key={s.member_id || s.contact_id} icon={<Avatar name={s.name} />} title={s.name} sub={`${s.share_pct}% share`} chevron={false}
+                <ListRow key={s.member_id || s.contact_id} icon={<PersonAvatar id={s.member_id || s.contact_id} name={s.name} />} title={s.name} sub={`${s.share_pct}% share`} chevron={false}
                   end={<Money m={s.part} />}
                   endSub={s.owes_you.minor > 0 ? <span className="pos">owes you {fmt(s.owes_you)}</span>
                     : s.owes_you.minor < 0 ? <span className="neg">you owe {fmt({ ...s.owes_you, minor: -s.owes_you.minor })}</span> : <span className="caption">settled</span>} />
@@ -398,7 +474,7 @@ function RentForm({ onDone }: { onDone: () => void }) {
         </select>
       </Field>
       {!tenant && <div className="grid-2">
-        <Field label="Name"><input className="input" value={tName} onChange={e => setTName(e.target.value)} placeholder="Afaq" /></Field>
+        <Field label="Name"><input className="input" value={tName} onChange={e => setTName(e.target.value)} placeholder="Faisal" /></Field>
         <Field label="Email (optional)"><input className="input" type="email" value={tEmail} onChange={e => setTEmail(e.target.value)} placeholder="name@example.com" /></Field>
       </div>}
       <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} label="Rent each month" />
@@ -453,7 +529,7 @@ function Debts() {
   const items = q.data?.items || [];
   const done = items.filter(l => l.closed || l.outstanding.minor <= 0).length;
   return (
-    <Section title="What you owe" action={<button onClick={() => setOpen('new')}>Add</button>}>
+    <Section title="Loans & cards" action={<button onClick={() => setOpen('new')}>Add</button>}>
       <div id="debts" style={{ scrollMarginTop: 80 }} />
       {!q.data ? <PageSkeleton /> : !q.data.items.length ? <div className="glass card caption"><Icon name="check" size={14} className="pos" /> No loans or card debt tracked. Card and BNPL balances appear from your SMS.</div> : (
         <>
@@ -529,8 +605,8 @@ function LoanSheet({ loan, onClose }: { loan: Liability | 'new' | null; onClose:
       {loan && (
         <div className="stack">
           <Segmented label="Kind" value={(f.kind || 'loan') as Liability['kind']} onChange={set('kind')} options={LOAN_KINDS} />
-          <Field label="Name"><input className="input" {...input('name')} placeholder={f.kind === 'person' ? 'Loan from Harish' : 'Camry auto finance'} /></Field>
-          <Field label={f.kind === 'person' ? 'Who lent it' : 'Lender'}><input className="input" {...input('lender')} placeholder={f.kind === 'person' ? 'Harish' : 'Al Rajhi Bank'} /></Field>
+          <Field label="Name"><input className="input" {...input('name')} placeholder={f.kind === 'person' ? 'Loan from Rohan' : 'Camry auto finance'} /></Field>
+          <Field label={f.kind === 'person' ? 'Who lent it' : 'Lender'}><input className="input" {...input('lender')} placeholder={f.kind === 'person' ? 'Rohan' : 'Al Rajhi Bank'} /></Field>
           <AmountInput value={f.principal || ''} onChange={set('principal')} currency={cur} onCurrency={set('currency')} label="Amount borrowed" />
           <p className="caption" style={{ textAlign: 'center', marginTop: -8 }}>Amount borrowed</p>
           <div className="grid-2">

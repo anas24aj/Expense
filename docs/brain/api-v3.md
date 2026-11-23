@@ -101,6 +101,16 @@ have been claimed) or `unreviewed`. A business trip with a claim shows what isn'
 | POST | /trips/{id}/claim | `{name, txn_ids?}` create a claim from the trip (default: all unreviewed + missed business expenses) |
 | POST | /claims/import | `{file_name, data_base64, trip_id?}` the company claim Excel: rows (date, description, amount, currency, claimed amount) → claim + items matched to transactions (amount ± FX tolerance, date ± 3 days); unmatched rows returned as `unmatched` |
 Spending reports exclude `claimed` and `missed` trip expenses until reimbursed (they're money expected), include `personal`.
+Trip totals also carry `fees` (bank/FX fees and their VAT inside the trip) and `reimbursed` (received on the trip's claims). Home bills
+(rent, utilities, rows matched to a commitment) inside the window are left out unless tagged; status `excluded` drops a row from the trip.
+
+## Overview (redesign, 2026-11-23; `api/overview.py`, no migration)
+| GET | /insights/networth | `{currency, fx, assets, liabilities, net, countries: [{code: SA|IN|OTHER, currency, cash, property, cards, loans, assets, liabilities, net, net_base}], losses: {month, year, loan_interest_month, items}}`. A card or loan account tracked by a liability counts once. Losses are purpose `fee` rows (loan interest shown apart). |
+| GET | /insights/plan | `{currency, fx, months: [this, next]}` each `{month, income, out, surplus, short, lines: [{kind: commitment|emi|card|person|fund, name, amount, base, day, country, account_id, account_name, paid, counted, link}], pay_from: [{account_id, account_name, currency, total, items}], move_to_india: {amount, inr, by, from, to}|null, india: {due, cash}}`. Next month's card bill is the 3-month average. |
+| GET | /insights/movements?month= | `{month, currency, groups: [{key: remit|cards|own|family|to_people|from_people, title, total, items: [{from, to, amount, received, count, txn_ids}]}]}` from → to lines; replaces the removed `/insights/flows` Sankey. |
+| GET | /people/{kind}/{id} | `{person, shared: [{txn, share, settled, splits}], sent, received, shared_costs, totals: {shared, their_part, sent, received}}` |
+| GET | /review/merchants | `{items: [{merchant, count, direction, totals, last_day, category, account_name, txn_ids}], count}` the to-review rows grouped by shop |
+| POST | /review/merchant | `{merchant, category?, purpose?, person?}` → `{merchant, updated, left}`; sorts every to-review row of that shop and saves a merchant rule so new ones follow |
 ## Implementation notes (core: auth, households, ledger, ingest)
 Additions and decisions beyond the tables above; the UI may rely on them.
 - **Auth**: `POST /auth/login` also accepts `invite` (an existing user joins that household). Wrong `current` on

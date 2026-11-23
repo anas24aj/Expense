@@ -166,6 +166,11 @@ class OverviewTest(test_v3_plan.PlanTest):  # imported as a module so the harnes
         self.assertEqual(t['totals_base']['fees'], M(25_00))
         t = self.ok('POST', f'/trips/{trip["id"]}/tag', {'txn_ids': [tea], 'status': 'excluded'})  # one tap: not the trip's
         self.assertEqual(t['totals_base']['total'], M(1025_00))
+        c = self.ok('POST', f'/trips/{trip["id"]}/claim', {'name': 'Doha', 'txn_ids': [hotel]})
+        back = self.txn(1000_00, 'credit', 'COMPANY REIMBURSEMENT')
+        self.ok('POST', f'/claims/{c["id"]}/paid', {'txn_id': back})
+        t = self.ok('GET', f'/trips/{trip["id"]}')
+        self.assertEqual((t['totals_base']['claimed'], t['totals_base']['reimbursed'], t['totals_base']['burden']), (M(1000_00), M(1000_00), M(25_00)))
 
 
 for _name in [k for k in vars(test_v3_plan.PlanTest) if k.startswith('test_')]:  # the harness only: PlanTest's own tests run in their module

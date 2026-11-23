@@ -126,18 +126,16 @@ export interface Items<T> { items: T[] }
 
 // Trips (api-v3.md "Trips"). totals/by_* are in the trip's currency, totals_base in the base currency.
 // claimed = what claims cover; burden = what you pay (spent − claimed): personal, missed, unreviewed and unclaimed parts.
-export type TripStatus = 'claimed' | 'personal' | 'missed' | 'unreviewed';
+export type TripStatus = 'claimed' | 'personal' | 'missed' | 'unreviewed' | 'excluded';
 export type TripSplit = { spent: Money; claimed: Money; burden: Money };
 export interface Trip {
   id: string; name: string; city: string; country: string; start_on: string; end_on: string; kind: 'business' | 'personal'; claim_ids: string[];
   currency: string; totals: TripTotals; totals_base?: TripTotals; count: number;
   by_category: (TripSplit & { category: string })[]; by_day: (TripSplit & { day: string })[];
 }
-export type TripTotals = TripSplit & { total: Money; personal: Money; missed: Money; unreviewed: Money };
+export type TripTotals = TripSplit & { total: Money; personal: Money; missed: Money; unreviewed: Money; fees?: Money; reimbursed?: Money };
 export type TripExpense = Txn & { trip_status: TripStatus; claimed: Money; burden: Money; claimed_trip: Money; burden_trip: Money };
 export interface TripDetail extends Trip { expenses: TripExpense[]; claims: Claim[] }
-export interface FlowNode { id: string; name: string; kind: 'inflow' | 'account' | 'spending' | 'outflow' }
-export interface Flows { from: string; to: string; currency: string; nodes: FlowNode[]; links: { source: string; target: string; amount: Money }[] }
 export interface Coverage {
   account_id: string; name: string; kind: AccountKind; currency: string; first_month: string | null; last_day: string | null;
   months: { month: string; sources: ('sms' | 'statement' | 'manual' | 'shortcut' | 'peer')[]; covered: boolean }[];
@@ -145,3 +143,21 @@ export interface Coverage {
 }
 export interface ClaimRow { row: number; day: string; description: string; amount: Money; claimed: Money | null; txn_id?: string }
 export interface ClaimImport { claim: Claim | null; matched: ClaimRow[]; unmatched: ClaimRow[] }
+
+// Overview (api/overview.py): net worth by country, the month planner, money movement, one person, review by merchant.
+export interface NetCountry { code: 'SA' | 'IN' | 'OTHER'; currency: Currency; cash: Money; property: Money; cards: Money; loans: Money; assets: Money; liabilities: Money; net: Money; net_base: Money }
+export interface NetWorth { currency: Currency; fx: { SAR_INR: number; at: string | null }; assets: Money; liabilities: Money; net: Money; countries: NetCountry[];
+  losses: { month: Money; year: Money; loan_interest_month: Money; items: Txn[] } }
+export interface PlanLine { kind: 'commitment' | 'emi' | 'card' | 'person' | 'fund'; name: string; amount: Money; base: Money; day: string | null; country: string;
+  account_id: string | null; account_name: string | null; paid: boolean; counted: boolean; link: string }
+export interface PlanMonth { month: string; income: Money; out: Money; surplus: Money; short: Money | null; lines: PlanLine[];
+  pay_from: { account_id: string; account_name: string; currency: Currency; total: Money; items: { name: string; amount: Money; day: string | null }[] }[];
+  move_to_india: { amount: Money; inr: Money; by: string | null; from: string | null; to: string | null } | null; india: { due: Money; cash: Money } }
+export interface MonthPlan { currency: Currency; fx: { SAR_INR: number }; months: PlanMonth[] }
+export interface MoveSide { kind: 'account' | 'member' | 'contact' | 'other'; id: string | null; name: string; country: string | null; account_kind?: string }
+export interface MoveLine { group: string; from: MoveSide; to: MoveSide; amount: Money; received: Money | null; count: number; txn_ids: string[] }
+export interface Movements { month: string; currency: Currency; groups: { key: string; title: string; total: Money; items: MoveLine[] }[] }
+export interface SharedSpend { txn: Txn; share: Money; settled: boolean; splits: { member_id: string | null; contact_id: string | null; share_minor: number }[] }
+export interface PersonLedger { person: Person; shared: SharedSpend[]; sent: Txn[]; received: Txn[]; shared_costs: { day: string; what: string; amount: Money }[];
+  totals: { shared: Money[]; their_part: Money[]; sent: Money[]; received: Money[] } }
+export interface MerchantGroup { merchant: string; count: number; direction: 'debit' | 'credit'; totals: Money[]; last_day: string; category: string | null; account_name: string; txn_ids: string[] }

@@ -1165,7 +1165,7 @@ def trip_expenses(trip, ctx):
 def trip_json(trip, ctx, full=False):
     """Totals: total = spent; claimed = what the claims cover; burden = the rest (personal, missed, unreviewed and the
     unclaimed part of claimed bills); personal/missed/unreviewed = those expenses' amounts; fees = the part of spent that
-    is bank charges (FX markup and the VAT on it). Full adds per-expense splits."""
+    is bank charges (FX markup and the VAT on it); reimbursed = what its claims have paid back. Full adds per-expense splits."""
     cur, base = trip_currency(trip) or ctx['cur'], ctx['cur']
     exp = sorted(trip_expenses(trip, ctx), key=lambda x: (x[0]['day'], x[0]['id']))
     sums, sums_base = defaultdict(float), defaultdict(float)
@@ -1188,9 +1188,12 @@ def trip_json(trip, ctx, full=False):
                     g['spent'] += a
                     g['claimed'] += p
                     g['burden'] += a - p
-    keys = ('total', 'spent', 'claimed', 'burden', 'personal', 'missed', 'unreviewed', 'fees')
+    keys = ('total', 'spent', 'claimed', 'burden', 'personal', 'missed', 'unreviewed', 'fees', 'reimbursed')
     trio = lambda g: {k: M(g[k], cur) for k in ('spent', 'claimed', 'burden')}
     claim_ids = sorted({ctx['claimed'][t['id']] for t, _ in exp if t['id'] in ctx['claimed']})
+    claims = [c for c in ctx.setdefault('claim_list', claim_rows(ctx)) if c['id'] in claim_ids]
+    for d, c in ((sums, cur), (sums_base, base)):  # what the company has paid back so far on this trip's claims
+        d['reimbursed'] = sum(engine.conv(x['received']['minor'], x['received']['currency'], c, ctx['r']) for x in claims)
     out = {'id': trip['id'], 'name': trip['name'], 'city': trip['city'], 'country': trip['country'], 'start_on': trip['start_on'],
            'end_on': trip['end_on'], 'kind': trip['kind'], 'currency': cur, 'claim_ids': claim_ids,
            'totals': {k: M(sums[k], cur) for k in keys}, 'totals_base': {k: M(sums_base[k], base) for k in keys}, 'count': len(exp),
@@ -1201,7 +1204,7 @@ def trip_json(trip, ctx, full=False):
         out['expenses'] = [{**v, 'trip_status': st, 'claimed': M(part, t['currency']), 'burden': M(t['amount_minor'] - part, t['currency']),
                             'claimed_trip': M(p, cur), 'burden_trip': M(a - p, cur)}
                            for v, (t, st), (part, a, p) in zip(views, exp, splits)]
-        out['claims'] = [c for c in claim_rows(ctx) if c['id'] in claim_ids]
+        out['claims'] = claims
     return out
 
 

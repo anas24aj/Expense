@@ -1,4 +1,5 @@
 // Stroke icons in the spirit of SF Symbols (24px grid, 1.8 stroke, round caps).
+import { useState } from 'react';
 const P: Record<string, string> = {
   home: 'M3.5 10.5 12 3.8l8.5 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-4v-6h-6v6H5A1.5 1.5 0 0 1 3.5 19z',
   activity: 'M4 6.5h16M4 12h16M4 17.5h10',
@@ -159,7 +160,8 @@ export function CategoryTile({ category, purpose, merchant }: { category: string
   return <Tile icon={icon} color={color} />;
 }
 export function Avatar({ name, size = 40, photo }: { name: string; size?: number; photo?: string | null }) {
-  if (photo) return <img className="avatar" src={photo} alt="" aria-hidden style={{ width: size, height: size, objectFit: 'cover' }} />;
+  const [broken, setBroken] = useState<string | null>(null);  // a photo that fails to load falls back to initials
+  if (photo && broken !== photo) return <img className="avatar" src={photo} alt="" aria-hidden onError={() => setBroken(photo)} style={{ width: size, height: size, objectFit: 'cover' }} />;
   const hues = [211, 262, 340, 28, 145, 190, 300];
   const h = hues[[...name].reduce((s, c) => s + c.charCodeAt(0), 0) % hues.length];
   const initials = name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();

@@ -29,8 +29,8 @@ const contacts: Contact[] = [
   { id: 'c2', name: 'Imran Shaikh', email: null, phone: '+966 55 123 4567', on_app: false },
   { id: 'c3', name: 'Sameer Khan', email: 'sameer@example.com', phone: null, on_app: true },
   { id: 'c4', name: 'Vineeth K', email: null, phone: '+91 98470 12345', on_app: false },
-  { id: 'c5', name: 'Harish', email: 'harish@example.com', phone: '+966 50 765 4321', on_app: true },
-  { id: 'c6', name: 'Afaq (tenant)', email: null, phone: '+966 55 222 1100', on_app: false },
+  { id: 'c5', name: 'Rohan', email: 'rohan@example.com', phone: '+966 50 765 4321', on_app: true },
+  { id: 'c6', name: 'Faisal (tenant)', email: null, phone: '+966 55 222 1100', on_app: false },
 ];
 const invites: Invite[] = [{ id: 'i1', email: 'amma.menon@example.com', role: 'viewer', link: location.origin + '/join?t=demo-invite', expires_at: day(6) }];
 
@@ -38,12 +38,16 @@ const accounts: Account[] = [
   acct('a1', 'bank', 'Al Rajhi Bank', 'Current account', 'SAR', 'SA', '4471', SAR(18420)),
   acct('a2', 'credit_card', 'SNB', 'Platinum card', 'SAR', 'SA', '9012', SAR(-6850), SAR(20000), 34, 2700),
   acct('a3', 'wallet', 'STC Pay', 'STC Pay', 'SAR', 'SA', null, SAR(640)),
-  acct('a4', 'bank', 'HDFC Bank', 'NRE savings', 'INR', 'IN', '2231', INR(342000)),
-  acct('a5', 'bank', 'ICICI Bank', 'NRO savings', 'INR', 'IN', '7780', INR(86500)),
+  acct('a4', 'bank', 'HDFC Bank', 'NRE savings', 'INR', 'IN', '2231', INR(42000)),
+  acct('a5', 'bank', 'ICICI Bank', 'NRO savings', 'INR', 'IN', '7780', INR(8650)),
   acct('a6', 'credit_card', 'HDFC Bank', 'Regalia card', 'INR', 'IN', '5518', INR(-38400), INR(200000), 19, 4200),
   acct('a7', 'loan', 'HDFC Bank', 'Home loan', 'INR', 'IN', '0093', INR(-3862000), null, null, 865),
   acct('a8', 'loan', 'Al Rajhi Bank', 'Auto finance', 'SAR', 'SA', '3302', SAR(-41200), null, null, 450),
   acct('a9', 'bnpl', 'Tabby', 'Tabby', 'SAR', 'SA', null, SAR(-900)),
+  // Priya's own accounts, shown under her name
+  { ...acct('a10', 'bank', 'Riyad Bank', 'Salary account', 'SAR', 'SA', '6620', SAR(9340)), owner_member_id: 'm2' },
+  { ...acct('a11', 'bank', 'Federal Bank', 'NRE savings', 'INR', 'IN', '1184', INR(126000)), owner_member_id: 'm2' },
+  { ...acct('a12', 'credit_card', 'Riyad Bank', 'Visa Signature', 'SAR', 'SA', '3051', SAR(-1240), SAR(15000), 8, 2600), owner_member_id: 'm2' },
 ];
 function acct(id: string, kind: Account['kind'], institution: string, name: string, currency: string, country: string, last4: string | null,
   balance: Money, credit_limit: Money | null = null, used_pct: number | null = null, rate_bp: number | null = null): Account {
@@ -92,11 +96,19 @@ const txns: Txn[] = [
   T(-21, 'Amma — monthly', INR(25000), 'a5', 'Family', 'support', { person: { kind: 'member', id: 'm3', name: 'Amma' }, commitment_id: 'k2' }),
   T(-21, 'Achan — medicines', INR(8000), 'a5', 'Family', 'support', { person: { kind: 'member', id: 'm4', name: 'Achan' } }),
   T(-22, 'Kochi flat — 9th slab', INR(650000), 'a4', 'Home', 'asset'),
-  T(-27, 'Salary — Nov', SAR(24000), 'a1', 'Salary', 'income'),
+  T(-27, 'Salary — Nov', SAR(26000), 'a1', 'Salary', 'income'),
   T(-30, 'Danube', SAR(268), 'a1', 'Groceries'),
   T(-33, 'Hyper Panda', SAR(301), 'a1', 'Groceries'),
   T(-36, 'Nando’s', SAR(142), 'a2', 'Dining'),
+  T(-3, 'Hyper Panda — house shop', SAR(486), 'a1', 'Groceries', 'spend', { split_mine: SAR(243), person: { kind: 'contact', id: 'c5', name: 'Rohan' } }),
+  T(-9, 'Jahez — dinner at home', SAR(132), 'a2', 'Dining', 'spend', { split_mine: SAR(66), person: { kind: 'contact', id: 'c5', name: 'Rohan' } }),
+  T(-13, 'Rohan — Patrol EMI share', SAR(1350), 'a1', null, 'lend', { person: { kind: 'contact', id: 'c5', name: 'Rohan' } }),
+  T(-20, 'Transfer from Rohan', SAR(800), 'a1', null, 'repaid', { person: { kind: 'contact', id: 'c5', name: 'Rohan' } }),
 ];
+// who else carries part of a split payment: txn id -> the other people's shares
+const splits: Record<string, { member_id: string | null; contact_id: string | null; share_minor: number }[]> = {};
+for (const t of txns) if (t.split_mine && t.person) splits[t.id] = [{ member_id: t.person.kind === 'member' ? t.person.id : null,
+  contact_id: t.person.kind === 'contact' ? t.person.id : null, share_minor: t.amount.minor - t.split_mine.minor }];
 // Last month is a busy one (over 300 rows), so Activity's paging (200 a page) and its server-side day totals get exercised.
 {
   const shops: [string, string, string][] = [['Panda Retail', 'Groceries', 'a1'], ['Al Baik', 'Dining', 'a2'], ['Uber', 'Transport', 'a2'], ['Aldrees Petrol', 'Fuel', 'a3'], ['Starbucks', 'Dining', 'a2'], ['Nahdi Pharmacy', 'Health', 'a1']];
@@ -129,7 +141,9 @@ addTrip('t3', 'cl4', 'a2', [
   ['2026-11-10', 'Client dinner — Nobu Doha', QAR(412), 'Dining', 'claimed', 380], ['2026-11-10', 'Ooredoo — travel SIM', QAR(100), 'Telecom & Internet', 'missed'],
   ['2026-11-11', 'Villaggio — Zara', QAR(389), 'Shopping', 'personal'], ['2026-11-11', 'Talabat', QAR(58), 'Dining', 'unreviewed'],
   ['2026-11-12', 'Uber — Hamad airport', QAR(47), 'Transport', 'claimed'], ['2026-11-12', 'Qatar Duty Free', QAR(145), 'Shopping', 'unreviewed'],
+  ['2026-11-12', 'Intl. transaction fee + VAT', SAR(96.6), 'Fees & interest', 'personal'],
 ]);
+for (const x of txns) if (x.merchant === 'Intl. transaction fee + VAT') x.purpose = 'fee';
 addTrip('t1', 'cl3', 'a2', [
   ['2026-10-12', 'Emirates — RUH to DXB', AED(1450), 'Travel', 'claimed'], ['2026-10-12', 'Careem DXB airport', AED(96), 'Transport', 'claimed'],
   ['2026-10-13', 'Address Downtown — 4 nights', AED(3820), 'Travel', 'claimed', 3400], ['2026-10-13', 'Client lunch — Zuma', AED(640), 'Dining', 'claimed'],
@@ -153,10 +167,13 @@ const statusOf = (x: Txn): TripStatus => tripStatus[x.id] || (x.claim_id ? 'clai
 const claimedOf = (x: Txn) => statusOf(x) === 'claimed' ? claimPart[x.id] ?? x.amount.minor : 0;
 const tripOut = (t: Trip): Trip => {
   const xs = tripTxns(t), cur = t.currency, m = (v: number): Money => ({ minor: Math.round(v), currency: cur });
-  const tot = { total: 0, spent: 0, claimed: 0, burden: 0, personal: 0, missed: 0, unreviewed: 0 };
+  const tot = { total: 0, spent: 0, claimed: 0, burden: 0, personal: 0, missed: 0, unreviewed: 0, fees: 0,
+    reimbursed: claims.filter(c => t.claim_ids.includes(c.id)).reduce((a, c) => a + conv(c.received.minor, c.received.currency, cur), 0) };
   const cats = new Map<string, number[]>(), days = new Map<string, number[]>();
   for (const x of xs) {
     const st = statusOf(x), a = conv(x.amount.minor, x.amount.currency, cur), p = conv(claimedOf(x), x.amount.currency, cur);
+    if (st === 'excluded') continue;
+    if (x.purpose === 'fee') tot.fees += a;
     tot.total += a; tot.spent += a; tot.claimed += p; tot.burden += a - p;
     if (st !== 'claimed') tot[st] += a;
     for (const [g, k] of [[cats, x.category || 'Uncategorized'], [days, x.day]] as const) { const v = g.get(k) || [0, 0, 0]; g.set(k, [v[0] + a, v[1] + p, v[2] + a - p]); }
@@ -196,11 +213,11 @@ const liabilities: Liability[] = [
     emi: SAR(2150), due_day: 28, start_on: '2023-07-28', end_on: '2028-06-28', paid_pct: 57, payoff_month: '2028-06', interest_month: SAR(155), account_id: 'a8', contact_id: null },
   { id: 'l3', kind: 'credit_card', name: 'SNB Platinum', lender: 'SNB', currency: 'SAR', principal: SAR(6850), outstanding: SAR(6850), rate_bp: 2700,
     emi: SAR(1200), due_day: 18, start_on: null, end_on: null, paid_pct: 0, payoff_month: ym(6), interest_month: SAR(154), account_id: 'a2', contact_id: null },
-  // Harish's personal loan pays for the shared Patrol: the list shows my 50%; `shared` has the whole loan
-  { id: 'l5', kind: 'loan', name: 'Patrol loan (Harish’s name)', lender: 'Al Rajhi Bank', currency: 'SAR', principal: SAR(30000), opening_balance: SAR(30000), outstanding: SAR(21900), rate_bp: 0,
+  // Rohan's personal loan pays for the shared Patrol: the list shows my 50%; `shared` has the whole loan
+  { id: 'l5', kind: 'loan', name: 'Patrol loan (Rohan’s name)', lender: 'Al Rajhi Bank', currency: 'SAR', principal: SAR(30000), opening_balance: SAR(30000), outstanding: SAR(21900), rate_bp: 0,
     emi: SAR(2700), due_day: 27, start_on: '2026-03-27', end_on: '2027-02-27', paid_pct: 27, payoff_month: '2027-07', interest_month: SAR(0), account_id: null, contact_id: null,
     holder_contact_id: 'c5', my_share_pct: 50,
-    shared: { holder: { id: 'c5', name: 'Harish' }, loan_principal: SAR(60000), loan_opening_balance: SAR(60000), loan_emi: SAR(5400), sent_this_month: false, sent_txn_id: null } },
+    shared: { holder: { id: 'c5', name: 'Rohan' }, loan_principal: SAR(60000), loan_opening_balance: SAR(60000), loan_emi: SAR(5400), sent_this_month: false, sent_txn_id: null } },
   { id: 'l4', kind: 'bnpl', name: 'Tabby — Extra', lender: 'Tabby', currency: 'SAR', principal: SAR(1200), outstanding: SAR(900), rate_bp: 0,
     emi: SAR(300), due_day: 12, start_on: day(-40), end_on: day(50), paid_pct: 25, payoff_month: ym(2), interest_month: SAR(0), account_id: 'a9', contact_id: null },
 ];
@@ -239,8 +256,8 @@ const funds: Fund[] = [
   { id: 'f3', name: 'School fees', target: SAR(7800), due_on: onDay(1, 5), saved: SAR(5200), monthly: SAR(2600), on_track: true, commitment_id: 'k9' },
   { id: 'f4', name: 'Flat — 10th slab', target: INR(650000), due_on: onDay(2, 10), saved: INR(410000), monthly: INR(120000), on_track: true, commitment_id: 'k12' },
   { id: 'f6', name: 'House groceries (rent pot)', target: SAR(0), due_on: '2026-05-01', saved: SAR(420), monthly: SAR(0), on_track: true, commitment_id: null, pot: {
-    tenant: { id: 'c6', name: 'Afaq (tenant)' }, rent: SAR(1000), rent_from: '2026-05-01', match_pattern: 'afaq', received: SAR(6000), spent: SAR(5580), balance: SAR(420), from_pocket: SAR(0),
-    mine: { share_pct: 50, part: SAR(0) }, shares: [{ member_id: null, contact_id: 'c5', name: 'Harish', share_pct: 50, part: SAR(0), owes_you: SAR(0) }],
+    tenant: { id: 'c6', name: 'Faisal (tenant)' }, rent: SAR(1000), rent_from: '2026-05-01', match_pattern: 'faisal', received: SAR(6000), spent: SAR(5580), balance: SAR(420), from_pocket: SAR(0),
+    mine: { share_pct: 50, part: SAR(0) }, shares: [{ member_id: null, contact_id: 'c5', name: 'Rohan', share_pct: 50, part: SAR(0), owes_you: SAR(0) }],
     pending_months: [ym(0)], rent_due: SAR(1000), waived_months: [] } },
   { id: 'f5', name: 'Emergency fund', target: SAR(60000), due_on: onDay(14, 1), saved: SAR(32000), monthly: SAR(2000), on_track: true, commitment_id: null },
 ];
@@ -294,12 +311,12 @@ const assets: Asset[] = [
 ];
 assets[0].next_milestone = assets[0].milestones.find(m => !m.paid) || null;
 
-// The shared Patrol (Harish pays some costs himself: "Harish paid") and the rented Riyadh flat (a place: rent, bills, the rent pot).
+// The shared Patrol (Rohan pays some costs himself: "Rohan paid") and the rented Riyadh flat (a place: rent, bills, the rent pot).
 const cost = (offset: number, merchant: string, cost_type: string, amount: number, extra: Partial<NonNullable<Asset['costs']>[number]> = {}) =>
   ({ txn_id: id(), day: day(offset), merchant, cost_type, amount: SAR(amount), paid_by: null, auto: false, from_pot: false, ...extra });
-const patrolCosts = [cost(-2, 'Aldrees', 'fuel', 240), cost(-6, 'Petromin', 'fuel', 210, { paid_by: 'Harish' }), cost(-15, 'Nissan Abdul Latif Jameel', 'service', 1180),
-  cost(-24, 'Aldrees', 'fuel', 230, { paid_by: 'Harish' }), cost(-38, 'Tawuniya', 'insurance', 2600), cost(-41, 'Saher fine', 'other', 300, { paid_by: 'Harish' }),
-  cost(-52, 'Aldrees', 'fuel', 225), cost(-66, 'Al Jomaih tyres', 'repairs', 1640, { paid_by: 'Harish' })];
+const patrolCosts = [cost(-2, 'Aldrees', 'fuel', 240), cost(-6, 'Petromin', 'fuel', 210, { paid_by: 'Rohan' }), cost(-15, 'Nissan Abdul Latif Jameel', 'service', 1180),
+  cost(-24, 'Aldrees', 'fuel', 230, { paid_by: 'Rohan' }), cost(-38, 'Tawuniya', 'insurance', 2600), cost(-41, 'Saher fine', 'other', 300, { paid_by: 'Rohan' }),
+  cost(-52, 'Aldrees', 'fuel', 225), cost(-66, 'Al Jomaih tyres', 'repairs', 1640, { paid_by: 'Rohan' })];
 const homeCosts = [cost(-1, 'SEC electricity', 'electricity', 412, { auto: true }), cost(-3, 'Panda', 'groceries', 286, { from_pot: true }),
   cost(-9, 'STC fibre', 'internet', 299, { auto: true }), cost(-12, 'Maid — Musaned', 'maid', 900), cost(-19, 'IKEA', 'furnishing', 1249),
   cost(-33, 'SEC electricity', 'electricity', 455, { auto: true }), cost(-36, 'Danube', 'groceries', 268, { from_pot: true }), cost(-41, 'STC fibre', 'internet', 299, { auto: true }),
@@ -311,16 +328,16 @@ const sum = (cs: typeof patrolCosts) => cs.reduce((x, c) => x + c.amount.minor, 
 assets.splice(2, 0,
   { id: 'as6', kind: 'vehicle', name: 'Nissan Patrol 2021', currency: 'SAR', cost: SAR(145000), value: SAR(118000), paid: SAR(145000), financed: SAR(0), remaining: SAR(0),
     milestones: [], next_milestone: null, monthly_cost: SAR(1830), my_monthly_cost: SAR(3615), costs_by_type: { fuel: SAR(445), service: SAR(393), insurance: SAR(867) },
-    sharers: [{ id: 'sh1', cost_type: '*', name: 'Harish', contact_id: 'c5', share_pct: 50 }], liability_id: null,
+    sharers: [{ id: 'sh1', cost_type: '*', name: 'Rohan', contact_id: 'c5', share_pct: 50 }], liability_id: null,
     costs: patrolCosts, cost_totals: byType(patrolCosts), cost_total: SAR(sum(patrolCosts)), my_cost_total: SAR(sum(patrolCosts) / 2), cost_by_month: byMonth(patrolCosts, 50),
-    sharer_totals: [{ member_id: null, contact_id: 'c5', name: 'Harish', amount: SAR(sum(patrolCosts) / 2), net_owes_you: SAR(-(210 + 230 + 300 + 1640) / 2 + (240 + 1180 + 2600 + 225) / 2) }],
-    details: { builder: 'Nissan', bought_on: '2026-03-20', Plate: 'RUH 7713', 'Paid with': 'Harish’s personal loan, EMI split 50/50' },
+    sharer_totals: [{ member_id: null, contact_id: 'c5', name: 'Rohan', amount: SAR(sum(patrolCosts) / 2), net_owes_you: SAR(-(210 + 230 + 300 + 1640) / 2 + (240 + 1180 + 2600 + 225) / 2) }],
+    details: { builder: 'Nissan', bought_on: '2026-03-20', Plate: 'RUH 7713', 'Paid with': 'Rohan’s personal loan, EMI split 50/50' },
     status: 'owned', valuation: { value: SAR(118000), as_of: day(0), basis: 'depreciation', note: '15% a year since 2026-03-20', depreciation_pct: 15, bought_on: '2026-03-20' } },
   { id: 'as7', kind: 'home', name: 'Riyadh flat (Al Olaya)', currency: 'SAR', cost: SAR(0), value: SAR(0), paid: SAR(0), financed: SAR(0), remaining: SAR(0),
     milestones: [], next_milestone: null, monthly_cost: SAR(4870), my_monthly_cost: SAR(2435), costs_by_type: { rent: SAR(3500), electricity: SAR(462), internet: SAR(299), maid: SAR(300) },
-    sharers: [{ id: 'sh2', cost_type: '*', name: 'Harish', contact_id: 'c5', share_pct: 50 }], liability_id: null,
+    sharers: [{ id: 'sh2', cost_type: '*', name: 'Rohan', contact_id: 'c5', share_pct: 50 }], liability_id: null,
     costs: homeCosts, cost_totals: byType(homeCosts), cost_total: SAR(sum(homeCosts)), my_cost_total: SAR((sum(homeCosts) - 286 - 268) / 2 + 277), cost_by_month: byMonth(homeCosts, 50),
-    sharer_totals: [{ member_id: null, contact_id: 'c5', name: 'Harish', amount: SAR((sum(homeCosts) - 286 - 268) / 2), net_owes_you: SAR(1162) }],
+    sharer_totals: [{ member_id: null, contact_id: 'c5', name: 'Rohan', amount: SAR((sum(homeCosts) - 286 - 268) / 2), net_owes_you: SAR(1162) }],
     details: { builder: 'Al Olaya Towers', auto_tag: { currency: 'SAR', country: 'SA', categories: { 'Rent & EMI': 'rent', 'Bills & Utilities': 'utilities', 'Telecom & Internet': 'internet', Groceries: 'groceries' } }, fund_id: 'f6' },
     status: 'owned', verdict: undefined, rent: [], pot: { fund_id: 'f6', name: 'House groceries (rent pot)', ...funds.find(f => f.id === 'f6')!.pot! },
     auto_tag: { currency: 'SAR', country: 'SA', categories: { 'Rent & EMI': 'rent', 'Bills & Utilities': 'utilities', 'Telecom & Internet': 'internet', Groceries: 'groceries' } } });
@@ -344,7 +361,7 @@ const people = (): Person[] => [
     owes_you: ({ c1: [SAR(171.67)], c2: [SAR(21.67)], c4: [INR(4500)], c5: [SAR(1094.5)] } as Record<string, Money[]>)[c.id] || [], you_owe: c.id === 'c3' ? [SAR(120)] : [], support_month: null, support_plan: null })),
 ];
 
-let settings: Settings = { salary: SAR(24000), salary_day: 27, emergency_months: 6, debt_strategy: 'avalanche', extra_to_debt_minor: 50000 };
+let settings: Settings = { salary: SAR(26000), salary_day: 27, emergency_months: 6, debt_strategy: 'avalanche', extra_to_debt_minor: 50000 };
 const devices: Device[] = [
   { id: 'd1', name: 'Arjun’s iPhone', platform: 'iphone', member_id: 'm1', created_at: day(-60) + 'T09:00:00Z', last_seen: day(0) + 'T07:12:00Z' },
   { id: 'd2', name: 'Priya’s Pixel', platform: 'android', member_id: 'm2', created_at: day(-40) + 'T09:00:00Z', last_seen: day(-1) + 'T19:40:00Z' },
@@ -352,12 +369,12 @@ const devices: Device[] = [
 
 function month() {
   return {
-    month: ym(0), currency: 'SAR', income: SAR(24000), spent: SAR(11240), committed_due: SAR(2830), committed_paid: SAR(6960), set_aside: SAR(5300), free: SAR(4630),
+    month: ym(0), currency: 'SAR', income: SAR(26000), spent: SAR(11240), committed_due: SAR(2830), committed_paid: SAR(6960), set_aside: SAR(5300), free: SAR(4630),
     by_category: [['Rent', 3500], ['Family', 1409], ['Groceries', 1167], ['Dining', 912], ['Utilities', 685], ['Shopping', 1598], ['Fuel', 520], ['Transport', 410], ['Subscriptions', 162], ['Fees & interest', 84]]
       .map(([c, v]) => ({ category: c as string, amount: SAR(v as number) })),
     by_purpose: [{ purpose: 'spend', amount: SAR(9747) }, { purpose: 'support', amount: SAR(1409) }, { purpose: 'fee', amount: SAR(84) }],
     owed_by_you: { loans: SAR(206102), cards: SAR(8490), bnpl: SAR(900), people: SAR(120), total: SAR(215612) },
-    owed_to_you: { people: SAR(385), claims: SAR(2912), total: SAR(3297) }, interest_month: SAR(1498), fx: { SAR_INR: 23.42, at: day(0) },
+    owed_to_you: { people: SAR(385), claims: SAR(2912), total: SAR(3297) }, interest_month: SAR(1498), fx: { SAR_INR: 24.9, at: day(0) },
     spent_by_currency: [INR(54420), SAR(8916)],
   };
 }
@@ -367,8 +384,8 @@ const look = (n: number) => {
     const fundsV = [5300, 5300, 0, 5300, 5300, 5300, 5300, 0, 5300, 5300, 5300, 5300][i % 12];
     const funded = commit > 20000 ? 21000 : 0;
     const everyday = 4900 + (i % 3) * 180;
-    const free = 24000 - (commit - funded) - fundsV - everyday;
-    return { month: ym(i), income: SAR(24000), commitments: SAR(commit), funds: SAR(fundsV), everyday: SAR(everyday), free: SAR(free),
+    const free = 26000 - (commit - funded) - fundsV - everyday;
+    return { month: ym(i), income: SAR(26000), commitments: SAR(commit), funds: SAR(fundsV), everyday: SAR(everyday), free: SAR(free),
       warnings: commit > 20000 ? ['Rent due — paid from the rent fund'] : free < 1500 ? ['Tight month'] : [] };
   });
   return { months, debt_free: { month: '2039-04', months: 149 }, interest_per_month: SAR(1498) };
@@ -418,7 +435,7 @@ on('POST', '/mcp-key', () => ({ url: location.origin + '/mcp/mk_' + Math.random(
 on('GET', '/accounts', () => ({ items: accounts, recent_ids: [...new Set(txns.map(t => t.account_id).filter(Boolean))] }));
 on('POST', '/accounts', (_m, b) => { const a = acct(id(), b.kind, b.institution, b.name || b.institution, b.currency, b.country || 'SA', b.last4 || null, { minor: 0, currency: b.currency }); accounts.push(a); return a; });
 on('PATCH', '/accounts/{id}', (m, b) => Object.assign(accounts.find(x => x.id === m[1])!, b));
-const usedBy = [{ id: 'ub1', account_id: 'a2', person: { kind: 'contact', id: 'c5', name: 'Harish' }, from: '2026-04-20', to: '2026-05-21', purpose: 'lend' as const }];
+const usedBy = [{ id: 'ub1', account_id: 'a2', person: { kind: 'contact', id: 'c5', name: 'Rohan' }, from: '2026-04-20', to: '2026-05-21', purpose: 'lend' as const }];
 on('GET', '/accounts/{id}/used-by', m => ({ items: usedBy.filter(r => r.account_id === m[1]) }));
 on('DELETE', '/accounts/{id}/used-by/{rid}', m => { usedBy.splice(usedBy.findIndex(r => r.id === m[2]), 1); return { id: m[2], deleted: true, untagged: 0 }; });
 on('POST', '/accounts/{id}/used-by', (m, b) => { const xs = txns.filter(t => t.account_id === m[1] && t.direction === 'debit' && t.purpose === 'spend' && t.day >= b.from && t.day <= b.to); for (const t of xs) t.purpose = b.person.kind === 'member' ? 'support' : 'lend';
@@ -455,7 +472,8 @@ on('PATCH', '/transactions/{id}', (m, b) => { const t = txns.find(x => x.id === 
     if (b.liability_id !== undefined) { x.liability_id = b.liability_id; if (b.liability_id && !b.purpose) x.purpose = 'loan_payment'; } x.confidence = 1; }
   return t; });
 on('POST', '/transactions/{id}/split', (m, b) => { const t = txns.find(x => x.id === m[1])!; const others = b.shares.reduce((s: number, x: any) => s + x.share_minor, 0);
-  t.split_mine = { ...t.amount, minor: t.amount.minor - others }; t.confidence = 1; return t; });
+  splits[t.id] = b.shares.map((x: any) => ({ member_id: x.member_id || null, contact_id: x.contact_id || null, share_minor: x.share_minor }));
+  t.split_mine = b.shares.length ? { ...t.amount, minor: t.amount.minor - others } : null; t.confidence = 1; return t; });
 on('POST', '/transactions', (_m, b) => { const t = T(0, b.merchant, { minor: b.amount_minor, currency: b.currency }, b.account_id || null, b.category || null, b.purpose || 'spend', { source: 'manual', day: b.day, direction: b.direction }); txns.unshift(t); return t; });
 on('DELETE', '/transactions/{id}', m => { txns.splice(txns.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('GET', '/review', () => { const items = review(); return { items, count: items.length }; });
@@ -556,21 +574,6 @@ on('POST', '/claims/import', (_m, b) => { const t = trips.find(x => x.id === b.t
   const row = (x: Txn, i: number) => ({ row: i + 2, day: x.day, description: x.merchant, amount: x.amount, claimed: x.amount, txn_id: x.id });
   return { claim: claims.find(c => t.claim_ids.includes(c.id)) || claims[0], matched: xs.map(row),
     unmatched: [{ row: 12, day: t.start_on, description: 'Per diem (4 days)', amount: AED(800), claimed: AED(800) }, { row: 13, day: t.end_on, description: 'Visa fee', amount: AED(350), claimed: AED(350) }] }; });
-on('GET', '/insights/flows', (_m, _b, q) => {
-  const nodes = [['in:income', 'Income', 'inflow'], ['in:reimbursement', 'Reimbursements', 'inflow'], ['acc:a1', 'Al Rajhi ··4471', 'account'],
-    ['acc:a2', 'SNB card ··9012', 'account'], ['acc:a3', 'STC Pay', 'account'], ['acc:a4', 'HDFC NRE ··2231', 'account'], ['acc:a5', 'ICICI NRO ··7780', 'account'],
-    ['cat:Rent', 'Rent', 'spending'], ['cat:Groceries', 'Groceries', 'spending'], ['cat:Dining', 'Dining', 'spending'], ['cat:Shopping', 'Shopping', 'spending'],
-    ['cat:Travel', 'Travel', 'spending'], ['cat:Utilities', 'Utilities', 'spending'], ['cat:Fuel', 'Fuel', 'spending'],
-    ['out:loan_payment', 'Loan payments', 'outflow'], ['out:support', 'Family support', 'outflow'], ['out:asset', 'Property & assets', 'outflow'], ['out:claim', 'Company claims', 'outflow']]
-    .map(([id, name, kind]) => ({ id, name, kind }));
-  const L = (source: string, target: string, v: number) => ({ source, target, amount: SAR(v) });
-  return { from: q.get('from') || ym(0) + '-01', to: q.get('to') || day(0), currency: 'SAR', nodes, links: [
-    L('in:income', 'acc:a1', 24000), L('in:reimbursement', 'acc:a1', 640), L('acc:a1', 'acc:a4', 5000), L('acc:a1', 'acc:a2', 4000), L('acc:a1', 'acc:a3', 300),
-    L('acc:a1', 'cat:Rent', 3500), L('acc:a1', 'cat:Groceries', 867), L('acc:a1', 'cat:Utilities', 685), L('acc:a1', 'out:loan_payment', 2150),
-    L('acc:a2', 'cat:Dining', 912), L('acc:a2', 'cat:Shopping', 1598), L('acc:a2', 'cat:Travel', 860), L('acc:a2', 'out:claim', 2912), L('acc:a2', 'cat:Groceries', 300),
-    L('acc:a3', 'cat:Fuel', 120), L('acc:a4', 'out:loan_payment', 1687), L('acc:a4', 'out:asset', 2775), L('acc:a4', 'acc:a5', 1500), L('acc:a5', 'out:support', 1409),
-  ].sort((a, b) => b.amount.minor - a.amount.minor) };
-});
 on('GET', '/accounts/coverage', () => {
   const span = Array.from({ length: 12 }, (_, i) => ym(i - 11));
   const make = (a: Account, missing: string[], quiet: number | null, src: (m: string, i: number) => string[]) => {
@@ -613,10 +616,101 @@ on('GET', '/insights/advice', () => ({ emergency: { months_covered: 2.9, target:
   { title: 'Then raise the SIP', why: 'With the card cleared, put ₹10,000 more a month into the flexi-cap fund for long-term growth.', amount: INR(10000) },
 ] }));
 on('GET', '/insights/home', () => ({ month: month(), next_dues: [...commitments].filter(c => c.status !== 'paid').sort((a, b) => a.next_due.localeCompare(b.next_due)).slice(0, 5),
-  lookahead: look(6), review_count: review().length, alerts: [
+  lookahead: look(6), review_count: merchants.reduce((a, g) => a + g.count, 0), alerts: [
     { level: 'warn', text: 'KSEB electricity for Kochi is 2 days late', link: '/plan' },
     { level: 'info', text: 'Imran hasn’t paid his Netflix share this month', link: '/people' },
   ] }));
+
+// --- overview: net worth by country, the month planner, money moved, one person's ledger, to-sort by shop -----------
+const toSAR = (m: Money) => conv(m.minor, m.currency, 'SAR');
+const sumC = (xs: Money[], cur: string): Money => ({ minor: Math.round(xs.reduce((a, x) => a + conv(x.minor, x.currency, cur), 0)), currency: cur });
+on('GET', '/insights/networth', () => {
+  const tracked = new Set(liabilities.map(l => l.account_id).filter(Boolean));
+  const countries = (['SA', 'IN'] as const).map(code => {
+    const cur = code === 'SA' ? 'SAR' : 'INR', here = accounts.filter(a => a.currency === cur && !a.archived);
+    const cash = sumC(here.filter(a => !['credit_card', 'bnpl', 'loan'].includes(a.kind) && (a.balance?.minor || 0) > 0).map(a => a.balance!), cur);
+    const cards = sumC(here.filter(a => ['credit_card', 'bnpl'].includes(a.kind) && !tracked.has(a.id)).map(a => ({ ...a.balance!, minor: -a.balance!.minor })), cur);
+    const owe = liabilities.filter(l => l.currency === cur && !l.closed);
+    const loans = sumC(owe.filter(l => l.kind !== 'credit_card' && l.kind !== 'bnpl').map(l => l.outstanding), cur);
+    const cardsAll = sumC([cards, ...owe.filter(l => l.kind === 'credit_card' || l.kind === 'bnpl').map(l => l.outstanding)], cur);
+    const property = sumC(assets.filter(a => a.currency === cur && a.kind !== 'home' && a.status !== 'sold' && a.status !== 'written_off').map(a => a.value), cur);
+    const assetsC = sumC([cash, property], cur), liab = sumC([cardsAll, loans], cur), net = { minor: assetsC.minor - liab.minor, currency: cur };
+    return { code, currency: cur, cash, property, cards: cardsAll, loans, assets: assetsC, liabilities: liab, net, net_base: sumC([net], 'SAR') };
+  });
+  const fees = txns.filter(t => t.purpose === 'fee');
+  return { currency: 'SAR', fx: { SAR_INR: 24.9, at: day(0) }, countries,
+    assets: sumC(countries.map(c => c.assets), 'SAR'), liabilities: sumC(countries.map(c => c.liabilities), 'SAR'), net: sumC(countries.map(c => c.net), 'SAR'),
+    losses: { month: sumC(fees.filter(t => t.day.startsWith(ym(0))).map(t => t.amount), 'SAR'), year: sumC([...fees.map(t => t.amount), SAR(1240)], 'SAR'),
+      loan_interest_month: sumC([INR(27840), SAR(155)], 'SAR'), items: fees } };
+});
+const planFor = (off: number) => {
+  const mo = ym(off), A = (id: string) => [id, acctName(id)] as const;
+  type L = { kind: string; name: string; amount: Money; day: string | null; acct: readonly [string, string]; paid?: boolean; counted?: boolean; link: string; country: string };
+  const ls: L[] = [];
+  for (const c of commitments) {
+    if (c.cycle_months !== 1 && !c.next_due.startsWith(mo)) continue;
+    const ind = c.amount.currency === 'INR';
+    ls.push({ kind: c.kind === 'emi' ? 'emi' : 'commitment', name: c.name, amount: c.amount, day: `${mo}-${c.next_due.slice(8)}`, link: '/plan#commitments',
+      acct: A(ind ? (c.kind === 'support' ? 'a5' : 'a4') : 'a1'), paid: off === 0 && c.status === 'paid', counted: !(c.fund_id && c.cycle_months !== 1), country: ind ? 'IN' : 'SA' });
+  }
+  ls.push({ kind: 'emi', name: 'Patrol loan — my half to Rohan', amount: SAR(1350), day: `${mo}-27`, acct: A('a1'), link: '/plan#debts', country: 'SA' });
+  ls.push({ kind: 'card', name: off ? 'SNB Platinum (estimate)' : 'SNB Platinum', amount: SAR(off ? 3800 : 6850), day: `${mo}-18`, acct: A('a1'), link: '/accounts/a2', country: 'SA' });
+  ls.push({ kind: 'card', name: off ? 'HDFC Regalia (estimate)' : 'HDFC Regalia', amount: INR(off ? 15000 : 38400), day: `${mo}-19`, acct: A('a4'), link: '/accounts/a6', country: 'IN' });
+  if (!off) ls.push({ kind: 'person', name: 'You owe Sameer Khan', amount: SAR(120), day: null, acct: A('a1'), link: '/people/contact/c3', country: 'SA' });
+  for (const f of funds) if (f.monthly.minor) ls.push({ kind: 'fund', name: f.name, amount: f.monthly, day: null, acct: A(f.monthly.currency === 'INR' ? 'a4' : 'a1'), link: '/plan#funds', country: f.monthly.currency === 'INR' ? 'IN' : 'SA' });
+  const lines = ls.map(l => ({ kind: l.kind, name: l.name, amount: l.amount, base: SAR(toSAR(l.amount) / 100), day: l.day, country: l.country,
+    account_id: l.acct[0], account_name: l.acct[1], paid: !!l.paid, counted: l.counted !== false, link: l.link }));
+  const out = lines.filter(l => l.counted).reduce((a, l) => a + l.base.minor, 0), income = 2600000;
+  const open = lines.filter(l => !l.paid && l.counted), pay = new Map<string, typeof open>();
+  for (const l of open) pay.set(l.account_id, [...(pay.get(l.account_id) || []), l]);
+  const dueIN = open.filter(l => l.country === 'IN').reduce((a, l) => a + l.amount.minor, 0);
+  const cash = off ? 190000 : 5065000, need = Math.max(0, dueIN - cash), sar = Math.ceil(need / 24.9 / 10000) * 10000;
+  return { month: mo, income: SAR(26000), out: SAR(out / 100), surplus: SAR(Math.max(0, income - out) / 100), short: out > income ? SAR((out - income) / 100) : null, lines,
+    pay_from: [...pay].map(([aid, xs]) => { const a = accounts.find(x => x.id === aid)!;
+      return { account_id: aid, account_name: acctName(aid), currency: a.currency, total: sumC(xs.map(x => x.amount), a.currency), items: xs.map(x => ({ name: x.name, amount: x.amount, day: x.day })) }; }),
+    move_to_india: sar ? { amount: SAR(sar / 100), inr: INR(sar * 24.9 / 100), by: `${mo}-${off ? '01' : '25'}`, from: 'a1', to: 'a4' } : null,
+    india: { due: INR(dueIN / 100), cash: INR(cash / 100) } };
+};
+on('GET', '/insights/plan', () => ({ currency: 'SAR', fx: { SAR_INR: 24.9 }, months: [planFor(0), planFor(1)] }));
+const side = (kind: 'account' | 'member' | 'contact', sid: string) => kind === 'account' ? { kind, id: sid, name: acctName(sid), country: accounts.find(a => a.id === sid)!.country }
+  : { kind, id: sid, name: kind === 'member' ? members.find(m => m.id === sid)!.display_name : contacts.find(c => c.id === sid)!.name, country: null };
+const mv = (group: string, from: ReturnType<typeof side>, to: ReturnType<typeof side>, amount: Money, received: Money | null = null, count = 1) => ({ group, from, to, amount, received, count, txn_ids: [] });
+on('GET', '/insights/movements', (_m, _b, q) => {
+  const month = q.get('month') || ym(0);
+  if (month < ym(-2)) return { month, currency: 'SAR', groups: [] };
+  const groups = [
+    ['remit', 'Sent home', [mv('remit', side('account', 'a1'), side('account', 'a4'), SAR(5000), INR(117100))]],
+    ['cards', 'Card payments', [mv('cards', side('account', 'a1'), side('account', 'a2'), SAR(4000), null, 2), mv('cards', side('account', 'a4'), side('account', 'a6'), INR(30000))]],
+    ['own', 'Between your accounts', [mv('own', side('account', 'a4'), side('account', 'a5'), INR(40000))]],
+    ['family', 'Family', [mv('family', side('account', 'a5'), side('member', 'm3'), INR(25000)), mv('family', side('account', 'a5'), side('member', 'm4'), INR(8000))]],
+    ['to_people', 'To people', [mv('to_people', side('account', 'a1'), side('contact', 'c5'), SAR(1350)), mv('to_people', side('account', 'a1'), side('contact', 'c1'), SAR(150))]],
+    ['from_people', 'From people', [mv('from_people', side('contact', 'c5'), side('account', 'a1'), SAR(800))]],
+  ] as const;
+  return { month, currency: 'SAR', groups: groups.map(([key, title, items]) => ({ key, title, items, total: sumC(items.map(x => x.amount), 'SAR') })) };
+});
+const byCur = (xs: Money[]) => Object.values(xs.reduce((o, x) => ({ ...o, [x.currency]: { minor: (o[x.currency]?.minor || 0) + x.minor, currency: x.currency } }), {} as Record<string, Money>));
+on('GET', '/people/{kind}/{id}', m => {
+  const person = people().find(p => p.kind === m[1] && p.id === m[2]); if (!person) throw new Err(404, 'not found');
+  const col = m[1] === 'member' ? 'member_id' : 'contact_id';
+  const shared = txns.filter(t => splits[t.id]?.some(s => s[col] === m[2])).map(t => {
+    const mine = splits[t.id].find(s => s[col] === m[2])!;
+    return { txn: t, share: { minor: mine.share_minor, currency: t.amount.currency }, settled: false, splits: splits[t.id] }; });
+  const own = txns.filter(t => t.person?.id === m[2] && !splits[t.id]);
+  const sent = own.filter(t => t.direction === 'debit'), received = own.filter(t => t.direction === 'credit');
+  const shared_costs = m[2] === 'c5' ? patrolCosts.slice(0, 4).map(c => ({ day: c.day, what: `Patrol — ${c.merchant}`, amount: SAR(c.amount.minor / 200) })) : [];
+  return { person, shared, sent, received, shared_costs, totals: { shared: byCur(shared.map(x => x.txn.amount)), their_part: byCur(shared.map(x => x.share)),
+    sent: byCur(sent.map(t => t.amount)), received: byCur(received.map(t => t.amount)) } };
+});
+const merchants = ([['Panda Retail', 412, 46, 'a1'], ['Al Baik', 236, 38, 'a2'], ['Uber', 198, 27, 'a2'], ['STC Pay transfer', 164, 120, 'a3'], ['Aldrees Petrol', 151, 95, 'a3'],
+  ['Amazon.sa', 122, 140, 'a2'], ['Jahez', 118, 58, 'a2'], ['HungerStation', 96, 52, 'a2'], ['Careem', 88, 31, 'a2'], ['Nahdi Pharmacy', 74, 44, 'a1'],
+  ['Al Rajhi ATM', 61, 400, 'a1'], ['Transfer from ROHAN', 37, 650, 'a1'], ['Mada refund', 22, 75, 'a1'], ['Swiggy', 21, 380, 'a6']] as const)
+  .map(([merchant, count, avg, acc], i) => { const a = accounts.find(x => x.id === acc)!, credit = /^(Transfer from|Mada refund)/.test(merchant);
+    return { merchant: merchant as string, count: count as number, direction: credit ? 'credit' : 'debit', totals: [{ minor: count * avg * 100, currency: a.currency }],
+      last_day: day(-i), category: null, account_name: acctName(acc), txn_ids: [] }; });
+on('GET', '/review/merchants', () => ({ items: merchants, count: merchants.reduce((a, g) => a + g.count, 0) }));
+on('POST', '/review/merchant', (_m, b) => { if (!b.category && !b.purpose) throw new Err(400, 'category or purpose is required');
+  const i = merchants.findIndex(g => g.merchant === b.merchant); const updated = i < 0 ? 0 : merchants.splice(i, 1)[0].count;
+  return { merchant: b.merchant, updated, left: merchants.reduce((a, g) => a + g.count, 0) }; });
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {

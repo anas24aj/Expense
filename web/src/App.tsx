@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useApi } from './api/client';
 import type { Me } from './api/types';
 import { Boundary, Icon, PageSkeleton, useOnline } from './ui';
@@ -7,19 +7,20 @@ import { ForgotPage, JoinPage, ResetPage, SignInPage, SignUpPage } from './scree
 import Onboarding from './screens/Onboarding';
 import HomePage from './screens/Home';
 import ActivityPage, { ReviewPage } from './screens/Activity';
-import PeoplePage from './screens/People';
+import PeoplePage, { PersonPage } from './screens/People';
 import PlanPage from './screens/Plan';
+import MoneyPage from './screens/Money';
 import { TripPage, TripsPage } from './screens/Trips';
-import { AccountPage, CoveragePage, FlowsPage } from './screens/Flows';
-import { AccountsPage, AssetPage, AssetsPage, ClaudePage, DevicesPage, HouseholdPage, ImportPage, MorePage, ProfilePage, SettingsPage } from './screens/More';
+import { AccountPage, AccountsPage, CoveragePage } from './screens/Accounts';
+import { AssetPage, ClaudePage, DevicesPage, HouseholdPage, ImportPage, MorePage, ProfilePage, SettingsPage } from './screens/More';
 
-// Five tabs at most (iOS and Material guidance); People lives under More.
+// Five tabs (iOS and Material guidance). What you own and owe, and where money moved, open from Home; trips and setup from More.
 const TABS = [
-  { to: '/', label: 'Home', icon: 'home', also: [] as string[] },
-  { to: '/activity', label: 'Activity', icon: 'activity', also: [] },
+  { to: '/', label: 'Home', icon: 'home', also: ['/accounts', '/assets', '/money'] },
+  { to: '/activity', label: 'Activity', icon: 'activity', also: [] as string[] },
   { to: '/plan', label: 'Plan', icon: 'plan', also: [] },
-  { to: '/assets', label: 'Assets', icon: 'building', also: [] },
-  { to: '/more', label: 'More', icon: 'more', also: ['/people'] },
+  { to: '/people', label: 'People', icon: 'people', also: [] },
+  { to: '/more', label: 'More', icon: 'more', also: ['/trips'] },
 ];
 const tabOf = (path: string) => Math.max(0, TABS.findIndex((t, i) => (i === 0 ? path === '/' : [t.to, ...t.also].some(p => path.startsWith(p)))));
 
@@ -34,6 +35,13 @@ function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   lastUrl.current[active] = here;
   const to = (i: number) => (i === active ? TABS[i].to : lastUrl.current[i] || TABS[i].to);
   const key = useRef(pathname);
+  const nav = useNavigate();
+  useEffect(() => { // old-app style links (#/people, #/trips/…) open the same screen
+    const go = () => { if (location.hash.startsWith('#/')) nav(location.hash.slice(1), { replace: true }); };
+    go();
+    window.addEventListener('hashchange', go);
+    return () => window.removeEventListener('hashchange', go);
+  }, [nav]);
   useEffect(() => {
     window.history.scrollRestoration = 'manual'; // restored below, per screen
     const save = () => { scroll.current[key.current] = window.scrollY; };
@@ -91,29 +99,36 @@ function Authed() {
         <Route path="/" element={<HomePage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/activity/review" element={<ReviewPage />} />
-        <Route path="/people" element={<PeoplePage me={me.data} />} />
+        <Route path="/people" element={<PeoplePage />} />
+        <Route path="/people/:kind/:id" element={<PersonPage />} />
         <Route path="/plan" element={<PlanPage />} />
-        <Route path="/more" element={<MorePage me={me.data} />} />
-        <Route path="/more/accounts" element={<AccountsPage />} />
-        <Route path="/assets" element={<AssetsPage />} />
+        <Route path="/money" element={<MoneyPage />} />
+        <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/accounts/coverage" element={<CoveragePage />} />
+        <Route path="/accounts/:id" element={<AccountPage />} />
         <Route path="/assets/:id" element={<AssetPage />} />
-        <Route path="/more/assets" element={<Navigate to="/assets" replace />} />
-        <Route path="/more/assets/:id" element={<Redirect to={id => `/assets/${id}`} />} />
+        <Route path="/trips" element={<TripsPage />} />
+        <Route path="/trips/:id" element={<TripPage />} />
+        <Route path="/more" element={<MorePage me={me.data} />} />
         <Route path="/more/import" element={<ImportPage />} />
         <Route path="/more/devices" element={<DevicesPage />} />
         <Route path="/more/claude" element={<ClaudePage />} />
         <Route path="/more/household" element={<HouseholdPage me={me.data} />} />
         <Route path="/more/profile" element={<ProfilePage me={me.data} />} />
         <Route path="/more/settings" element={<SettingsPage me={me.data} />} />
-        <Route path="/more/accounts/:id" element={<AccountPage />} />
-        <Route path="/more/coverage" element={<CoveragePage />} />
-        <Route path="/more/flows" element={<FlowsPage />} />
-        <Route path="/more/trips" element={<TripsPage />} />
-        <Route path="/more/trips/:id" element={<TripPage />} />
-        {/* paths the backend uses in Home alerts */}
+        {/* earlier paths, and the ones the backend puts in Home alerts */}
+        <Route path="/assets" element={<Navigate to="/accounts" replace />} />
+        <Route path="/more/assets" element={<Navigate to="/accounts" replace />} />
+        <Route path="/more/assets/:id" element={<Redirect to={id => `/assets/${id}`} />} />
+        <Route path="/more/accounts" element={<Navigate to="/accounts" replace />} />
+        <Route path="/more/accounts/:id" element={<Redirect to={id => `/accounts/${id}`} />} />
+        <Route path="/more/coverage" element={<Navigate to="/accounts/coverage" replace />} />
+        <Route path="/more/flows" element={<Navigate to="/money" replace />} />
+        <Route path="/more/trips" element={<Navigate to="/trips" replace />} />
+        <Route path="/more/trips/:id" element={<Redirect to={id => `/trips/${id}`} />} />
         <Route path="/plan/lookahead" element={<Navigate to="/plan#lookahead" replace />} />
         <Route path="/plan/commitments/:id" element={<Redirect to={id => `/plan?commitment=${id}`} />} />
-        <Route path="/plan/claims/:id" element={<Redirect to={id => `/people?tab=claims&claim=${id}`} />} />
+        <Route path="/plan/claims/:id" element={<Redirect to={id => `/trips?claim=${id}`} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Shell>

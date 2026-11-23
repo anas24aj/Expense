@@ -1,90 +1,143 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
-import type { Claim, ClaimImport, Commitment, Contact, HouseholdFull, Me, Member, Money as M, Person, Trip } from '../api/types';
-import { dueLabel, fmt, shortDate, today } from '../lib/format';
+import type { Contact, HouseholdFull, Member, Money as M, Person, PersonLedger, SharedSpend, Txn } from '../api/types';
+import { fmt, shortDate, sumByCurrency } from '../lib/format';
 import {
   Avatar, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, useToast,
 } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
-import { photoDataUrl, readFile } from './files';
+import { photoDataUrl } from './files';
 
-type Tab = 'family' | 'friends' | 'shared' | 'claims';
 const RELATIONS = ['spouse', 'parent', 'child', 'sibling', 'other'];  // the API's set (api/households.py)
 const ROLES: { value: 'admin' | 'member' | 'viewer'; label: string }[] = [{ value: 'admin', label: 'Admin' }, { value: 'member', label: 'Member' }, { value: 'viewer', label: 'Viewer' }];
+const first = (name: string) => name.split(' ')[0];
 
-export default function PeoplePage({ me }: { me: Me }) {
-  const [params, setParams] = useSearchParams();
-  const tab = (params.get('tab') as Tab) || 'family';
-  const people = useApi<{ items: Person[] }>('/people');
+/** Anyone's avatar by id, with their photo from /people (one cached request): every place that shows a person uses it. */
+export function PersonAvatar({ id, name, size }: { id?: string | null; name: string; size?: number }) {
+  const people = useApi<{ items: Person[] }>('/people').data?.items;
+  return <Avatar name={name} size={size} photo={people?.find(p => p.id === id)?.photo} />;
+}
+
+const balance = (p: Person) => p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span>
+  : p.you_owe.length ? <span className="neg"><Monies items={p.you_owe} /></span> : <span className="caption">Settled</span>;
+
+/** People: family and friends with who owes whom; tap anyone for everything between you. */
+export default function PeoplePage() {
+  const q = useApi<{ items: Person[] }>('/people');
+  const [adding, setAdding] = useState(false);
+  const people = (q.data?.items || []).filter(p => p.relation !== 'self');
+  const fam = people.filter(p => p.kind === 'member'), friends = people.filter(p => p.kind === 'contact');
+  const row = (p: Person) => (
+    <ListRow key={p.kind + p.id} to={`/people/${p.kind}/${p.id}`} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name}
+      sub={p.support_plan ? <>Support <Money m={p.support_month} /> of <Money m={p.support_plan} /> this month</> : p.rent_due ? <span className="warn">Rent due {fmt(p.rent_due)}</span> : p.kind === 'member' ? p.relation : 'friend'}
+      end={balance(p)} endSub={p.owes_you.length ? 'owes you' : p.you_owe.length ? 'you owe' : undefined} />
+  );
   return (
-    <Page title="People" back="/more">
-      <Segmented label="Section" value={tab} onChange={v => setParams({ tab: v }, { replace: true })}
-        options={[{ value: 'family', label: 'Family' }, { value: 'friends', label: 'Friends' }, { value: 'shared', label: 'Shared' }, { value: 'claims', label: 'Claims' }]} />
-      {people.isLoading ? <PageSkeleton /> : people.error ? <ErrorCard error={people.error} retry={people.refetch} />
-        : tab === 'family' ? <Family people={people.data!.items} me={me} />
-        : tab === 'friends' ? <Friends people={people.data!.items} />
-        : tab === 'shared' ? <Shared /> : <Claims />}
+    <Page title="People" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add friend"><Icon name="plus" /></button>}>
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : (
+        <>
+          <div className="grid-2">
+            <div className="glass card stat"><span className="k">Owed to you</span><span className="v pos"><Monies items={sumByCurrency(people.flatMap(p => p.owes_you))} empty="Nothing" /></span></div>
+            <div className="glass card stat"><span className="k">You owe</span><span className="v neg"><Monies items={sumByCurrency(people.flatMap(p => p.you_owe))} empty="Nothing" /></span></div>
+          </div>
+          {fam.length > 0 && <Section title="Family" action={<Link to="/more/household">Manage</Link>}><List>{fam.map(row)}</List></Section>}
+          <Section title="Friends & roommates">
+            {friends.length ? <List>{friends.map(row)}</List> : <EmptyState icon="people" title="No friends yet" text="Split a bill from Activity and they show up here." />}
+          </Section>
+          <SharedWithMe />
+        </>
+      )}
+      <AddContactSheet open={adding} onClose={() => setAdding(false)} />
     </Page>
   );
 }
 
-function Family({ people, me }: { people: Person[]; me: Me }) {
+/** One person: shared spends (with "not split" / "fully theirs"), money each way, shared costs, and the balance to settle. */
+export function PersonPage() {
+  const { kind = '', id = '' } = useParams();
+  const q = useApi<PersonLedger>(`/people/${kind}/${id}`);
   const hh = useApi<HouseholdFull>('/households/current');
-  const [inviting, setInviting] = useState(false);
-  const support = people.filter(p => p.kind === 'member' && (p.support_plan || p.support_month));
-  const admin = me.member.role === 'owner' || me.member.role === 'admin';
-  const owing = people.filter(p => p.kind === 'member' && (p.owes_you.length || p.you_owe.length));
-  const [open, setOpen] = useState<Person | null>(null);
-  const [editing, setEditing] = useState<Member | null>(null);
+  const [tab, setTab] = useState<'shared' | 'money'>('shared');
+  const [open, setOpen] = useState<Txn | null>(null);
+  const [editing, setEditing] = useState(false);
+  const split = useWrite<{ id: string; shares: Record<string, unknown>[] }>('POST', b => `/transactions/${b.id}/split`);
+  const settle = useWrite('POST', '/settle');
+  const toast = useToast();
+  const d = q.data, p = d?.person;
+  const col = kind === 'member' ? 'member_id' : 'contact_id';
+  const others = (x: SharedSpend) => x.splits.filter(s => s[col] !== id).map(s => ({ [s.member_id ? 'member_id' : 'contact_id']: s.member_id || s.contact_id, share_minor: s.share_minor }));
+  const act = async (x: SharedSpend, how: 'none' | 'all') => {
+    await split.mutateAsync({ id: x.txn.id, shares: how === 'none' ? others(x) : [{ [col]: id, share_minor: x.txn.amount.minor }] });
+    toast(how === 'none' ? `${x.txn.merchant}: not split with ${first(p!.name)}` : `${x.txn.merchant}: all ${first(p!.name)}’s`);
+  };
+  const member = hh.data?.members.find(m => m.id === id), contact = hh.data?.contacts.find(c => c.id === id);
   return (
-    <>
-      {owing.length > 0 && (
-        <Section title="Money between you">
-          <List>
-            {owing.map(p => (
-              <ListRow key={p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name} sub="lent, borrowed and paid back"
-                end={p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span> : <span className="neg"><Monies items={p.you_owe} /></span>}
-                endSub={p.owes_you.length ? 'owes you' : 'you owe'} onClick={() => setOpen(p)} />
+    <Page title={p?.name || 'Person'} back="/people" trail={p && (member || contact) && <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>}>
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : d && p && (
+        <div className="grid-desktop stack">
+          <section className="glass card span-2 stack" style={{ alignItems: 'center', textAlign: 'center' }} aria-label="Balance">
+            <Avatar name={p.name} photo={p.photo} size={84} />
+            <span className="caption">{p.kind === 'member' ? p.relation : 'Friend'}{p.on_app ? ' · on the app' : ''}</span>
+            {!p.owes_you.length && !p.you_owe.length && <b style={{ fontSize: 20 }}>All square</b>}
+            {[...p.owes_you.map(m => ({ m, theirs: true })), ...p.you_owe.map(m => ({ m, theirs: false }))].map(({ m, theirs }) => (
+              <div key={m.currency + theirs} className="stack-sm" style={{ width: '100%', maxWidth: 360 }}>
+                <span className="caption">{theirs ? `${first(p.name)} owes you` : `You owe ${first(p.name)}`}</span>
+                <span className={`num ${theirs ? 'pos' : 'neg'}`} style={{ font: '700 34px var(--font-display)' }}>{fmt(m)}</span>
+                <button className="btn block secondary" disabled={settle.isPending} onClick={async () => {
+                  if (!confirm(`Mark everything in ${m.currency} with ${first(p.name)} as settled?`)) return;
+                  await settle.mutateAsync({ person: { kind: p.kind, id: p.id }, currency: m.currency }); toast(`Settled with ${first(p.name)}`);
+                }}><Icon name="check" size={18} />Settle up</button>
+              </div>
             ))}
-          </List>
-        </Section>
-      )}
-      <SettleSheet person={open} onClose={() => setOpen(null)} />
-      {support.length > 0 && (
-        <Section title="Family support">
-          <div className="glass card stack">
-            {support.map(p => {
-              const plan = p.support_plan?.minor || 0, got = p.support_month?.minor || 0;
-              const over = plan && got > plan;
-              return (
-                <div key={p.id} className="stack-sm">
-                  <div className="between">
-                    <span className="row-flex"><Avatar name={p.name} photo={p.photo} size={32} /><b>{p.name}</b></span>
-                    <span className="num"><Money m={p.support_month} /> <span className="caption">of <Money m={p.support_plan} /></span></span>
+            {p.support_plan && <div style={{ width: '100%' }} className="stack-sm">
+              <div className="between"><span className="caption">Support this month</span><span className="num"><Money m={p.support_month} /> of <Money m={p.support_plan} /></span></div>
+              <Meter pct={((p.support_month?.minor || 0) / Math.max(1, p.support_plan.minor)) * 100} color="var(--green-fill)" />
+            </div>}
+          </section>
+
+          <div className="span-2"><Segmented label="Show" value={tab} onChange={setTab} options={[
+            { value: 'shared', label: `Shared spends ${d.shared.length}` }, { value: 'money', label: `Money sent ${d.sent.length + d.received.length}` }]} /></div>
+
+          {tab === 'shared' ? <>
+            <Section title="Shared spends" action={d.totals.their_part.length > 0 ? <span className="caption">their part <Monies items={d.totals.their_part} /></span> : undefined}>
+              {!d.shared.length ? <div className="glass card caption">Nothing split with {first(p.name)} yet. Open a payment in Activity and tap Split.</div> : (
+                <List>{d.shared.map(x => (
+                  <div key={x.txn.id} className="list-row" style={{ flexWrap: 'wrap', rowGap: 8, opacity: x.settled ? .55 : 1 }}>
+                    <button type="button" className="row-flex" style={{ flex: 1, minWidth: 0, background: 'none', border: 0, padding: 0, color: 'inherit', textAlign: 'left' }} onClick={() => setOpen(x.txn)}>
+                      <span className="body" style={{ minWidth: 0 }}><span className="title" style={{ display: 'block' }}>{x.txn.merchant}</span>
+                        <span className="sub" style={{ display: 'block' }}>{shortDate(x.txn.day)} · bill <Money m={x.txn.amount} /></span></span>
+                    </button>
+                    <div className="end"><span className="amt"><Money m={x.share} /></span><span className="caption">{x.settled ? 'settled' : `${first(p.name)}’s part`}</span></div>
+                    {!x.settled && <div className="chips" style={{ flexBasis: '100%', paddingBottom: 0 }} role="group" aria-label={`Split of ${x.txn.merchant}`}>
+                      <button type="button" className="chip" disabled={split.isPending} onClick={() => act(x, 'none')}>Not split</button>
+                      <button type="button" className="chip" disabled={split.isPending || x.share.minor === x.txn.amount.minor} aria-pressed={x.share.minor === x.txn.amount.minor} onClick={() => act(x, 'all')}>Fully theirs</button>
+                    </div>}
                   </div>
-                  <Meter pct={plan ? (got / plan) * 100 : 100} color={over ? 'var(--orange-fill)' : 'var(--green-fill)'} />
-                  {over ? <span className="caption warn">{fmt({ minor: got - plan, currency: p.support_month!.currency })} extra this month</span>
-                    : got >= plan ? <span className="caption pos">Sent for this month</span> : <span className="caption">{fmt({ minor: plan - got, currency: p.support_plan!.currency })} still to send</span>}
-                </div>
-              );
-            })}
-          </div>
-        </Section>
+                ))}</List>
+              )}
+            </Section>
+            {d.shared_costs.length > 0 && (
+              <Section title="Shared costs (car, home, bills)">
+                <List>{d.shared_costs.slice(0, 30).map((c, i) => <ListRow key={i} title={c.what} sub={shortDate(c.day)}
+                  end={<span className={c.amount.minor < 0 ? 'neg' : ''}><Money m={c.amount} /></span>} endSub={c.amount.minor < 0 ? 'you owe' : 'their part'} chevron={false} />)}</List>
+              </Section>
+            )}
+          </> : <>
+            <Section title={`You sent ${first(p.name)}`} action={<span className="caption"><Monies items={d.totals.sent} empty="Nothing" /></span>}>
+              {d.sent.length ? <List>{d.sent.map(t => <TxnRow key={t.id} t={t} onOpen={setOpen} />)}</List> : <p className="caption" style={{ marginLeft: 4 }}>Nothing yet.</p>}
+            </Section>
+            <Section title={`${first(p.name)} sent you`} action={<span className="caption"><Monies items={d.totals.received} empty="Nothing" /></span>}>
+              {d.received.length ? <List>{d.received.map(t => <TxnRow key={t.id} t={t} onOpen={setOpen} />)}</List> : <p className="caption" style={{ marginLeft: 4 }}>Nothing yet.</p>}
+            </Section>
+          </>}
+          <p className="footnote span-2" style={{ margin: '0 4px' }}>The balance counts unsettled splits, money lent and paid back, and shared costs since you last settled. Settle up when it’s paid in cash or outside the app.</p>
+        </div>
       )}
-      <Section title="Household" action={admin && <button onClick={() => setInviting(true)}>Add</button>}>
-        <List>
-          <ListRow icon={<Avatar name={me.user.name} />} title={<>{me.user.name} <span className="caption">(you)</span></>} sub={me.member.role} chevron={false} />
-          {(hh.data?.members || []).filter(m => m.id !== me.member.id).map(m => (
-            <ListRow key={m.id} icon={<Avatar name={m.display_name} photo={m.photo} />} title={m.display_name} sub={`${m.relation} · ${m.user_id ? 'on the app' : m.email ? 'invited' : 'no login'}`}
-              end={<span className={`badge ${m.role === 'admin' || m.role === 'owner' ? 'blue' : ''}`}>{m.role}</span>} onClick={admin ? () => setEditing(m) : undefined} label={admin ? `Edit ${m.display_name}` : undefined} />
-          ))}
-        </List>
-        {(hh.data?.invites || []).map(i => <p key={i.id} className="caption" style={{ marginLeft: 4 }}><Icon name="mail" size={13} /> Invite sent to {i.email}</p>)}
-      </Section>
-      <InviteSheet open={inviting} onClose={() => setInviting(false)} />
-      <EditMemberSheet member={editing} onClose={() => setEditing(null)} />
-    </>
+      <TxnSheet txn={open} onClose={() => setOpen(null)} />
+      {editing && member && <EditMemberSheet member={member} onClose={() => setEditing(false)} />}
+      {editing && contact && <EditContactSheet contact={contact} onClose={() => setEditing(false)} />}
+    </Page>
   );
 }
 
@@ -224,45 +277,6 @@ export async function copy(text: string, toast: (s: string) => void, what = 'Cop
   try { await navigator.clipboard.writeText(text); toast(what); } catch { toast('Select and copy the text above'); }
 }
 
-function sumBy(list: M[][]) {
-  const by: Record<string, number> = {};
-  for (const m of list.flat()) by[m.currency] = (by[m.currency] || 0) + m.minor;
-  return Object.entries(by).map(([currency, minor]) => ({ currency, minor }));
-}
-
-function Friends({ people }: { people: Person[] }) {
-  const friends = people.filter(p => p.kind === 'contact');
-  const [open, setOpen] = useState<Person | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<Contact | null>(null);
-  const contacts = useApi<HouseholdFull>('/households/current').data?.contacts || [];
-  return (
-    <>
-      <div className="grid-2">
-        <div className="glass card"><div className="card-title">Owed to you</div><div className="stat"><span className="v pos"><Monies items={sumBy(friends.map(f => f.owes_you))} empty="Nothing" /></span></div></div>
-        <div className="glass card"><div className="card-title">You owe</div><div className="stat"><span className="v"><Monies items={sumBy(friends.map(f => f.you_owe))} empty="Nothing" /></span></div></div>
-      </div>
-      <Section title="Friends" action={<button onClick={() => setAdding(true)}>Add</button>}>
-        {friends.length ? (
-          <List>
-            {friends.map(p => (
-              <ListRow key={p.id} icon={<Avatar name={p.name} photo={p.photo} />} title={p.name}
-                sub={p.rent_due ? <span className="warn">Rent due {fmt(p.rent_due)}</span> : p.on_app ? 'On the app — splits sync' : p.relation || 'friend'}
-                end={p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span> : p.you_owe.length ? <span className="neg"><Monies items={p.you_owe} /></span> : <span className="caption">Settled</span>}
-                endSub={p.owes_you.length ? 'owes you' : p.you_owe.length ? 'you owe' : undefined} onClick={() => setOpen(p)} />
-            ))}
-          </List>
-        ) : <EmptyState icon="people" title="No friends yet" text="Split a bill from Activity and they’ll show up here." />}
-      </Section>
-      <SharedWithMe />
-      <SettleSheet person={open} onClose={() => setOpen(null)}
-        onEdit={() => { const c = contacts.find(x => x.id === open?.id); setOpen(null); if (c) setEditing(c); }} />
-      <EditContactSheet contact={editing} onClose={() => setEditing(null)} />
-      <AddContactSheet open={adding} onClose={() => setAdding(false)} />
-    </>
-  );
-}
-
 type SharedItem = { household: string; you_owe: M[]; owed_to_you: M[]; lines: { day: string; what: string; your_share: M }[] };
 
 // Splits other households recorded with you (as their contact with your email): appears once you join the app.
@@ -279,31 +293,6 @@ function SharedWithMe() {
         <p className="caption">{i.you_owe.length ? <>You owe <Monies items={i.you_owe} /></> : i.owed_to_you.length ? <>They owe you <Monies items={i.owed_to_you} /></> : 'Settled'}</p>
       </Section>
     ))}</>
-  );
-}
-
-function SettleSheet({ person, onClose, onEdit }: { person: Person | null; onClose: () => void; onEdit?: () => void }) {
-  const settle = useWrite('POST', '/settle');
-  const toast = useToast();
-  if (!person) return null;
-  const rows = [...person.owes_you.map(m => ({ m, dir: 'owes you' })), ...person.you_owe.map(m => ({ m, dir: 'you owe' }))];
-  return (
-    <Sheet open onClose={onClose} title={person.name} lead={onEdit && <button className="link-btn" onClick={onEdit}>Edit</button>}>
-      <div className="stack" style={{ textAlign: 'center' }}>
-        <div style={{ display: 'grid', placeItems: 'center' }}><Avatar name={person.name} size={64} /></div>
-        {rows.length ? rows.map(({ m, dir }) => (
-          <div key={m.currency + dir} className="glass card stack-sm">
-            <span className="caption">{dir === 'owes you' ? `${person.name.split(' ')[0]} owes you` : `You owe ${person.name.split(' ')[0]}`}</span>
-            <span style={{ font: '700 32px var(--font-display)' }} className={dir === 'owes you' ? 'pos num' : 'num'}>{fmt(m)}</span>
-            <button className="btn block" disabled={settle.isPending} onClick={async () => {
-              await settle.mutateAsync({ person: { kind: person.kind, id: person.id }, currency: m.currency });
-              toast(`Settled with ${person.name.split(' ')[0]}`); onClose();
-            }}><Icon name="check" />Mark settled</button>
-          </div>
-        )) : <p className="muted">All square.</p>}
-        <p className="footnote">Settling marks it paid without a matching bank SMS — use it for cash.</p>
-      </div>
-    </Sheet>
   );
 }
 
@@ -327,145 +316,3 @@ function AddContactSheet({ open, onClose }: { open: boolean; onClose: () => void
   );
 }
 
-function Shared() {
-  const q = useApi<{ items: Commitment[] }>('/commitments');
-  const paid = useWrite<{ id: string; payer: { kind: string; id: string } }>('POST', b => `/commitments/${b.id}/paid`);
-  const toast = useToast();
-  if (!q.data) return <PageSkeleton />;
-  const subs = q.data.items.filter(c => c.shares.length);
-  if (!subs.length) return <EmptyState icon="tv" title="Nothing shared yet" text="Open a subscription in Plan and add who shares it." />;
-  return (
-    <Section title="Shared bills & subscriptions">
-      {subs.map(c => (
-        <div key={c.id} className="glass card stack-sm">
-          <div className="between"><b>{c.name}</b><Money m={c.amount} /></div>
-          <span className="caption">Next {dueLabel(c.next_due)} · tap someone when they pay</span>
-          <div className="chips" style={{ flexWrap: 'wrap' }}>
-            {c.shares.map(s => (
-              <button key={s.name} type="button" className="chip" aria-pressed={s.paid_this_cycle} disabled={s.paid_this_cycle}
-                onClick={async () => { await paid.mutateAsync({ id: c.id, payer: { kind: s.member_id ? 'member' : 'contact', id: (s.member_id || s.contact_id)! } }); toast(`${s.name} paid`); }}>
-                {s.paid_this_cycle ? <Icon name="check" /> : <Icon name="person" />}{s.name} · {fmt(s.share)}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-    </Section>
-  );
-}
-
-export function Claims() {
-  const q = useApi<{ items: Claim[]; pending: M[] }>('/claims');
-  const [open, setOpen] = useState<Claim | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [txn, setTxn] = useState<Claim['items'][number] | null>(null);
-  const [params] = useSearchParams();
-  const deep = params.get('claim');
-  useEffect(() => { if (deep && q.data) setOpen(q.data.items.find(c => c.id === deep) || null); }, [deep, q.data]);
-  const paid = useWrite<{ id: string; txn_id?: string }>('POST', b => `/claims/${b.id}/paid`);
-  const move = useWrite<{ id: string; status: string; submitted_on?: string }, Claim>('PATCH', b => `/claims/${b.id}`);
-  const toast = useToast();
-  if (q.isLoading) return <PageSkeleton />;
-  if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
-  const items = q.data!.items;
-  return (
-    <>
-      <div className="glass card between">
-        <div className="stat"><span className="k">Waiting from the company</span><span className="v" style={{ fontSize: 26 }}><Monies items={q.data!.pending} empty="Nothing" /></span></div>
-        <button className="btn small secondary" onClick={() => setImporting(true)}><Icon name="upload" size={16} />Import Excel</button>
-      </div>
-      <Section title="Claims">
-        {items.length ? (
-          <List>
-            {items.map(c => (
-              <ListRow key={c.id} icon={<span className="icon-tile" style={{ background: 'linear-gradient(160deg,#5ac8fa,#0a84ff)' }}><Icon name="briefcase" /></span>}
-                title={c.name} sub={`${c.items.length} item${c.items.length === 1 ? "" : "s"} · ${c.status === 'paid' ? 'paid' : `${c.age_days} days`}`}
-                end={<Money m={c.expected} />} endSub={<span className={`badge ${c.status === 'paid' ? 'green' : c.status === 'draft' ? '' : 'orange'}`}>{c.status}</span>} onClick={() => setOpen(c)} />
-            ))}
-          </List>
-        ) : <EmptyState icon="briefcase" title="No claims" text="Tap Claim on any work expense in Activity." />}
-      </Section>
-      <Sheet open={!!open} onClose={() => setOpen(null)} title={open?.name} detent="medium">
-        {open && (
-          <div className="stack">
-            <dl className="kv glass card">
-              <dt>Status</dt><dd>{open.status}</dd><dt>Expected</dt><dd><Money m={open.expected} /></dd><dt>Received</dt><dd><Money m={open.received} /></dd>
-              {open.submitted_on && <><dt>Submitted</dt><dd>{shortDate(open.submitted_on)}</dd></>}
-            </dl>
-            {open.status !== 'paid' && (
-              <Segmented label="Claim status" value={open.status === 'draft' ? 'draft' : 'submitted'} onChange={async v => {
-                if (v === 'submitted' && open.status === 'draft') { setOpen(await move.mutateAsync({ id: open.id, status: 'submitted', submitted_on: today() })); toast('Marked submitted'); }
-                if (v === 'draft' && open.status !== 'draft') { setOpen(await move.mutateAsync({ id: open.id, status: 'draft', submitted_on: '' })); toast('Back to draft'); }
-              }} options={[{ value: 'draft', label: 'Draft' }, { value: 'submitted', label: 'Submitted' }]} />
-            )}
-            {move.error && <p className="error" role="alert">{move.error.message}</p>}
-            {open.suggestion && open.status !== 'paid' && (
-              <div className="glass card stack-sm" style={{ boxShadow: 'inset 0 0 0 1.5px var(--green-fill)' }}>
-                <b><Icon name="sparkle" size={15} /> Looks like it was paid</b>
-                <span className="caption"><Money m={open.suggestion.amount} /> arrived on {shortDate(open.suggestion.day)}.</span>
-                <button className="btn small" onClick={async () => { await paid.mutateAsync({ id: open.id, txn_id: open.suggestion!.txn_id }); toast('Claim closed'); setOpen(null); }}>Yes, that’s it</button>
-              </div>
-            )}
-            <List>{open.items.map(t => <TxnRow key={t.id} t={t} onOpen={setTxn} />)}</List>
-            {open.status !== 'paid' && !open.suggestion && <button className="btn block secondary" onClick={async () => { await paid.mutateAsync({ id: open.id }); toast('Marked as received'); setOpen(null); }}><Icon name="check" size={16} />Money received</button>}
-            <p className="footnote">When the reimbursement lands in your bank, we match it and close this claim.</p>
-          </div>
-        )}
-      </Sheet>
-      <TxnSheet txn={txn} onClose={() => setTxn(null)} />
-      <ImportClaimSheet open={importing} onClose={() => setImporting(false)} />
-    </>
-  );
-}
-
-export function ImportClaimSheet({ open, onClose, tripId }: { open: boolean; onClose: () => void; tripId?: string }) {
-  const trips = useApi<{ items: Trip[] }>('/trips');
-  const [trip, setTrip] = useState(tripId || '');
-  const [result, setResult] = useState<ClaimImport | null>(null);
-  const up = useWrite<Record<string, unknown>, ClaimImport>('POST', '/claims/import');
-  const pick = async (f: File | undefined) => {
-    if (!f) return;
-    const data_base64 = await readFile(f);
-    setResult(await up.mutateAsync({ file_name: f.name, data_base64, trip_id: trip || undefined }));
-  };
-  const close = () => { setResult(null); onClose(); };
-  return (
-    <Sheet open={open} onClose={close} title="Import claim Excel" detent={result ? 'large' : 'auto'}>
-      {result ? (
-        <div className="stack">
-          <div className="grid-2">
-            {result.claim && <p className="muted"><Icon name="check" size={14} className="pos" /> Claim “{result.claim.name}” created for <Money m={result.claim.expected} />.</p>}
-          <div className="glass card stat"><span className="k">Matched</span><span className="v pos">{result.matched.length} rows</span></div>
-            <div className="glass card stat"><span className="k">Not found</span><span className={`v ${result.unmatched.length ? 'warn' : ''}`}>{result.unmatched.length} rows</span></div>
-          </div>
-          <Section title="Matched to your transactions">
-            {result.matched.length ? <List>{result.matched.map(r => <ListRow key={r.row} icon={<Icon name="check" size={22} className="pos" />} title={r.description} sub={`Row ${r.row} · ${shortDate(r.day)}`} end={<Money m={r.claimed || r.amount} />} />)}</List> : <p className="caption">None of the rows matched a transaction.</p>}
-          </Section>
-          {result.unmatched.length > 0 && (
-            <Section title="No matching transaction">
-              <List>{result.unmatched.map(r => <ListRow key={r.row} icon={<Icon name="warn" size={22} className="warn" />} title={r.description} sub={`${shortDate(r.day)} · cash, per diem or another card?`} end={<Money m={r.claimed || r.amount} />} />)}</List>
-            </Section>
-          )}
-          <button className="btn block" onClick={close}>Done</button>
-        </div>
-      ) : (
-        <div className="stack">
-          <p className="muted">Upload the Excel you submitted to the company. We match each row to a transaction and track the claim until it’s paid.</p>
-          {!tripId && (
-            <Field label="Trip (optional)">
-              <select className="input" value={trip} onChange={e => setTrip(e.target.value)}>
-                <option value="">No trip</option>
-                {(trips.data?.items || []).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </Field>
-          )}
-          <label className="btn block" style={{ cursor: 'pointer' }}>
-            <Icon name="upload" />{up.isPending ? 'Matching…' : 'Choose file'}
-            <input type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={e => pick(e.target.files?.[0])} />
-          </label>
-          {up.error && <p className="error" role="alert">{up.error.message}</p>}
-        </div>
-      )}
-    </Sheet>
-  );
-}

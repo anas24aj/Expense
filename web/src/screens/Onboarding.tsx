@@ -25,7 +25,7 @@ export default function Onboarding() {
     { tile: <Tile icon="bank" color="#0a84ff" />, title: 'Start with your accounts', text: 'Add your Saudi and Indian banks, cards and loans, then bring in their history. Every expense is tagged to the account it came from.',
       body: (
         <div className="stack-sm">
-          <button className="btn secondary block" onClick={() => done('/more/accounts')}><Icon name="bank" />Add accounts</button>
+          <button className="btn secondary block" onClick={() => done('/accounts')}><Icon name="bank" />Add accounts</button>
           <button className="btn secondary block" onClick={() => done('/more/import')}><Icon name="upload" />Import statements</button>
           <button className="link-btn" onClick={() => done('/more/devices')}>Or connect your phone for bank SMS</button>
         </div>

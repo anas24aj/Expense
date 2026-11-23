@@ -1,8 +1,8 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, useApi, useWrite } from '../api/client';
-import type { Account, Asset, Coverage, DeviceCreated, Device, HouseholdFull, Liability, Me, Milestone, Money as MoneyT, SalaryEntry, Settings, Statement, Txn } from '../api/types';
+import type { Account, Asset, DeviceCreated, Device, HouseholdFull, Liability, Me, Milestone, Money as MoneyT, SalaryEntry, Settings, Statement, Txn } from '../api/types';
 import { fmt, major, monthLabel, shortDate, thisMonth, toMinor, today } from '../lib/format';
 import {
   AmountInput, Avatar, BarChart, BrandTile, brandOf, CategoryTile, logoOf, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
@@ -15,14 +15,15 @@ export function MorePage({ me }: { me: Me }) {
   const qc = useQueryClient();
   const signOut = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); qc.clear(); nav('/signin', { replace: true }); };
   const rows: [string, string, string, string, string?][][] = [
-    [['/people', 'People', 'people', '#ff9f0a', 'Family, friends, IOUs and claims'], ['/more/accounts', 'Accounts & cards', 'bank', '#0a84ff', 'Balances and card limits'], ['/more/flows', 'Money flow', 'chart', '#bf5af2', 'Income → accounts → spending'], ['/more/trips', 'Trips', 'plane', '#32ade6', 'Business trips and what to claim']],
+    [['/accounts', 'Accounts & property', 'bank', '#0a84ff', 'India and Saudi, cards, loans, flats, car'], ['/money', 'Money moved', 'transfer', '#5e5ce6', 'Saudi → India, card payments, family, people'],
+      ['/trips', 'Trips & claims', 'plane', '#32ade6', 'Work and personal trips, what the company owes']],
     [['/more/import', 'Import statements', 'upload', '#30b0c7', 'PDF, Excel or CSV'], ['/more/devices', 'Phones & Shortcut', 'phone', '#34c759', 'Send bank SMS automatically'], ['/more/claude', 'Connect Claude', 'sparkle', '#d97757', 'Ask questions about your money']],
     [['/more/household', 'Household & members', 'family', '#ff375f', me.household.name], ['/more/profile', 'Profile & password', 'person', '#8e8e93'], ['/more/settings', 'Settings', 'gear', '#636366', 'Salary, currencies, timezone']],
   ];
   return (
     <Page title="More">
       <div className="glass card row-flex">
-        <Avatar name={me.user.name} size={56} />
+        <Avatar name={me.user.name} photo={me.member.photo} size={56} />
         <div style={{ minWidth: 0 }}><b style={{ fontSize: 19 }}>{me.user.name}</b><p className="caption">{me.user.email} · {me.member.role}</p></div>
       </div>
       {rows.map((g, i) => <List key={i}>{g.map(([to, t, icon, color, sub]) => <ListRow key={to} to={to} icon={<Tile icon={icon} color={color} />} title={t} sub={sub} />)}</List>)}
@@ -41,97 +42,12 @@ const CUR_COUNTRY: Record<string, string> = { SAR: 'SA', INR: 'IN', QAR: 'QA', A
 export const countryOf = (a: Account) => { const c = (a.country || CUR_COUNTRY[a.currency] || 'XX').toUpperCase(); return COUNTRIES.some(x => x.code === c) ? c : 'XX'; };
 export const CASH = ['bank', 'wallet', 'cash', 'debit_card', 'investment'], DEBT = ['credit_card', 'bnpl', 'loan'];
 
-// One card per country: what you hold there and what you owe there, in that country's currency. Tap to show only that country.
-function CountryCards({ items, country, onPick }: { items: Account[]; country: string; onPick: (c: string) => void }) {
-  const live = items.filter(a => !a.archived);
-  const cards = COUNTRIES.map(c => {
-    const here = live.filter(a => countryOf(a) === c.code);
-    const cur = here[0]?.currency;
-    const sum = (kinds: string[]) => here.filter(a => kinds.includes(a.kind) && a.balance?.currency === cur).reduce((s, a) => s + (a.balance?.minor || 0), 0);
-    return { ...c, n: here.length, cur, held: sum(CASH), owed: -sum(DEBT) };
-  }).filter(c => c.n);
-  return (
-    <div className="grid-2">
-      {cards.map(c => (
-        <button key={c.code} className={`glass card stat country-card${country === c.code ? ' on' : ''}`} onClick={() => onPick(c.code)} aria-pressed={country === c.code}>
-          <span className="k">{c.flag} {c.name} · {c.n} account{c.n > 1 ? 's' : ''}</span>
-          <span className="v"><Money m={{ minor: c.held, currency: c.cur! }} /></span>
-          {c.owed > 0 && <span className="caption neg">owed <Money m={{ minor: c.owed, currency: c.cur! }} /></span>}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function AccountsPage() {
-  const q = useApi<{ items: Account[] }>('/accounts');
-  const cov = useApi<{ items: Coverage[] }>('/accounts/coverage');
-  const hh = useApi<HouseholdFull>('/households/current');
-  const [adding, setAdding] = useState(false);
-  const items = q.data?.items || [];
-  const ownerName = (id: string | null) => hh.data?.members.find(m => m.id === id)?.display_name || '';
-  const owners = new Set(items.map(a => a.owner_member_id));
-  const covOf = (id: string) => cov.data?.items.find(c => c.account_id === id);
-  const needs = (cov.data?.items || []).filter(c => c.status !== 'ok').length;
-  const [params, setParams] = useSearchParams(); // ?country=SA from Home's country columns
-  const country = params.get('country') || 'all';
-  const setCountry = (c: string) => setParams(c === 'all' ? {} : { country: c }, { replace: true });
-  return (
-    <Page title="Accounts" back="/more" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add account"><Icon name="plus" /></button>}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !items.length ? (
-        <EmptyState icon="bank" title="No accounts yet" text="Add each bank account, card, wallet and loan you use, in Saudi Arabia and India. Balances, card limits and missing statements show up here, grouped by country."
-          action={<button className="btn small" onClick={() => setAdding(true)}><Icon name="plus" size={16} />Add account</button>} />
-      ) : (
-        <>
-          <CountryCards items={items} country={country} onPick={c => setCountry(country === c ? 'all' : c)} />
-          <Link to="/more/coverage" className="glass pill-cta">
-            <Tile icon={needs ? 'warn' : 'check'} color={needs ? '#ff9f0a' : '#30d158'} />
-            <span style={{ flex: 1 }}><b>Up to date?</b><br /><span className="caption">{cov.data ? (needs ? `${needs} account${needs > 1 ? 's' : ''} with gaps or gone quiet` : 'Every account covered, no gaps') : 'Checking statements and SMS…'}</span></span>
-            <Icon name="chevR" className="chev" size={14} />
-          </Link>
-          {COUNTRIES.filter(c => country === 'all' || c.code === country).map(c => {
-            const here = items.filter(a => countryOf(a) === c.code && !a.archived);
-            if (!here.length) return null;
-            return (<Fragment key={c.code}>{country === 'all' && <h2 className="country-h">{c.flag} {c.name}</h2>}
-          {Object.keys(KIND_LABEL).map(kind => {
-            const list = here.filter(a => a.kind === kind)
-              .sort((x, y) => ownerName(x.owner_member_id).localeCompare(ownerName(y.owner_member_id)) || x.institution.localeCompare(y.institution));
-            if (!list.length) return null;
-            return (
-              <Section key={kind} title={KIND_LABEL[kind]}>
-                <List>
-                  {list.map(a => (
-                    <Link key={a.id} to={`/more/accounts/${a.id}`} className="list-row" style={a.credit_limit ? { flexWrap: 'wrap' } : undefined}>
-                      {brandOf(a.institution) || logoOf(a.institution) ? <BrandTile name={a.institution} /> : <Tile icon={KIND_TILE[kind][0]} color={KIND_TILE[kind][1]} />}
-                      <div className="body"><div className="title">{a.institution} {a.last4 && <span className="caption">··{a.last4}</span>}</div>
-                        <div className="sub">{a.name.startsWith(a.institution) ? KIND_LABEL[a.kind].replace(/s$/, "") : a.name}{owners.size > 1 && a.owner_member_id ? ` · ${ownerName(a.owner_member_id)}` : ''}{covOf(a.id) && covOf(a.id)!.status !== 'ok' ? <span className="warn"> · {covOf(a.id)!.status === 'gaps' ? `${covOf(a.id)!.missing_months.length} month gap` : covOf(a.id)!.status === 'stale' ? 'quiet' : 'no data'}</span> : null}</div></div>
-                      <div className="end"><span className={`amt ${a.balance && a.balance.minor < 0 ? 'neg' : ''}`}><Money m={a.balance} /></span>
-                        {a.balance_at && <span className="footnote">{shortDate(a.balance_at.slice(0, 10))}</span>}</div>
-                      {a.credit_limit && a.used_pct !== null && (
-                        <div style={{ flexBasis: '100%', paddingLeft: 50 }} className="stack-sm">
-                          <Meter pct={a.used_pct} color={a.used_pct > 70 ? 'var(--red-fill)' : a.used_pct > 30 ? 'var(--orange-fill)' : 'var(--green-fill)'} />
-                          <span className="caption">{a.used_pct}% of <Money m={a.credit_limit} /> used{a.due_day ? ` · due on the ${a.due_day}th` : ''}</span>
-                        </div>
-                      )}
-                    </Link>
-                  ))}
-                </List>
-              </Section>
-            );
-          })}</Fragment>);
-          })}
-        </>
-      )}
-      <AddAccountSheet open={adding} onClose={() => setAdding(false)} />
-    </Page>
-  );
-}
-
-function AddAccountSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AddAccountSheet({ open, onClose, country: start = 'SA' }: { open: boolean; onClose: () => void; country?: string }) {
   const [kind, setKind] = useState('bank');
   const [institution, setInstitution] = useState('');
-  const [currency, setCurrency] = useState('SAR');
-  const [country, setCountry] = useState('SA');
+  const [currency, setCurrency] = useState(start === 'IN' ? 'INR' : 'SAR');
+  const [country, setCountry] = useState(start);
+  useEffect(() => { if (open) { setCountry(start); setCurrency(start === 'IN' ? 'INR' : 'SAR'); } }, [open, start]);
   const [last4, setLast4] = useState('');
   const add = useWrite('POST', '/accounts');
   const toast = useToast();
@@ -182,7 +98,7 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
   };
   const archive = async () => {
     if (!confirm(`Archive ${a.institution || a.name}? It leaves your lists and totals; its transactions stay.`)) return;
-    await save.mutateAsync({ archived: true }); toast('Archived'); nav('/more/accounts');
+    await save.mutateAsync({ archived: true }); toast('Archived'); nav('/accounts');
   };
   return (
     <Sheet open={open} onClose={onClose} title="Edit account">
@@ -211,41 +127,13 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
 }
 
 /* ---------- Assets ---------- */
-const ASSET_TILE: Record<string, [string, string]> = { property: ['building', '#a2845e'], vehicle: ['car', '#0a84ff'], home: ['house', '#ff9f0a'], investment: ['chart', '#30d158'] };
+export const ASSET_TILE: Record<string, [string, string]> = { property: ['building', '#a2845e'], vehicle: ['car', '#0a84ff'], home: ['house', '#ff9f0a'], investment: ['chart', '#30d158'] };
 const COST_TYPES = ['fuel', 'service', 'insurance', 'registration', 'parking', 'tolls', 'repairs', 'other'];
 const HOME_COST_TYPES = ['rent', 'electricity', 'utilities', 'internet', 'maid', 'groceries', 'furnishing', 'other'];
 const costTypes = (a: Asset) => (a.kind === 'home' ? HOME_COST_TYPES : COST_TYPES);
 const pctOf = (a: MoneyT, b: MoneyT) => (a.minor / Math.max(1, b.minor)) * 100;
 
-export function AssetsPage() {
-  const q = useApi<{ items: Asset[] }>('/assets');
-  const [adding, setAdding] = useState(false);
-  return (
-    <Page title="Assets" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add property, vehicle or investment"><Icon name="plus" /></button>}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !q.data!.items.length
-        ? <EmptyState icon="building" title="Nothing yet" text="Property, vehicles and investments show here." action={<button className="btn" onClick={() => setAdding(true)}><Icon name="plus" />Add one</button>} /> : (
-        (['property', 'vehicle', 'home', 'investment'] as const).map(k => {
-          const items = q.data!.items.filter(a => a.kind === k);
-          if (!items.length) return null;
-          return (
-            <Section key={k} title={{ property: 'Property', vehicle: 'Vehicles', home: 'Homes you rent', investment: 'Investments' }[k]}>
-              <List>{items.map(a => (
-                <ListRow key={a.id} to={`/assets/${a.id}`} icon={<Tile icon={ASSET_TILE[k][0]} color={ASSET_TILE[k][1]} />} title={a.name}
-                  sub={a.status && a.status !== 'owned' ? <>{STATUS_LABEL[a.status]} · net cost <Money m={a.verdict?.net_cost} compact /></>
-                    : k === 'property' ? `${Math.round(pctOf(a.paid, a.cost))}% paid · next: ${a.next_milestone?.name || '—'}` : k === 'vehicle' || k === 'home' ? <>Costs <Money m={a.my_monthly_cost} />/mo (your share)</> : <>Invested <Money m={a.cost} compact /></>}
-                  end={k === 'home' ? <Money m={a.my_cost_total} compact /> : <Money m={a.value} compact />} endSub={k === 'home' ? 'yours so far' : k === 'investment' && a.cost.minor ? <span className={a.value.minor >= a.cost.minor ? 'pos' : 'neg'}>{a.value.minor >= a.cost.minor ? '+' : ''}{(((a.value.minor - a.cost.minor) / a.cost.minor) * 100).toFixed(1)}%</span>
-                    : a.verdict?.annual_pct != null && a.verdict.cost.minor ? <span className={a.verdict.annual_pct >= 0 ? 'pos' : 'neg'}>{a.verdict.annual_pct > 0 ? '+' : ''}{a.verdict.annual_pct}% a yr</span> : 'value'} />
-              ))}</List>
-            </Section>
-          );
-        })
-      )}
-      <AddAssetSheet open={adding} onClose={() => setAdding(false)} />
-    </Page>
-  );
-}
-
-function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [kind, setKind] = useState<'vehicle' | 'property' | 'home' | 'investment'>('vehicle');
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('SAR');
@@ -294,7 +182,7 @@ export function AssetPage() {
   // free-form labels (Plate, Odometer…); the keys the page reads itself are shown in their own cards
   const labels = Object.entries(a?.details || {}).filter(([k, v]) => !DETAIL_KEYS.includes(k) && (typeof v !== 'object' || v === null));
   return (
-    <Page title={a?.name || 'Asset'} back="/assets">
+    <Page title={a?.name || 'Asset'} back="/accounts">
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : a && (
         <div className="grid-desktop stack">
           <AssetHeader a={a} />
@@ -894,7 +782,7 @@ export function ImportPage() {
   return (
     <Page title="Import statements" back="/more" subtitle="Years of history in one go. Duplicates of SMS are skipped.">
       {accounts.data && !accounts.data.items.length ? <EmptyState icon="bank" title="Add an account first" text="Each statement belongs to an account, so its transactions are tagged to the right bank or card."
-        action={<Link to="/more/accounts" className="btn small">Add account</Link>} /> : <div className="glass card stack">
+        action={<Link to="/accounts" className="btn small">Add account</Link>} /> : <div className="glass card stack">
         <Field label="Account">
           <select className="input" value={account} onChange={e => setAccount(e.target.value)}>
             <option value="">Choose…</option>

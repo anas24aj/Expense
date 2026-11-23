@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError, qs, useApi, useWrite } from '../api/client';
-import type { Account, Asset, Category, Money as M, Claim, Fund, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
+import type { Account, Asset, Category, Money as M, Claim, Fund, HouseholdFull, Liability, MerchantGroup, Person, Purpose, Txn, TxnDetail } from '../api/types';
 import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, sumByCurrency, thisMonth, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Monies, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
@@ -92,7 +92,7 @@ export default function ActivityPage() {
 
   return (
     <Page title="Activity" trail={<>
-      <button className="icon-btn" onClick={() => nav('/activity/review')} aria-label="Review"><Icon name="sparkle" /></button>
+      <button className="icon-btn" onClick={() => nav('/activity/review')} aria-label="To sort"><Icon name="tag" /></button>
       <button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add a transaction"><Icon name="plus" /></button>
     </>}>
       <div className="between">
@@ -478,66 +478,63 @@ function AddTxnSheet({ open, onClose, accounts, recent }: { open: boolean; onClo
   );
 }
 
-/* ---------- Review: one card at a time, one tap per answer, swipe to skip ---------- */
+/* ---------- To sort: the review queue grouped by shop, one tap sorts every one of them ---------- */
+const QUICK = ['Groceries', 'Food', 'Dining', 'Shopping', 'Transport', 'Fuel', 'Bills & Utilities', 'Health', 'Travel', 'Personal care', 'Education', 'Entertainment'];
+type Answer = { label: string; category?: string; purpose?: Purpose };
+
 export function ReviewPage() {
-  const q = useApi<{ items: ReviewTxn[]; count: number }>('/review');
+  const q = useApi<{ items: MerchantGroup[]; count: number }>('/review/merchants');
+  const cats = useApi<{ items: Category[] }>('/categories');
   const [done, setDone] = useState<string[]>([]);
-  const [dx, setDx] = useState(0);
-  const [more, setMore] = useState<Txn | null>(null);
-  const start = useRef<number | null>(null);
+  const [shown, setShown] = useState(40);
+  const [more, setMore] = useState<MerchantGroup | null>(null);
   const toast = useToast();
-  const items = (q.data?.items || []).filter(t => !done.includes(t.id));
-  const t = items[0];
-  const skip = () => { setDone(d => [...d, t.id]); setDx(0); };
-  const patch = useWrite<Record<string, unknown>>('PATCH', b => `/transactions/${b.id}`); // refreshes Home's "to check" count too
-  const answer = (s: ReviewTxn['suggestions'][number]) => {
-    const x = t;
-    setDone(d => [...d, x.id]);
-    patch.mutate({ id: x.id, purpose: s.purpose, category: s.category ?? undefined, person: s.person ? { kind: s.person.kind, id: s.person.id } : undefined }, {
-      onSuccess: () => toast(s.label, () => patch.mutate({ id: x.id, purpose: x.purpose, category: x.category, person: x.person ? { kind: x.person.kind, id: x.person.id } : null },
-        { onSuccess: () => setDone(d => d.filter(i => i !== x.id)), onError: e => toast(`Couldn’t undo: ${e.message}`) })),
-      onError: e => { setDone(d => d.filter(i => i !== x.id)); toast(`Not saved: ${e.message}`); }, // back in the queue
+  const sort = useWrite<{ merchant: string; category?: string; purpose?: string }, { updated: number; left: number }>('POST', '/review/merchant');
+  const names = new Set((cats.data?.items || []).filter(c => c.kind === 'spend').map(c => c.name));
+  const quick = QUICK.filter(c => !cats.data || names.has(c));
+  const groups = (q.data?.items || []).filter(g => !done.includes(g.merchant));
+  const left = (q.data?.count || 0) - (q.data?.items || []).filter(g => done.includes(g.merchant)).reduce((n, g) => n + g.count, 0);
+  const answer = (g: MerchantGroup, a: Answer) => {
+    setDone(d => [...d, g.merchant]);
+    sort.mutate({ merchant: g.merchant, category: a.category, purpose: a.purpose }, {
+      onSuccess: r => toast(`${r.updated} × ${g.merchant} → ${a.label}`),
+      onError: e => { setDone(d => d.filter(m => m !== g.merchant)); toast(`Not saved: ${e.message}`); },
     });
   };
+  const answers = (g: MerchantGroup): Answer[] => g.direction === 'credit'
+    ? [{ label: 'Income', category: 'Income', purpose: 'income' }, { label: 'Refund', purpose: 'refund' }, { label: 'My own transfer', purpose: 'transfer' }, { label: 'Ignore', purpose: 'ignore' }]
+    : [...(g.category && g.category !== 'Uncategorized' ? [g.category] : []), ...quick.filter(c => c !== g.category).slice(0, 5)].map((c): Answer => ({ label: c, category: c, purpose: 'spend' }))
+      .concat([{ label: 'My own transfer', purpose: 'transfer' }, { label: 'Ignore', purpose: 'ignore' }]);
   return (
-    <Page title="Review" back="/activity" subtitle={q.data ? (items.length ? `${items.length} left · swipe to skip` : 'All caught up') : ' '}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !t ? (
-        <EmptyState icon="check" title="All caught up" text="Everything has a home. New ones show up here when we’re not sure." action={<button className="btn small" onClick={() => { setDone([]); q.refetch(); }}>Refresh</button>} />
+    <Page title="To sort" back="/activity" subtitle={q.data ? (left > 0 ? `${left.toLocaleString()} payments from ${groups.length.toLocaleString()} shops. One tap sorts every payment from a shop, and the ones still to come.` : 'All sorted') : ' '}>
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !groups.length ? (
+        <EmptyState icon="check" title="All sorted" text="New ones show up here when we’re not sure." action={<button className="btn small" onClick={() => { setDone([]); q.refetch(); }}>Refresh</button>} />
       ) : (
-        <div className="review-stage" style={{ maxWidth: 480, width: '100%', margin: '8px auto 0' }}>
-          {items.slice(0, 3).reverse().map((x, ri, arr) => {
-            const depth = arr.length - 1 - ri;
-            const top = depth === 0;
-            return (
-              <article key={x.id} className={`glass glass-strong review-card ${depth === 1 ? 'back' : depth === 2 ? 'back2' : ''}`} aria-hidden={!top}
-                style={top ? { transform: `translateX(${dx}px) rotate(${dx / 30}deg)`, transition: start.current !== null ? 'none' : undefined } : undefined}
-                onPointerDown={top ? e => { if ((e.target as HTMLElement).closest('button')) return; start.current = e.clientX; } : undefined}
-                onPointerMove={top ? e => { if (start.current !== null) setDx(e.clientX - start.current); } : undefined}
-                onPointerUp={top ? () => { start.current = null; if (Math.abs(dx) > 110) skip(); else setDx(0); } : undefined}>
-                <div className="between">
-                  <CategoryTile category={x.category} merchant={x.merchant} />
-                  <span className="caption">{dayLabel(x.day)} · {x.account_name}</span>
+        <>
+          {groups.slice(0, shown).map(g => (
+            <article key={g.merchant || '(none)'} className="glass card stack-sm sort-card" aria-label={g.merchant || 'No shop name'}>
+              <div className="row-flex">
+                <CategoryTile category={g.category} merchant={g.merchant} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <b className="ellipsis">{g.merchant || 'No shop name'}</b>
+                  <div className="caption">{g.count} payment{g.count === 1 ? '' : 's'} · last {shortDate(g.last_day)} · {g.account_name}</div>
                 </div>
-                <div>
-                  <div className="amt">{fmt(x.amount, { cents: true })}</div>
-                  <div style={{ fontWeight: 600, fontSize: 19 }}>{x.merchant}</div>
-                  <div className="caption">What was this?</div>
+                <span className="num" style={{ fontWeight: 600 }}><Monies items={g.totals} /></span>
+              </div>
+              {g.merchant ? (
+                <div className="chips wrap" role="group" aria-label={`Sort ${g.merchant}`}>
+                  {answers(g).map(a => <button key={a.label} type="button" className="chip" onClick={() => answer(g, a)}>{a.label}</button>)}
+                  <button type="button" className="chip" onClick={() => setMore(g)}>More…<Icon name="chevD" /></button>
                 </div>
-                <div className="stack-sm" style={{ marginTop: 'auto' }}>
-                  {x.suggestions.map((s, i) => (
-                    <button key={i} className="suggest" onClick={() => answer(s)} tabIndex={top ? 0 : -1}>{s.label}<Icon name={i === 0 ? 'check' : 'chevR'} size={18} /></button>
-                  ))}
-                  <div className="between">
-                    <button className="link-btn" onClick={() => setMore(x)} tabIndex={top ? 0 : -1}>Something else…</button>
-                    <button className="link-btn" onClick={skip} tabIndex={top ? 0 : -1}>Skip</button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+              ) : <Link to="/activity?review=1" className="caption">Open them one by one in Activity</Link>}
+            </article>
+          ))}
+          {groups.length > shown && <button className="btn block secondary" onClick={() => setShown(shown + 40)}>Show {Math.min(40, groups.length - shown)} more shops</button>}
+        </>
       )}
-      <TxnSheet txn={more} onClose={() => { if (more) setDone(d => [...d, more.id]); setMore(null); }} />
+      <Sheet open={!!more} onClose={() => setMore(null)} title={more ? `All ${more.count} from ${more.merchant}` : ''} detent="medium">
+        {more && <CategoryPicker onPick={c => { answer(more, { label: c, category: c, purpose: 'spend' }); setMore(null); }} />}
+      </Sheet>
     </Page>
   );
 }
