@@ -18,7 +18,7 @@ export default function PeoplePage({ me }: { me: Me }) {
   const tab = (params.get('tab') as Tab) || 'family';
   const people = useApi<{ items: Person[] }>('/people');
   return (
-    <Page title="People">
+    <Page title="People" back="/more">
       <Segmented label="Section" value={tab} onChange={v => setParams({ tab: v }, { replace: true })}
         options={[{ value: 'family', label: 'Family' }, { value: 'friends', label: 'Friends' }, { value: 'shared', label: 'Shared' }, { value: 'claims', label: 'Claims' }]} />
       {people.isLoading ? <PageSkeleton /> : people.error ? <ErrorCard error={people.error} retry={people.refetch} />

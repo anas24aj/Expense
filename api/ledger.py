@@ -260,7 +260,24 @@ def list_transactions(req):
     rows = visible_txns(req.hh, req.member['id'], where, limit=limit + 1, **p)
     more = len(rows) > limit
     rows = rows[:limit]
-    return {'items': txn_views(req.hh, rows), 'next_before': f"{rows[-1]['day']}_{rows[-1]['id']}" if more else None}
+    out = {'items': txn_views(req.hh, rows), 'next_before': f"{rows[-1]['day']}_{rows[-1]['id']}" if more else None}
+    if not q.get('before'):  # first page: count and per-day money-out over every matching row, so totals don't wait for paging
+        out.update(_totals(req.hh, req.member['id'], where, p))
+    return out
+
+
+def _totals(hh, member_id, where, p):
+    """{'total': rows, 'days': {day: [Money]}} where a day's Money is my share of spending, fees and family support (as the app sums it)."""
+    sql = ("SELECT t.day, t.currency, COUNT(*) AS n, SUM(CASE WHEN t.direction = 'debit' AND COALESCE(m.purpose, 'spend') IN ('spend', 'fee', 'support') "
+           'THEN t.amount_minor - COALESCE((SELECT SUM(s.share_minor) FROM splits s WHERE s.household_id = t.household_id AND s.txn_id = t.id), 0) '
+           'ELSE 0 END) AS spent ' + TXN_SELECT[TXN_SELECT.index('FROM transactions'):] +
+           f'WHERE t.household_id = :hid AND t.deleted_at IS NULL AND {VISIBLE} {where} GROUP BY t.day, t.currency ORDER BY t.day, t.currency')
+    total, days = 0, defaultdict(list)
+    for r in hh.run(sql, me=member_id or '', **p):
+        total += r['n']
+        if r['spent']:
+            days[r['day']].append(valid.money(int(r['spent']), r['currency']))
+    return {'total': total, 'days': dict(days)}
 
 
 def _splits(hh, tid, cur):

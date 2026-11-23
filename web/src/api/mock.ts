@@ -95,6 +95,14 @@ const txns: Txn[] = [
   T(-33, 'Hyper Panda', SAR(301), 'a1', 'Groceries'),
   T(-36, 'Nando’s', SAR(142), 'a2', 'Dining'),
 ];
+// Last month is a busy one (over 300 rows), so Activity's paging (200 a page) and its server-side day totals get exercised.
+{
+  const shops: [string, string, string][] = [['Panda Retail', 'Groceries', 'a1'], ['Al Baik', 'Dining', 'a2'], ['Uber', 'Transport', 'a2'], ['Aldrees Petrol', 'Fuel', 'a3'], ['Starbucks', 'Dining', 'a2'], ['Nahdi Pharmacy', 'Health', 'a1']];
+  for (let i = 0; i < 320; i++) {
+    const [m, c, a] = shops[i % shops.length], d = onDay(-1, 1 + (i % 28));
+    txns.push(T(0, m, SAR(12 + (i * 37) % 180), a, c, 'spend', { day: d, occurred_at: `${d}T${pad(8 + (i % 12))}:${pad(i % 60)}:00Z` }));
+  }
+}
 // Trips: the Doha project trip (QAR; the hotel and a client dinner only partly claimed), a finished Dubai workshop,
 // the Jeddah visit happening now (so Home shows "Current trip") and last year's family trip home.
 const AED = (v: number): Money => ({ minor: Math.round(v * 100), currency: 'AED' });
@@ -373,7 +381,16 @@ on('GET', '/transactions', (_m, _b, q) => {
   for (const k of ['account_id', 'category', 'purpose', 'member_id'] as const) { const v = q.get(k); if (v) items = items.filter(t => t[k] === v); }
   const s = q.get('q')?.toLowerCase(); if (s) items = items.filter(t => t.merchant.toLowerCase().includes(s) || (t.category || '').toLowerCase().includes(s));
   if (q.get('review')) items = items.filter(t => t.confidence < 0.7);
-  return { items: [...items].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at)), next_before: null };
+  items = [...items].sort((a, b) => b.day.localeCompare(a.day) || b.occurred_at.localeCompare(a.occurred_at)); // the API's order: newest day first
+  const limit = Math.min(200, Number(q.get('limit')) || 50), before = q.get('before'), from = before ? items.findIndex(t => t.id === before.split('_')[1]) + 1 : 0;
+  const page = items.slice(from, from + limit), more = from + limit < items.length;
+  const out = { items: page, next_before: more ? `${page[page.length - 1].day}_${page[page.length - 1].id}` : null };
+  if (before) return out;
+  const days: Record<string, Record<string, number>> = {};
+  for (const t of items) if (t.direction === 'debit' && ['spend', 'fee', 'support'].includes(t.purpose)) {
+    const m = t.split_mine || t.amount; (days[t.day] ||= {})[m.currency] = (days[t.day][m.currency] || 0) + m.minor;
+  }
+  return { ...out, total: items.length, days: Object.fromEntries(Object.entries(days).map(([d, c]) => [d, Object.entries(c).map(([currency, minor]) => ({ minor, currency }))])) };
 });
 on('GET', '/transactions/{id}', m => { const t = txns.find(x => x.id === m[1]); if (!t) throw new Err(404, 'not found');
   return { ...t, raw: t.source === 'sms' ? { sender: t.account_name?.split(' ')[0].toUpperCase() || 'BANK', body: `Purchase of ${(t.amount.minor / 100).toFixed(2)} ${t.amount.currency} at ${t.merchant.toUpperCase()} with card ending ${accounts.find(a => a.id === t.account_id)?.last4 || ''}. Avl bal ...` } : null,

@@ -386,6 +386,10 @@ class LedgerTest(Base):
         self.assertEqual(len(page['items']), 2)
         rest = c.ok('GET', f"/api/transactions?limit=2&before={page['next_before']}")
         self.assertEqual(len({i['id'] for i in page['items'] + rest['items']}), 3)
+        # the first page carries totals over every row, so the app's day totals don't depend on paging
+        self.assertEqual(page['total'], 3)
+        self.assertEqual(page['days']['2026-11-02'], [{'minor': 1500, 'currency': 'SAR'}])  # my share after the split
+        self.assertNotIn('total', rest)
         self.assertEqual(c.ok('GET', '/api/transactions?q=carre')['items'][0]['id'], t['id'])
         self.assertEqual(c.ok('DELETE', f"/api/transactions/{t['id']}"), {'id': t['id'], 'deleted': True})
         self.assertEqual(c.call('GET', f"/api/transactions/{t['id']}")[0], 404)

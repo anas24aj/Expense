@@ -15,7 +15,7 @@ export function MorePage({ me }: { me: Me }) {
   const qc = useQueryClient();
   const signOut = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); qc.clear(); nav('/signin', { replace: true }); };
   const rows: [string, string, string, string, string?][][] = [
-    [['/more/accounts', 'Accounts & cards', 'bank', '#0a84ff', 'Balances and card limits'], ['/more/flows', 'Money flow', 'chart', '#bf5af2', 'Income → accounts → spending'], ['/more/trips', 'Trips', 'plane', '#32ade6', 'Business trips and what to claim']],
+    [['/people', 'People', 'people', '#ff9f0a', 'Family, friends, IOUs and claims'], ['/more/accounts', 'Accounts & cards', 'bank', '#0a84ff', 'Balances and card limits'], ['/more/flows', 'Money flow', 'chart', '#bf5af2', 'Income → accounts → spending'], ['/more/trips', 'Trips', 'plane', '#32ade6', 'Business trips and what to claim']],
     [['/more/import', 'Import statements', 'upload', '#30b0c7', 'PDF, Excel or CSV'], ['/more/devices', 'Phones & Shortcut', 'phone', '#34c759', 'Send bank SMS automatically'], ['/more/claude', 'Connect Claude', 'sparkle', '#d97757', 'Ask questions about your money']],
     [['/more/household', 'Household & members', 'family', '#ff375f', me.household.name], ['/more/profile', 'Profile & password', 'person', '#8e8e93'], ['/more/settings', 'Settings', 'gear', '#636366', 'Salary, currencies, timezone']],
   ];
@@ -73,7 +73,9 @@ export function AccountsPage() {
   const owners = new Set(items.map(a => a.owner_member_id));
   const covOf = (id: string) => cov.data?.items.find(c => c.account_id === id);
   const needs = (cov.data?.items || []).filter(c => c.status !== 'ok').length;
-  const [country, setCountry] = useState<string>('all');
+  const [params, setParams] = useSearchParams(); // ?country=SA from Home's country columns
+  const country = params.get('country') || 'all';
+  const setCountry = (c: string) => setParams(c === 'all' ? {} : { country: c }, { replace: true });
   return (
     <Page title="Accounts" back="/more" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add account"><Icon name="plus" /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !items.length ? (

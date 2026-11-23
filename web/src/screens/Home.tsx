@@ -2,7 +2,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useApi } from '../api/client';
 import type { Account, Commitment, Home, HouseholdFull, Items, Money as MoneyT, Settings, Statement, Trip } from '../api/types';
 import { CASH, COUNTRIES, countryOf, DEBT } from './More';
-import { dueLabel, fmt, monthLabel, today } from '../lib/format';
+import { dueLabel, fmt, monthLabel, shortDate, today } from '../lib/format';
 import { AreaChart, ErrorCard, Icon, List, ListRow, Money, PageSkeleton, Page, ProgressRing, Section, StatusBadge, Tile } from '../ui';
 
 export const KIND_ICON: Record<string, [string, string]> = {
@@ -50,7 +50,7 @@ export default function HomePage() {
   return (
     <Page title="Home" subtitle={q.data ? monthLabel(q.data.month.month, true) : ' '}
       trail={<Link to="/more/profile" className="icon-btn" aria-label="Profile"><Icon name="person" /></Link>}>
-      {q.isLoading || accounts.isLoading || stmts.isLoading || settings.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : <HomeBody h={q.data!} setup={setup} accounts={(accounts.data?.items || []).filter(a => !a.archived)} homeCur={hh.data?.household.home_currency || 'INR'} payday={daysTo(settings.data?.salary_day ?? null)} trip={trips.data?.items.find(t => t.start_on <= today() && today() <= t.end_on)} />}
+      {q.isLoading || accounts.isLoading || stmts.isLoading || settings.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : <HomeBody h={q.data!} setup={setup} accounts={(accounts.data?.items || []).filter(a => !a.archived)} homeCur={hh.data?.household.home_currency || 'INR'} payday={daysTo(settings.data?.salary_day ?? null)} trips={trips.data?.items || []} />}
     </Page>
   );
 }
@@ -80,7 +80,7 @@ function CountrySplit({ accounts, spent, fx, homeCur }: { accounts: Account[]; s
     <section className="glass card span-2 stack-sm" aria-label="By country">
       <div className="split">
         {sides.map(x => (
-          <Link key={x.code} to="/more/accounts" className="split-col" style={{ color: 'inherit' }}>
+          <Link key={x.code} to={`/more/accounts?country=${x.code}`} className="split-col" style={{ color: 'inherit' }}>
             <div className="card-title">{x.flag} {x.name}</div>
             {rows.map(([k, label]) => (
               <div key={k} className="stat"><span className="k">{label || x.owedLabel}</span>
@@ -115,7 +115,9 @@ function GetStarted({ steps }: { steps: Step[] }) {
   );
 }
 
-function HomeBody({ h, setup, accounts, homeCur, payday, trip }: { h: Home; setup: Step[] | null; accounts: Account[]; homeCur: string; payday: number | null; trip?: Trip }) {
+function HomeBody({ h, setup, accounts, homeCur, payday, trips }: { h: Home; setup: Step[] | null; accounts: Account[]; homeCur: string; payday: number | null; trips: Trip[] }) {
+  const trip = trips.find(t => t.start_on <= today() && today() <= t.end_on);
+  const urgent = h.alerts.filter(a => a.level !== 'info'), info = h.alerts.filter(a => a.level === 'info');
   const m = h.month;
   const fresh = !m.income.minor && !m.spent.minor && !m.owed_by_you.total.minor && !m.owed_to_you.total.minor && !h.next_dues.length;
   if (setup && fresh) return <div className="stack"><GetStarted steps={setup} /></div>;
@@ -154,6 +156,8 @@ function HomeBody({ h, setup, accounts, homeCur, payday, trip }: { h: Home; setu
           ))}
         </div>
       </section>}
+
+      {urgent.length > 0 && <List className="span-2"><Alerts items={urgent} /></List>}
 
       {!accounts.length && m.currency !== 'INR' && fx ? <p className="footnote span-2" style={{ margin: '-4px 4px 0' }}>Totals in {m.currency}. Rupee amounts are counted at 1 SAR = ₹{fx.toFixed(2)}; each account and transaction keeps its own currency.</p> : null}
 
@@ -210,6 +214,8 @@ function HomeBody({ h, setup, accounts, homeCur, payday, trip }: { h: Home; setu
         </div>
       </Link>}
 
+      {trips.length > 0 && <div className="span-2"><TripStrip trips={trips} /></div>}
+
       <Section title="Coming up" action={<Link to="/plan">See all</Link>}>
         {h.next_dues.length ? <List>{h.next_dues.map(c => <DueRow key={c.id} c={c} />)}</List>
           : <div className="glass card caption">Nothing due — enjoy it.</div>}
@@ -225,18 +231,36 @@ function HomeBody({ h, setup, accounts, homeCur, payday, trip }: { h: Home; setu
         </div>
       </Section>}
 
-      {h.alerts.length > 0 && (
-        <Section title="Heads-up">
-          <List>
-            {h.alerts.map((a, i) => (
-              <Link key={i} to={a.link || '/'} className="alert-row" style={{ color: 'inherit' }}>
-                <Icon name={a.level === 'info' ? 'info' : 'warn'} className={a.level === 'info' ? '' : a.level === 'bad' ? 'neg' : 'warn'} />
-                <span style={{ flex: 1 }}>{a.text}</span>
-              </Link>
-            ))}
-          </List>
-        </Section>
-      )}
+      {info.length > 0 && <Section title="Heads-up"><List><Alerts items={info} /></List></Section>}
     </div>
+  );
+}
+
+const Alerts = ({ items }: { items: Home['alerts'] }) => <>{items.map((a, i) => (
+  <Link key={i} to={a.link || '/'} className="alert-row" style={{ color: 'inherit' }}>
+    <Icon name={a.level === 'info' ? 'info' : 'warn'} className={a.level === 'info' ? '' : a.level === 'bad' ? 'neg' : 'warn'} />
+    <span style={{ flex: 1 }}>{a.text}</span>
+  </Link>
+))}</>;
+
+/** Recent trips as cards: work or personal, and what claims cover against what you pay yourself. */
+function TripStrip({ trips }: { trips: Trip[] }) {
+  const recent = [...trips].sort((a, b) => b.start_on.localeCompare(a.start_on)).slice(0, 6);
+  return (
+    <Section title="Trips" action={<Link to="/more/trips">See all</Link>}>
+      <div className="hscroll">
+        {recent.map(t => (
+          <Link key={t.id} to={`/more/trips/${t.id}`} className="glass trip-card">
+            <div className="between"><span className={`badge ${t.kind === 'business' ? 'blue' : 'green'}`}>{t.kind === 'business' ? 'Work' : 'Personal'}</span>
+              <span className="caption">{shortDate(t.start_on)}</span></div>
+            <div className="name">{t.name}</div>
+            <div className="legend">
+              {t.kind === 'business' && <div className="stat"><span className="k">Claimed</span><span className="v pos"><Money m={t.totals.claimed} compact /></span></div>}
+              <div className="stat"><span className="k">{t.kind === 'business' ? 'Your cost' : 'Spent'}</span><span className="v"><Money m={t.totals.burden} compact /></span></div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </Section>
   );
 }
