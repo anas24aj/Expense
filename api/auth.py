@@ -266,6 +266,11 @@ def change_password(req):
 
 @route('POST', '/api/auth/forgot', auth='public')
 def forgot(req):
+    db, ip, t = req.db, _ip(req), int(time.time())
+    # each request counts toward the per-IP lockout, so nobody can flood an inbox through this form
+    if db.one('SELECT COUNT(*) AS n FROM login_failures WHERE ip = :ip AND at > :since', ip=ip, since=t - LOCKOUT_SECONDS)['n'] >= MAX_FAILURES:
+        raise ApiError(429, 'too many requests: wait 15 minutes')
+    db.run('INSERT INTO login_failures (ip, at) VALUES (:ip, :at)', ip=ip, at=t)
     email = req.json.get('email')
     user = isinstance(email, str) and req.db.one('SELECT * FROM users WHERE email = :e', e=email.strip().lower()[:254])
     if user:
