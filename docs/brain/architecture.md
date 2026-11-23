@@ -66,7 +66,7 @@ Business numbers are computed **only** in `engine.py`, so the UI, the API and MC
 ## Auth
 
 - Email + password (PBKDF2, existing), self sign-up (owner can switch to invite-only), sessions per device.
-- Forgot password: emailed one-time link (15 min) via a transactional email API; until one is configured, the admin
+- Forgot password: emailed one-time link (30 min, only an HMAC-derived hash stored) via Resend (`RESEND_API_KEY`, `MAIL_FROM`); until then the admin
   page issues reset links.
 - MCP: per-person secret URL (works as a Claude custom connector) or bearer header.
 

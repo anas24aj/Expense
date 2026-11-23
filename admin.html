@@ -83,6 +83,12 @@
 
     <section class="card"><h2 id="people-title">People</h2><div id="people"></div></section>
 
+    <section class="card" id="resets-card" hidden>
+      <h2>Password reset links</h2>
+      <p class="muted" id="resets-note"></p>
+      <div id="resets"></div>
+    </section>
+
     <section class="card">
       <h2>Data</h2>
       <label>Whose<select id="space"></select></label>
@@ -124,7 +130,16 @@ function draw() {
   $('space').innerHTML = U.spaces.map(s => `<option value="${esc(s)}">${esc(who(s))}</option>`).join('');
   if (U.spaces.includes(was)) $('space').value = was;
 }
-async function load() { U = await api('/api/admin/users'); draw(); await tables(); }
+async function load() { U = await api('/api/admin/users'); draw(); await Promise.all([tables(), resets()]); }
+// "Forgot password?" links people asked for in the last 30 minutes: hand one over yourself when email isn't set up.
+async function resets() {
+  const R = await api('/api/admin/resets');
+  $('resets-card').hidden = !R.resets.length && R.mail;
+  $('resets-note').textContent = R.mail ? 'Also emailed to them. Each works once, for 30 minutes.'
+    : 'Email isn’t set up (RESEND_API_KEY and MAIL_FROM in Vercel), so send them their link yourself. Each works once, for 30 minutes.';
+  $('resets').innerHTML = R.resets.map(r => `<div class="person"><b>${esc(r.email)}</b><div class="muted">until ${esc(new Date(r.expires * 1000).toLocaleTimeString())}</div>` +
+    `<div class="key">${esc(r.link)}</div><div class="actions"><button data-copy="${esc(r.link)}">Copy link</button></div></div>`).join('') || '<p class="muted">None right now.</p>';
+}
 async function tables() {
   const T = await api(`/api/admin/tables?space=${encodeURIComponent($('space').value || 'public')}`);
   $('tables').innerHTML = T.map(t => `<button data-table="${esc(t.table)}" aria-pressed="${t.table === table}">${esc(t.table)} · ${t.rows}</button>`).join('');
@@ -152,6 +167,7 @@ document.addEventListener('click', async e => {
   try {
     if (b.dataset.do === 'open') {
       await api('/api/admin/open', { space: b.dataset.space });
+      try { await caches.delete('expense-data'); } catch {}
       try { Object.keys(localStorage).filter(k => k.startsWith('expense:') || ['buy', 'extraInr'].includes(k)).forEach(k => localStorage.removeItem(k)); } catch {}  // not the last person's figures
       location.href = '/'; return;
     }
@@ -173,6 +189,7 @@ document.addEventListener('click', async e => {
     if (b.dataset.do === 'import') {  // a 'Download all my data' file (e.g. from her old site) into this person's account
       const f = $('import-file'); f.dataset.space = b.dataset.space; f.dataset.email = b.dataset.email; f.value = ''; f.click(); return;
     }
+    if (b.dataset.copy) { await navigator.clipboard.writeText(b.dataset.copy); say('Link copied.'); }
     if (b.dataset.table) { table = b.dataset.table; offset = 0; await tables(); }
     if (b.dataset.page) { offset = Math.max(0, offset + 100 * +b.dataset.page); await rows(); }
     if (b.dataset.del) {

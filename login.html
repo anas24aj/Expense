@@ -26,6 +26,8 @@
   .error { color: var(--error); font-size: 14px; margin: 8px 0 0; }
   .submit { width: 100%; margin-top: 20px; padding: 12px; font: inherit; font-weight: 600; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); cursor: pointer; }
   .hidden { display: none; }
+  .links { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; font-size: 14px; }
+  .links a { color: var(--accent); text-decoration: none; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -45,14 +47,18 @@
     <div id="error" class="error" role="alert"></div>
     <button class="submit" type="submit">Sign in</button>
   </form>
+  <div class="links"><a href="/forgot">Forgot password?</a><a href="/signup">Create an account</a></div>
 </main>
 <script>
   // Whoever signs in next must not see the last person's figures: drop everything the app kept on this device.
+  try { caches.delete('expense-data'); } catch {}  // the offline copy of the last person's pages and figures
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
   try { Object.keys(localStorage).filter(k => k.startsWith('expense:') || ['buy', 'extraInr'].includes(k)).forEach(k => localStorage.removeItem(k)); } catch {}
   const error = new URLSearchParams(location.search).get('error');
   const messages = {
     setup: 'Login is not set up yet: in Vercel, add EXPENSE_TOKEN (at least 6 characters) for Production, then redeploy.',
     locked: 'Too many wrong attempts. Try again in 15 minutes.',
+    closed: 'New accounts are by invitation only. Ask the site owner to add you.',
   };
   if (error) document.getElementById('error').textContent = messages[error] || 'Wrong email or password. Try again.';
   const input = document.getElementById('password'), toggle = document.querySelector('.show');

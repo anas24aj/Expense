@@ -19,8 +19,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
-from urllib.request import urlopen
+from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import base64
@@ -40,7 +40,8 @@ SESSION_DAYS = 365  # stay signed in for a year on a device; a password change o
 PAGES = {'/': 'dashboard.html', '/import': 'import.html'}
 # What Android needs to install the site as an app. No personal data, and Chrome fetches the manifest without
 # your login cookie, so these are served to anyone.
-PUBLIC = {'/manifest.webmanifest': 'application/manifest+json', '/icon-192.png': 'image/png', '/icon-512.png': 'image/png'}
+PUBLIC = {'/manifest.webmanifest': 'application/manifest+json', '/icon-192.png': 'image/png', '/icon-512.png': 'image/png',
+          '/sw.js': 'text/javascript'}
 MIN_PASSWORD = 6
 MAX_FAILURES, LOCKOUT_SECONDS = 10, 15 * 60  # wrong guesses per IP before it is locked out, and for how long
 
@@ -205,7 +206,7 @@ class DB:
             if self.pg and space != 'public':
                 self.run(f'CREATE SCHEMA IF NOT EXISTS {space}')
             self.run(schema)
-            for extra in [USERS_SCHEMA, SHARED_SCHEMA] if space == 'public' else []:
+            for extra in [USERS_SCHEMA, SHARED_SCHEMA, *AUTH_SCHEMAS] if space == 'public' else []:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA, CONTACTS_SCHEMA, PEER_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
@@ -1608,6 +1609,9 @@ def sign_in(environ, given, email='', key=False, admin=False):
             return 'ok', 'public', ''
         elif key and len(given) >= 20:
             found = db.run("SELECT space FROM app_users WHERE sync_key = :k AND space != ''", k=given)
+            if not found:  # a device's own key (the setup page); a revoked one stops here
+                found = db.run('UPDATE devices SET last_seen = :t WHERE key_hash = :h AND revoked = 0 RETURNING space',
+                               t=datetime.now(timezone.utc).isoformat(timespec='seconds'), h=_sha(given))
             if found:
                 return 'ok', found[0]['space'], ''
         db.run('DELETE FROM login_failures WHERE at <= :since', since=now - LOCKOUT_SECONDS)
@@ -1716,6 +1720,125 @@ def users(db):
         out.append(dict(u))
     linked = {u['space'] for u in out}
     return {'users': out, 'owner_linked': 'public' in linked, 'spaces': ['public'] + [u['space'] for u in out if u['space'] != 'public']}
+
+
+# ---------- sign-up, forgot password, devices ----------
+# Each phone (or other sender) has its own key: named, last seen, revocable alone. Only the key's SHA-256 is kept.
+DEVICES_SCHEMA = '''CREATE TABLE IF NOT EXISTS devices (id {id} PRIMARY KEY, space TEXT NOT NULL, name TEXT NOT NULL, platform TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen TEXT NOT NULL DEFAULT '', revoked INTEGER NOT NULL DEFAULT 0)'''
+# A forgot-password link: its token is HMAC(EXPENSE_TOKEN, salt), so the database alone never holds a working link,
+# yet the admin page can show it again to hand over while no email is set up. Single use, RESET_MINUTES long.
+RESETS_SCHEMA = '''CREATE TABLE IF NOT EXISTS password_resets (id {id} PRIMARY KEY, user_id BIGINT NOT NULL, salt TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0)'''
+AUTH_SCHEMAS = [DEVICES_SCHEMA, RESETS_SCHEMA]
+PLATFORMS = {'android', 'iphone', 'other'}
+RESET_MINUTES = 30
+ANDROID_APK = 'https://github.com/silpachandran08-web/Expense/releases/download/android-latest/expense-sync.apk'  # .github/workflows/android.yml
+ACCOUNT_PATHS = {'/signup', '/forgot', '/reset', '/setup', '/api/devices', '/api/devices/revoke'}
+
+
+def _sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _reset_token(salt):
+    return hmac.new(_token().encode(), f'reset:{salt}'.encode(), hashlib.sha256).hexdigest()
+
+
+def signup_open():
+    return os.environ.get('SIGNUP', '').strip().lower() != 'closed'
+
+
+def site_url(environ):
+    host = environ.get('HTTP_HOST') or 'localhost:8000'  # Vercel only routes this app's own domains here
+    return f"{'http' if host.startswith(('localhost', '127.0.0.1')) else 'https'}://{host}"
+
+
+def throttled(db, environ):
+    """Sign-ups and reset requests count toward the wrong-password lockout per IP (db: public). True: locked out."""
+    ip, now = client_ip(environ), int(time.time())
+    if db.run('SELECT COUNT(*) AS n FROM login_failures WHERE ip = :ip AND at > :since', ip=ip, since=now - LOCKOUT_SECONDS)[0]['n'] >= MAX_FAILURES:
+        return True
+    db.run('INSERT INTO login_failures (ip, at) VALUES (:ip, :at)', ip=ip, at=now)
+    return False
+
+
+def mail_ready():
+    return bool(os.environ.get('RESEND_API_KEY', '').strip() and os.environ.get('MAIL_FROM', '').strip())
+
+
+def send_mail(to, subject, text):
+    """Through Resend's HTTP API when RESEND_API_KEY and MAIL_FROM are set. False when not sent (the admin page still has the link)."""
+    if not mail_ready():
+        return False
+    req = Request('https://api.resend.com/emails', json.dumps({'from': os.environ['MAIL_FROM'].strip(), 'to': [to], 'subject': subject, 'text': text}).encode(),
+                  {'Authorization': f"Bearer {os.environ['RESEND_API_KEY'].strip()}", 'Content-Type': 'application/json', 'User-Agent': 'expense-app'})
+    try:
+        with urlopen(req, timeout=10):
+            return True
+    except OSError as e:
+        print(f'send_mail failed: {type(e).__name__}: {e}', file=sys.stderr)
+        return False
+
+
+def start_reset(db, email, base):
+    """db: public. Makes and emails a reset link; returns it, or None when no one has that email (the caller says the same either way)."""
+    now = int(time.time())
+    db.run('DELETE FROM password_resets WHERE expires < :old', old=now - 86400)
+    found = db.run("SELECT id, email FROM app_users WHERE email = :e AND space != ''", e=email.strip().lower())
+    if not found:
+        return None
+    salt = secrets.token_urlsafe(16)
+    db.run('INSERT INTO password_resets (user_id, salt, token_hash, expires) VALUES (:u, :s, :h, :x)',
+           u=found[0]['id'], s=salt, h=_sha(_reset_token(salt)), x=now + RESET_MINUTES * 60)
+    link = f'{base}/reset?t={_reset_token(salt)}'
+    send_mail(found[0]['email'], 'Reset your Expenses password',
+              f'Someone (hopefully you) asked to reset your Expenses password. Open this link within {RESET_MINUTES} minutes to choose a new one:\n\n{link}\n\n'
+              'If it wasn’t you, ignore this email: your password stays as it is.')
+    return link
+
+
+def finish_reset(db, token, password):
+    """db: public. A new password from a valid link: (space, pw_hash). The link (and any older one) is used up, and every
+    other session ends because sessions sign the password hash. ValueError: too short; KeyError: bad, used or expired link."""
+    if len(password) < MIN_USER_PASSWORD:
+        raise ValueError('short')
+    claimed = db.run('UPDATE password_resets SET used = 1 WHERE token_hash = :h AND used = 0 AND expires > :now RETURNING user_id',
+                     h=_sha(token.strip()), now=int(time.time()))
+    if not claimed:
+        raise KeyError('link')
+    h = hash_password(password)
+    found = db.run('UPDATE app_users SET pw_hash = :h WHERE id = :id RETURNING space', h=h, id=claimed[0]['user_id'])
+    db.run('UPDATE password_resets SET used = 1 WHERE user_id = :u', u=claimed[0]['user_id'])
+    if not found:
+        raise KeyError('link')
+    return found[0]['space'], h
+
+
+def pending_resets(db, base):
+    return [{'email': r['email'], 'link': f"{base}/reset?t={_reset_token(r['salt'])}", 'expires': r['expires']}
+            for r in db.run('SELECT r.salt, r.expires, u.email FROM password_resets r JOIN app_users u ON u.id = r.user_id '
+                            'WHERE r.used = 0 AND r.expires > :now ORDER BY r.id DESC', now=int(time.time()))]
+
+
+def devices(db, space):
+    return [dict(r) for r in db.run('SELECT id, name, platform, created_at, last_seen, revoked FROM devices WHERE space = :s ORDER BY id DESC', s=space)]
+
+
+def add_device(db, space, name, platform):
+    """db: public. Returns the new key: shown once, only its hash is kept."""
+    name = ' '.join(str(name or '').split())[:40]
+    if not name or platform not in PLATFORMS:
+        raise ValueError(f'a name and a platform ({", ".join(sorted(PLATFORMS))}) are needed')
+    key = secrets.token_urlsafe(24)
+    db.run('INSERT INTO devices (space, name, platform, key_hash, created_at) VALUES (:s, :n, :p, :h, :t)',
+           s=space, n=name, p=platform, h=_sha(key), t=datetime.now(timezone.utc).isoformat(timespec='seconds'))
+    return key
+
+
+def revoke_device(db, space, device_id):
+    if not db.run('UPDATE devices SET revoked = 1 WHERE id = :id AND space = :s RETURNING id', id=int(device_id), s=space):
+        raise KeyError('no such device')
 
 
 # Tables the admin can browse, with the columns that identify a row (to delete it).
@@ -1920,6 +2043,8 @@ def _admin(environ, method, path, query, respond, redirect):
     try:
         if (method, path) == ('GET', '/api/admin/users'):
             return respond('200 OK', users(pub))
+        if (method, path) == ('GET', '/api/admin/resets'):  # forgot-password links to hand over while no email is set up
+            return respond('200 OK', {'resets': pending_resets(pub, site_url(environ)), 'mail': mail_ready()})
         if (method, path) == ('POST', '/api/admin/users'):
             try:
                 new_user(pub, str(body.get('email', '')), str(body.get('password', '')), bool(body.get('owner')))
@@ -1943,6 +2068,7 @@ def _admin(environ, method, path, query, respond, redirect):
                 return respond('404 Not Found', {'error': 'no such person'})
             pub.run('DELETE FROM app_users WHERE id = :id', id=found[0]['id'])
             pub.run('DELETE FROM shared_splits WHERE to_email = :e OR from_space = :s', e=found[0]['email'], s=found[0]['space'])
+            pub.run("DELETE FROM devices WHERE space = :s AND space != 'public'", s=found[0]['space'])  # the site password still opens the owner's
             if body.get('data') and found[0]['space'] != 'public':
                 drop_space(pub, found[0]['space'])
             return respond('200 OK', users(pub))
@@ -1980,6 +2106,72 @@ def _admin(environ, method, path, query, respond, redirect):
     finally:
         db.close()
     return respond('404 Not Found', {'error': 'not found'})
+
+
+def _account(environ, method, path, respond, redirect):
+    """Self sign-up, forgot / reset password, and the phone setup page with its device keys."""
+    page = lambda name: respond('200 OK', (HERE / name).read_bytes(), 'text/html; charset=utf-8')
+    if path in ('/signup', '/forgot', '/reset'):
+        if path == '/signup' and not signup_open():
+            return redirect('/login?error=closed')
+        if method == 'GET':
+            return page('account.html')
+        if method != 'POST':
+            return respond('405 Method Not Allowed', {'error': 'GET or POST'})
+        form = read_form(environ)
+        again = f"/reset?t={quote(form.get('t', ''))}&" if path == '/reset' else f'{path}?'
+        if not _token():
+            return redirect(f'{again}error=setup')
+        pub = DB()
+        try:
+            if throttled(pub, environ):
+                return redirect(f'{again}error=locked')
+            if path == '/forgot':
+                start_reset(pub, form.get('email', ''), site_url(environ))
+                return redirect('/forgot?sent=1')  # the same answer whether or not the email has an account
+            if path == '/reset':
+                try:
+                    space, pw_hash = finish_reset(pub, form.get('t', ''), form.get('password', ''))
+                except ValueError:
+                    return redirect(f'{again}error=short')
+                except KeyError:
+                    return redirect('/reset?error=expired')
+                return redirect('/', new_session(space, pw_hash))
+            email = form.get('email', '').strip().lower()
+            try:
+                new_user(pub, email, form.get('password', ''))
+            except ValueError as e:
+                return redirect(f"/signup?error={'taken' if 'already' in str(e) else 'short' if 'characters' in str(e) else 'email'}")
+            relink(pub, email)
+            found = pub.run('SELECT space, pw_hash FROM app_users WHERE email = :e', e=email)[0]
+        finally:
+            pub.close()
+        return redirect('/setup', new_session(found['space'], found['pw_hash']))
+    space = session_space(environ)  # the setup page and device keys: the signed-in browser only, never a phone's key
+    if space is None:
+        return redirect('/login') if method == 'GET' and path == '/setup' else respond('401 Unauthorized', {'error': 'unauthorized'})
+    if path == '/setup':
+        return page('setup.html')
+    pub = DB()
+    try:
+        sms_url = f'{site_url(environ)}/sms'
+        if (method, path) == ('GET', '/api/devices'):
+            return respond('200 OK', {'devices': devices(pub, space), 'sms_url': sms_url,
+                                      'shortcut_url': os.environ.get('SHORTCUT_URL', '').strip(), 'android_apk': ANDROID_APK})
+        if method != 'POST':
+            return respond('404 Not Found', {'error': 'not found'})
+        body = read_json(environ, MAX_BODY)
+        if path == '/api/devices':
+            key = add_device(pub, space, body.get('name'), body.get('platform'))
+            return respond('200 OK', {'key': key, 'sms_url': sms_url, 'setup': json.dumps({'url': sms_url, 'key': key}), 'devices': devices(pub, space)})
+        revoke_device(pub, space, body.get('id'))
+        return respond('200 OK', {'devices': devices(pub, space)})
+    except KeyError as e:
+        return respond('404 Not Found', {'error': str(e).strip("'")})
+    except (ValueError, TypeError) as e:
+        return respond('400 Bad Request', {'error': str(e)})
+    finally:
+        pub.close()
 
 
 # ---------- MCP: Claude, ChatGPT and other assistants read your money (and, when asked, add or fix a transaction) ----------
@@ -2242,6 +2434,8 @@ def _app(environ, start_response):
         return _mcp(environ, method, path, respond)
     if path == '/admin' or path.startswith(('/admin/', '/api/admin/')):
         return _admin(environ, method, path, query, respond, redirect)
+    if path in ACCOUNT_PATHS:
+        return _account(environ, method, path, respond, redirect)
 
     space = None
     if (method, path) == ('POST', '/sms'):

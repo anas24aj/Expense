@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Connect a phone · Expenses</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+  :root { --bg: #f7f7f8; --card: #fff; --text: #1d1d1f; --muted: #6b6b70; --line: #d4d4d8; --soft: #f0f0f2; --accent: #15803d; --accent-text: #fff; --error: #b91c1c; --ok: #15803d; --hl: #dcfce7; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111113; --card: #1c1c1f; --text: #ececee; --muted: #9a9aa1; --line: #3a3a40; --soft: #26262a; --accent: #4ade80; --accent-text: #052e16; --error: #f87171; --ok: #4ade80; --hl: #14532d; } }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: clip; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 12px 16px 48px; display: grid; gap: 14px; }
+  .bar { display: flex; align-items: center; gap: 10px; padding-top: env(safe-area-inset-top); }
+  .bar a { color: var(--accent); text-decoration: none; font-weight: 600; font-size: 15px; }
+  h1 { font-size: 22px; margin: 4px 0 0; } h2 { font-size: 17px; margin: 0 0 6px; } h3 { font-size: 15px; margin: 14px 0 6px; }
+  p { margin: 0 0 10px; } .muted { color: var(--muted); font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 16px; min-width: 0; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--soft); border-radius: 12px; padding: 4px; }
+  .seg button { font: inherit; font-weight: 600; border: 0; border-radius: 9px; padding: 10px; background: none; color: var(--muted); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px #0002; }
+  label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  input { width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+  input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn { display: block; width: 100%; text-align: center; text-decoration: none; margin-top: 12px; padding: 13px; font: inherit; font-weight: 600; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-text); cursor: pointer; }
+  .btn.quiet { background: var(--soft); color: var(--text); }
+  .btn:disabled { opacity: .6; cursor: default; }
+  .small { font: inherit; font-size: 13px; font-weight: 600; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); color: var(--text); cursor: pointer; }
+  .small.danger { color: var(--error); }
+  .step { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; }
+  .num { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); font-weight: 700; }
+  .num.done { background: var(--ok); }
+  code, .mono { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); border-radius: 6px; padding: 1px 5px; overflow-wrap: anywhere; }
+  .box { display: flex; gap: 8px; align-items: flex-start; background: var(--soft); border-radius: 10px; padding: 10px; margin: 6px 0; }
+  .box .mono { flex: 1; min-width: 0; background: none; padding: 0; white-space: pre-wrap; }
+  ol.how { padding-left: 20px; margin: 6px 0 0; } ol.how li { margin-bottom: 8px; }
+  .msg { font-size: 14px; margin: 10px 0 0; } .msg.ok { color: var(--ok); } .msg.err { color: var(--error); }
+  details { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+  /* drawn iPhone screens for the automation steps */
+  .shots { display: grid; gap: 12px; margin-top: 8px; }
+  .shot { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; align-items: center; }
+  .phone { border: 2px solid var(--line); border-radius: 18px; padding: 10px 8px; background: var(--bg); font-size: 11px; }
+  .phone b { display: block; text-align: center; font-size: 11px; margin-bottom: 6px; }
+  .phone div { background: var(--card); border-radius: 6px; padding: 5px 7px; margin-top: 3px; display: flex; justify-content: space-between; gap: 4px; }
+  .phone .on { background: var(--hl); font-weight: 700; outline: 1.5px solid var(--accent); }
+  .dev { display: flex; gap: 10px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding: 10px 0; }
+  .dev:first-child { border-top: 0; } .dev b { overflow-wrap: anywhere; }
+  #iphone, #android { display: grid; gap: 14px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 380px) { .shot { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar"><a href="/">‹ Expenses</a></div>
+  <div>
+    <h1>Connect a phone</h1>
+    <p class="muted">Your bank SMS then arrive here by themselves. Each phone gets its own key, so you can remove one without touching the others.</p>
+  </div>
+
+  <div class="seg" role="group" aria-label="Which phone">
+    <button type="button" data-os="iphone" aria-pressed="false">iPhone</button>
+    <button type="button" data-os="android" aria-pressed="false">Android</button>
+  </div>
+
+  <section class="card">
+    <label for="name">Name this phone</label>
+    <input id="name" maxlength="40" autocomplete="off">
+  </section>
+
+  <!-- iPhone -->
+  <div id="iphone" hidden>
+    <section class="card step">
+      <span class="num" id="n1">1</span>
+      <div>
+        <h2>Copy your key</h2>
+        <p class="muted" id="lead-iphone">Makes a key for this iPhone and copies it. The Shortcut picks it up from the clipboard the first time it runs, so nothing to type.</p>
+        <button class="btn" type="button" id="copy-iphone">Copy my key</button>
+        <p class="msg" id="msg-iphone" role="status"></p>
+        <div class="keys" hidden></div>
+      </div>
+    </section>
+
+    <section class="card step" id="get-shortcut" hidden>
+      <span class="num">2</span>
+      <div>
+        <h2>Add the Shortcut</h2>
+        <p class="muted">Opens Shortcuts. Tap <b>Add Shortcut</b>, then tap the new <b>Send to Expense</b> tile once: it reads your key from the clipboard and says “connected”.</p>
+        <a class="btn" id="shortcut-link" href="#" target="_blank" rel="noopener">Get “Send to Expense”</a>
+      </div>
+    </section>
+
+    <section class="card step" id="automation" hidden>
+      <span class="num">3</span>
+      <div>
+        <h2>Run it on every bank SMS</h2>
+        <p class="muted">Apple doesn’t let a link install this part, so it’s three taps in Shortcuts.</p>
+        <div class="shots">
+          <div class="shot">
+            <p><b>a.</b> Open <b>Shortcuts</b> → <b>Automation</b> → <b>+</b> (or <b>New Automation</b>) → <b>Message</b>.</p>
+            <div class="phone" aria-hidden="true"><b>New Automation</b><div>Time of Day</div><div>Email</div><div class="on">Message <span>›</span></div><div>Wi-Fi</div></div>
+          </div>
+          <div class="shot">
+            <p><b>b.</b> <b>Message Contains</b>: <code>SAR</code>. Leave Sender empty. Choose <b>Run Immediately</b> and turn off <b>Notify When Run</b>. Tap <b>Next</b>.</p>
+            <div class="phone" aria-hidden="true"><b>When I get a message</b><div>Sender <span>Any</span></div><div class="on">Message Contains <span>SAR</span></div><div class="on">◉ Run Immediately</div><div>Notify When Run <span>off</span></div></div>
+          </div>
+          <div class="shot">
+            <p><b>c.</b> Pick <b>Send to Expense</b> from My Shortcuts. Done.</p>
+            <div class="phone" aria-hidden="true"><b>My Shortcuts</b><div class="on">Send to Expense <span>✓</span></div><div>Directions Home</div></div>
+          </div>
+        </div>
+        <p class="muted" style="margin-top:10px">Each automation matches one word. Repeat a–c for <code>SR</code> and <code>ريال</code>, and for <code>INR</code> and <code>Rs</code> if you have Indian accounts.</p>
+      </div>
+    </section>
+
+    <section class="card step" id="manual" hidden>
+      <span class="num">2</span>
+      <div>
+        <h2>Send bank SMS from this iPhone</h2>
+        <ol class="how">
+          <li>Open <b>Shortcuts</b> → <b>Automation</b> → <b>+</b> → <b>Message</b>.</li>
+          <li><b>Message Contains</b>: <code>SAR</code>. Leave Sender empty. Choose <b>Run Immediately</b>, turn off <b>Notify When Run</b>, tap <b>Next</b> → <b>New Blank Automation</b>.</li>
+          <li>Add the action <b>Get Contents of URL</b>. URL:<div class="box"><span class="mono" data-fill="sms"></span><button class="small" type="button" data-copy-fill="sms">Copy</button></div></li>
+          <li>Tap <b>Show More</b>. Method <b>POST</b>. Add a header: key <code>Authorization</code>, value:<div class="box"><span class="mono" data-fill="bearer"></span><button class="small" type="button" data-copy-fill="bearer">Copy</button></div></li>
+          <li>Request Body <b>JSON</b>, two Text fields: <code>sender</code> = <b>Shortcut Input → Sender</b> (or type <code>iPhone</code>), and <code>body</code> = <b>Shortcut Input → Content</b>. Tap <b>Done</b>.</li>
+          <li>Duplicate it (long-press) for <code>SR</code> and <code>ريال</code>, and <code>INR</code> for Indian accounts. Each automation matches one word.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card">
+      <p class="muted" style="margin:0">After the next card payment, Settings → “Phone connection” should say <b>saved</b>, and this phone’s “last seen” below updates.</p>
+      <details>
+        <summary>Build the Shortcut yourself</summary>
+        <p class="muted" style="margin-top:10px">Make it once, then share it (⋯ → Share → Copy iCloud Link) and put the link in Vercel as <code>SHORTCUT_URL</code>: everyone else then gets the one-tap button above. Name it <b>Send to Expense</b>.</p>
+        <ol class="how">
+          <li><b>Get File</b> from <b>Shortcuts</b> folder, path <code>Expense/device.json</code>. Turn off <b>Error If Not Found</b>.</li>
+          <li><b>If</b> <i>File</i> <b>does not have any value</b>:
+            <ol class="how">
+              <li><b>Get Clipboard</b></li>
+              <li><b>Get Dictionary from</b> <i>Clipboard</i></li>
+              <li><b>If</b> <i>Dictionary</i> <b>does not have any value</b> → <b>Show Alert</b> “Tap Copy my key on the Expenses setup page first” → <b>Stop This Shortcut</b>. <b>End If</b>.</li>
+              <li><b>Save File</b> <i>Dictionary</i> to <b>Shortcuts</b>, path <code>Expense/device.json</code>, <b>Ask Where to Save</b> off, <b>Overwrite If File Exists</b> on.</li>
+              <li><b>Show Notification</b> “Expense: this iPhone is connected” → <b>Stop This Shortcut</b>.</li>
+            </ol>
+            <b>End If</b>.</li>
+          <li><b>Get Dictionary from</b> <i>File</i> (step 1).</li>
+          <li><b>Get Dictionary Value</b> for <code>url</code> in <i>Dictionary</i>; again for <code>key</code>.</li>
+          <li><b>Text</b>: <code>Bearer </code> + <i>key</i> (one space after Bearer).</li>
+          <li><b>Get Contents of URL</b> <i>url</i>: Method <b>POST</b>; Header <code>Authorization</code> = that <i>Text</i>; Request Body <b>JSON</b>: <code>sender</code> = <b>Shortcut Input → Sender</b>, <code>body</code> = <b>Shortcut Input → Content</b>.</li>
+          <li>In the shortcut’s settings (ⓘ), turn on <b>Receive input</b>: <b>Messages</b> and <b>Text</b>.</li>
+        </ol>
+        <p class="muted">The setup page copies <code>{"url": "…/sms", "key": "…"}</code>. The key file lives in iCloud Drive → Shortcuts → Expense; delete it to connect again with a new key.</p>
+      </details>
+    </section>
+  </div>
+
+  <!-- Android -->
+  <div id="android" hidden>
+    <section class="card step">
+      <span class="num" id="n2">1</span>
+      <div>
+        <h2>Make a key for this phone</h2>
+        <p class="muted">Shown once. Paste it into the phone app below.</p>
+        <button class="btn" type="button" id="copy-android">Create and copy my key</button>
+        <p class="msg" id="msg-android" role="status"></p>
+        <div class="keys" hidden></div>
+      </div>
+    </section>
+    <section class="card step">
+      <span class="num">2</span>
+      <div>
+        <h2>Install Expense Sync</h2>
+        <p class="muted">Our small Android app: it sends each new bank SMS, and keeps trying when you’re offline.</p>
+        <a class="btn" id="apk" href="#">Download the app</a>
+        <ol class="how" style="margin-top:12px">
+          <li>Open the downloaded <code>expense-sync.apk</code>. Allow <b>Install unknown apps</b> for your browser when asked.</li>
+          <li>In the app, <b>Server address</b>:<div class="box"><span class="mono" data-fill="origin"></span><button class="small" type="button" data-copy-fill="origin">Copy</button></div></li>
+          <li><b>Password</b>: your key<div class="box"><span class="mono" data-fill="key"></span><button class="small" type="button" data-copy-fill="key">Copy</button></div></li>
+          <li>Allow SMS permission. If Android says “Restricted setting”: <b>Settings → Apps → Expense Sync → ⋮ → Allow restricted settings</b>, then allow it.</li>
+          <li>Samsung: <b>Settings → Battery → Background usage limits → Never sleeping apps → +</b> Expense Sync.</li>
+        </ol>
+        <details>
+          <summary>Or use SMS to URL Forwarder</summary>
+          <ol class="how" style="margin-top:10px">
+            <li>Install <b>SMS to URL Forwarder</b> from <a href="https://f-droid.org/packages/tech.bogomolov.incomingsmsgateway/" target="_blank" rel="noopener">F-Droid</a>, then tap <b>+</b>.</li>
+            <li>Sender <code>*</code>. Webhook URL:<div class="box"><span class="mono" data-fill="sms"></span><button class="small" type="button" data-copy-fill="sms">Copy</button></div></li>
+            <li>SMS filter (regex):<div class="box"><span class="mono" data-fill="regex"></span><button class="small" type="button" data-copy-fill="regex">Copy</button></div></li>
+            <li>JSON template:<div class="box"><span class="mono" data-fill="template"></span><button class="small" type="button" data-copy-fill="template">Copy</button></div></li>
+            <li>JSON headers:<div class="box"><span class="mono" data-fill="headers"></span><button class="small" type="button" data-copy-fill="headers">Copy</button></div></li>
+            <li>SIM: Any. Save, then turn off battery limits for the app as above.</li>
+          </ol>
+        </details>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Your phones</h2>
+    <div id="devices"><p class="muted">Loading…</p></div>
+    <p class="muted" style="margin:8px 0 0">Phones set up earlier with your sync key (Settings) keep working.</p>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let os = iOS ? 'iphone' : 'android', info = {}, made = { iphone: null, android: null };
+const REGEX = '(?i)(rs\\.?|inr|₹|sar|sr|ريال)\\s*:?\\s*[0-9٠-٩]|[0-9٠-٩]\\s*(sar|sr|ريال)';
+const fills = () => {
+  const key = made[os]?.key || 'YOUR_KEY';
+  return { origin: location.origin, sms: `${location.origin}/sms`, key, bearer: `Bearer ${key}`, regex: REGEX,
+    template: '{"sender": "%from%", "body": "%text%", "received_at": "%sentStamp%"}',
+    headers: JSON.stringify({ 'User-agent': 'SMS Forwarder App', Authorization: `Bearer ${key}` }) };
+};
+function paint() {
+  document.querySelectorAll('[data-os]').forEach(b => b.setAttribute('aria-pressed', b.dataset.os === os));
+  $('iphone').hidden = os !== 'iphone'; $('android').hidden = os !== 'android';
+  const f = fills();
+  document.querySelectorAll('[data-fill]').forEach(el => { el.textContent = f[el.dataset.fill]; });
+  const shortcut = info.shortcut_url;
+  $('get-shortcut').hidden = $('automation').hidden = !shortcut;
+  $('manual').hidden = !!shortcut;
+  if (shortcut) $('shortcut-link').href = shortcut;
+  $('apk').href = info.android_apk || '#';
+  $('copy-iphone').textContent = shortcut ? 'Copy my key' : 'Create my key and copy the header';
+  if (!shortcut) $('lead-iphone').textContent = 'Makes a key for this iPhone and copies the Authorization value you paste in step 2.4.';
+}
+async function api(url, body) {
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(out.error || `the server answered ${r.status}`);
+  return out;
+}
+const ago = iso => {
+  if (!iso) return 'never sent yet';
+  const min = Math.round((Date.now() - new Date(iso)) / 60000);
+  return 'last sent ' + (min < 1 ? 'just now' : min < 60 ? `${min} min ago` : min < 1440 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} days ago`);
+};
+function drawDevices(list) {
+  $('devices').innerHTML = list.map(d => `<div class="dev"><div><b>${esc(d.name)}</b><div class="muted">${{ iphone: 'iPhone', android: 'Android' }[d.platform] || 'Other'} · ` +
+    `${d.revoked ? 'removed' : esc(ago(d.last_seen))}</div></div>${d.revoked ? '' : `<button class="small danger" type="button" data-revoke="${d.id}" data-name="${esc(d.name)}">Remove</button>`}</div>`).join('')
+    || '<p class="muted">None yet.</p>';
+}
+// Safari only lets a page copy during the tap itself: hand the clipboard a promise of the text, filled once the key arrives.
+async function copyLater(textPromise) {
+  if (window.ClipboardItem && navigator.clipboard?.write) {
+    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': textPromise.then(t => new Blob([t], { type: 'text/plain' })) })]);
+  } else await navigator.clipboard.writeText(await textPromise);
+}
+async function create(platform) {
+  const msg = $(`msg-${platform}`), btn = $(`copy-${platform}`);
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = 'Making your key…';
+  const made_ = api('/api/devices', { name: $('name').value || (platform === 'iphone' ? 'iPhone' : 'Android phone'), platform });
+  const text = made_.then(d => platform === 'android' ? d.key : info.shortcut_url ? d.setup : `Bearer ${d.key}`);
+  let copied = true;
+  try { await copyLater(text); } catch { copied = false; }
+  try {
+    const d = await made_;
+    made[platform] = { key: d.key, setup: d.setup, name: $('name').value };
+    drawDevices(d.devices); paint();
+    $(`n${platform === 'iphone' ? 1 : 2}`).textContent = '✓';
+    const box = btn.parentElement.querySelector('.keys');
+    box.hidden = false;
+    box.innerHTML = platform === 'iphone' && info.shortcut_url
+      ? `<div class="box"><span class="mono">${esc(d.setup)}</span><button class="small" type="button" data-copy="${esc(d.setup)}">Copy again</button></div>`
+      : `<div class="box"><span class="mono">${esc(platform === 'android' ? d.key : `Bearer ${d.key}`)}</span><button class="small" type="button" data-copy="${esc(platform === 'android' ? d.key : `Bearer ${d.key}`)}">Copy again</button></div>`;
+    msg.className = 'msg ok';
+    msg.textContent = copied ? (platform === 'iphone' && info.shortcut_url ? 'Copied. Now step 2.' : 'Copied. Keep this page open until the phone is set up: the key is shown only once.')
+      : 'Made. Copy it with the button below (your browser blocked copying).';
+  } catch (e) {
+    msg.className = 'msg err'; msg.textContent = `Couldn’t make a key: ${e.message}`; btn.disabled = false;
+  }
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.os) { os = b.dataset.os; defaultName(); paint(); }
+  if (b.id === 'copy-iphone') create('iphone');
+  if (b.id === 'copy-android') create('android');
+  const text = b.dataset.copy ?? (b.dataset.copyFill && fills()[b.dataset.copyFill]);
+  if (text) {
+    try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); } catch { b.textContent = 'Select it'; }
+  }
+  if (b.dataset.revoke && confirm(`Remove “${b.dataset.name}”? It stops sending SMS here at once.`)) {
+    try { drawDevices((await api('/api/devices/revoke', { id: +b.dataset.revoke })).devices); } catch (err) { alert(err.message); }
+  }
+});
+const defaultName = () => { $('name').value = made[os]?.name || (os === 'iphone' ? 'iPhone' : 'Android phone'); };
+defaultName(); paint();
+api('/api/devices').then(d => { info = d; drawDevices(d.devices); paint(); }).catch(e => { $('devices').innerHTML = `<p class="msg err">${esc(e.message)}</p>`; });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+</script>
+</body>
+</html>
