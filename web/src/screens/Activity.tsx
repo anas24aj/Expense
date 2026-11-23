@@ -147,7 +147,7 @@ export default function ActivityPage() {
 }
 
 /* ---------- transaction detail with one-tap actions ---------- */
-type Mode = null | 'category' | 'person' | 'split' | 'claim' | 'note' | 'loan' | 'asset' | 'pot';
+type Mode = null | 'category' | 'person' | 'split' | 'claim' | 'note' | 'loan' | 'asset' | 'pot' | 'link' | 'account' | 'trip';
 type PersonDir = 'give' | 'repay' | 'repaid' | 'borrow';
 // Which way money moved with a person: debits are "I paid for them" or "paying back"; credits "they paid me back" or "they lent me".
 const PERSON_DIRS: Record<'debit' | 'credit', { value: PersonDir; label: string }[]> = {
@@ -185,9 +185,13 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
     { k: 'spend', icon: 'cart', label: 'Spending', on: t.purpose === 'spend', run: () => apply({ purpose: 'spend' }, 'Counted as spending', { purpose: t.purpose }) },
     ...(t.direction === 'debit' ? [{ k: 'loan', icon: 'bank', label: 'Loan payment', on: !!t.liability_id, run: () => setMode('loan') }] : []),
     ...(pots.length ? [{ k: 'pot', icon: 'house', label: t.direction === 'debit' ? 'Paid from pot' : 'Into pot', on: !!t.fund_id, run: () => setMode('pot') }] : []),
-    ...(assets.data?.items.length ? [{ k: 'asset', icon: 'car', label: 'Vehicle / property', run: () => setMode('asset') }] : []),
+    ...(assets.data?.items.length ? [{ k: 'asset', icon: 'car', label: 'Vehicle / home', run: () => setMode('asset') }] : []),
+    { k: 'link', icon: 'link', label: 'Link transfer', on: !!detail.data?.links.some(l => l.kind === 'transfer'), run: () => setMode('link') },
+    { k: 'account', icon: 'bank', label: 'Account', run: () => setMode('account') },
+    { k: 'trip', icon: 'plane', label: 'Trip', on: !!detail.data?.trips?.length, run: () => setMode('trip') },
   ];
-  const titles: Record<string, string> = { category: 'Category', person: 'Who was it with?', split: 'Split with', claim: 'Add to claim', note: 'Note', loan: 'Which loan?', asset: 'Vehicle / property cost', pot: 'Shared pot' };
+  const titles: Record<string, string> = { category: 'Category', person: 'Who was it with?', split: 'Split with', claim: 'Add to claim', note: 'Note', loan: 'Which loan?', asset: 'Vehicle / home cost', pot: 'Shared pot',
+    link: 'The other side of this transfer', account: 'Which account?', trip: 'Trip' };
   return (
     <Sheet open={!!txn} onClose={close} title={mode ? titles[mode] : undefined} detent={mode ? 'medium' : 'auto'}
       lead={mode && <button className="link-btn" onClick={() => setMode(null)}><Icon name="chevL" size={16} /> Back</button>}>
@@ -202,6 +206,9 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
               onClick={() => apply({ fund_id: f.id }, t.direction === 'debit' ? `Paid from ${f.name}` : `Added to ${f.name}`, { fund_id: t.fund_id ?? null })} />)}
             {t.fund_id && <ListRow icon={<Icon name="close" size={22} />} title="Not from a pot" chevron={false} onClick={() => apply({ fund_id: null }, 'Taken out of the pot', { fund_id: t.fund_id })} />}
           </List>)
+        : mode === 'link' && detail.data ? <LinkPicker t={detail.data} onDone={close} />
+        : mode === 'account' ? <AccountPicker t={t} onPick={id => apply({ account_id: id }, id ? 'Account changed' : 'Marked as cash', { account_id: t.account_id })} />
+        : mode === 'trip' && detail.data ? <TripPicker t={detail.data} onDone={close} />
         : mode === 'asset' ? <AssetCostPicker t={t} assets={assets.data?.items || []} onDone={close} />
         : mode === 'split' ? <SplitPicker t={t} onDone={close} />
         : mode === 'claim' ? <ClaimPicker t={t} onDone={close} />
@@ -275,20 +282,83 @@ function LoanPicker({ t, onPick }: { t: Txn; onPick: (l: Liability | null) => vo
   );
 }
 const COST_TYPES = ['fuel', 'service', 'insurance', 'emi', 'other'];
+const HOME_COSTS = ['rent', 'electricity', 'internet', 'maid', 'groceries', 'furnishing'];
+
+/** Pair this with the other leg of a transfer (money out of one own account, into another) that the matcher missed. */
+function LinkPicker({ t, onDone }: { t: TxnDetail; onDone: () => void }) {
+  const near = (d: number) => { const x = new Date(t.day + 'T00:00:00'); x.setDate(x.getDate() + d); return x.toISOString().slice(0, 10); };
+  const q = useApi<{ items: Txn[] }>('/transactions', { limit: 200, before: `${near(8)}_~` });
+  const link = useWrite<{ to_txn_id: string; kind: string }>('POST', `/transactions/${t.id}/link`);
+  const unlink = useWrite<{ id: string }>('DELETE', b => `/transactions/${t.id}/link/${b.id}`);
+  const toast = useToast();
+  const linked = t.links.find(l => l.kind === 'transfer');
+  const from = near(-7);
+  const other = (q.data?.items || []).filter(x => x.id !== t.id && x.direction !== t.direction && x.day >= from && x.account_id !== t.account_id);
+  return (
+    <div className="stack">
+      {linked && <button className="btn block danger" disabled={unlink.isPending} onClick={async () => { await unlink.mutateAsync({ id: linked.id }); toast('Unlinked'); onDone(); }}>Unlink the current pair</button>}
+      {q.isLoading ? <PageSkeleton /> : other.length ? (
+        <List>{other.map(x => (
+          <ListRow key={x.id} icon={<CategoryTile category={x.category} merchant={x.merchant} />} title={x.merchant} sub={`${shortDate(x.day)} · ${x.account_name || 'No account'}`}
+            end={<span className={x.direction === 'credit' ? 'pos' : ''}><Money m={x.amount} /></span>} endSub={linked?.other_txn_id === x.id ? <span className="badge green">Linked</span> : undefined}
+            onClick={async () => { if (link.isPending) return; await link.mutateAsync({ to_txn_id: x.id, kind: 'transfer' }); toast('Linked: neither side counts as spending'); onDone(); }} chevron={false} />
+        ))}</List>
+      ) : <EmptyState icon="transfer" title="Nothing to pair" text={`No money ${t.direction === 'debit' ? 'coming into' : 'going out of'} another account within a week of this.`} />}
+      {link.error && <p className="error" role="alert">{link.error.message}</p>}
+      <p className="footnote" style={{ textAlign: 'center' }}>Shows the other direction on your other accounts, a week either side. Amounts may differ across currencies.</p>
+    </div>
+  );
+}
+
+/** Move the transaction to the account it really came from (or to cash). */
+function AccountPicker({ t, onPick }: { t: Txn; onPick: (id: string | null) => void }) {
+  const q = useApi<{ items: Account[] }>('/accounts');
+  if (!q.data) return <PageSkeleton />;
+  return (
+    <List>
+      {q.data.items.map(a => <ListRow key={a.id} icon={<Icon name={a.kind === 'credit_card' || a.kind === 'debit_card' ? 'card' : a.kind === 'wallet' ? 'wallet' : 'bank'} size={22} />}
+        title={`${a.institution || a.name}${a.last4 ? ' ··' + a.last4 : ''}`} sub={`${a.name} · ${a.currency}`}
+        end={a.id === t.account_id ? <Icon name="check" size={22} className="pos" /> : undefined} onClick={() => a.id !== t.account_id && onPick(a.id)} chevron={false} />)}
+      <ListRow icon={<Icon name="coin" size={22} />} title="Cash" sub="No bank account" end={!t.account_id ? <Icon name="check" size={22} className="pos" /> : undefined} onClick={() => t.account_id && onPick(null)} chevron={false} />
+    </List>
+  );
+}
+
+/** Put the transaction on a trip, or take it off one it counts on by its dates. */
+function TripPicker({ t, onDone }: { t: TxnDetail; onDone: () => void }) {
+  const q = useApi<{ items: { id: string; name: string; start_on: string; end_on: string; city: string }[] }>('/trips');
+  const tag = useWrite<{ id: string; status: string }>('POST', b => `/trips/${b.id}/tag`);
+  const toast = useToast();
+  const on = new Map((t.trips || []).map(x => [x.id, x.status]));
+  const run = async (id: string, status: string, msg: string) => { if (tag.isPending) return; await tag.mutateAsync({ id, status, txn_ids: [t.id] } as never); toast(msg); onDone(); };
+  if (!q.data) return <PageSkeleton />;
+  return (
+    <div className="stack">
+      {q.data.items.length ? <List>{q.data.items.map(x => (
+        <ListRow key={x.id} icon={<Icon name="plane" size={22} />} title={x.name} sub={`${x.city ? x.city + ' · ' : ''}${shortDate(x.start_on)} – ${shortDate(x.end_on)}`}
+          end={on.has(x.id) ? <span className="badge green">On it</span> : undefined}
+          onClick={() => (on.has(x.id) ? run(x.id, 'excluded', `Taken off ${x.name}`) : run(x.id, 'unreviewed', `Added to ${x.name}`))} chevron={false} />
+      ))}</List> : <EmptyState icon="plane" title="No trips yet" text="Add one under More › Trips." />}
+      {tag.error && <p className="error" role="alert">{tag.error.message}</p>}
+      <p className="footnote" style={{ textAlign: 'center' }}>Tap a trip to add this to it; tap one it’s on to take it off.</p>
+    </div>
+  );
+}
 const costLabel = (c: string) => (c === 'emi' ? 'EMI' : c[0].toUpperCase() + c.slice(1));
 function AssetCostPicker({ t, assets, onDone }: { t: Txn; assets: Asset[]; onDone: () => void }) {
   const [type, setType] = useState('fuel');
+  const types = assets.some(a => a.kind === 'home') ? [...COST_TYPES, ...HOME_COSTS] : COST_TYPES;
   const toast = useToast();
   const add = useWrite<{ id: string; txn_id: string; cost_type: string }>('POST', b => `/assets/${b.id}/costs`);
   const pick = async (a: Asset) => { await add.mutateAsync({ id: a.id, txn_id: t.id, cost_type: type }); toast(`Counted as ${a.name} ${costLabel(type).toLowerCase()}`); onDone(); };
   return (
     <div className="stack">
       <div className="chips" style={{ flexWrap: 'wrap' }} role="group" aria-label="Cost type">
-        {COST_TYPES.map(c => <Chip key={c} on={type === c} onClick={() => setType(c)}>{costLabel(c)}</Chip>)}
+        {types.map(c => <Chip key={c} on={type === c} onClick={() => setType(c)}>{costLabel(c)}</Chip>)}
       </div>
-      <List>{assets.map(a => <ListRow key={a.id} icon={<Icon name={a.kind === 'vehicle' ? 'car' : a.kind === 'property' ? 'house' : 'chart'} size={22} />} title={a.name}
+      <List>{assets.map(a => <ListRow key={a.id} icon={<Icon name={a.kind === 'vehicle' ? 'car' : a.kind === 'property' ? 'building' : a.kind === 'home' ? 'house' : 'chart'} size={22} />} title={a.name}
         sub={a.monthly_cost.minor ? <>≈ <Money m={a.monthly_cost} />/mo to run</> : a.kind} onClick={() => { if (!add.isPending) pick(a); }} chevron={false} />)}</List>
-      <p className="footnote" style={{ textAlign: 'center' }}>Pick the type, then the vehicle or property. Running costs split with anyone who shares them.</p>
+      <p className="footnote" style={{ textAlign: 'center' }}>Pick the type, then the vehicle or home. Costs split with anyone who shares them; mark it “For someone › They paid for me” if a friend paid it.</p>
     </div>
   );
 }

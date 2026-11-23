@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
 import type { Claim, ClaimImport, Commitment, Contact, HouseholdFull, Me, Member, Money as M, Person, Trip } from '../api/types';
-import { dueLabel, fmt, shortDate } from '../lib/format';
+import { dueLabel, fmt, shortDate, today } from '../lib/format';
 import {
   Avatar, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, useToast,
 } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
-import { readFile } from './files';
+import { photoDataUrl, readFile } from './files';
 
 type Tab = 'family' | 'friends' | 'shared' | 'claims';
 const RELATIONS = ['spouse', 'parent', 'child', 'sibling', 'other'];  // the API's set (api/households.py)
@@ -121,6 +121,33 @@ export function InviteSheet({ open, onClose }: { open: boolean; onClose: () => v
   );
 }
 
+/** Profile photo: pick one (resized on the phone to a small JPEG), or remove it. Saves straight away. */
+export function PhotoField({ name, photo, path, size = 128, maxChars = 60_000, field = 'photo' }: { name: string; photo?: string | null; path: string; size?: number; maxChars?: number; field?: 'photo' | 'details' }) {
+  const save = useWrite<Record<string, unknown>>('PATCH', path);
+  const toast = useToast();
+  const [err, setErr] = useState('');
+  const put = async (v: string | null) => {
+    setErr('');
+    try { await save.mutateAsync(field === 'details' ? { details: { photo: v } } : { photo: v }); toast(v ? 'Photo saved' : 'Photo removed'); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  return (
+    <div className="row-flex" style={{ gap: 12 }}>
+      {field === 'photo' ? <Avatar name={name} photo={photo} size={56} /> : photo ? <img src={photo} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 12 }} /> : null}
+      <label className="btn small secondary" style={{ cursor: 'pointer' }}>
+        <Icon name="upload" size={16} />{photo ? 'Change photo' : 'Add photo'}
+        <input type="file" accept="image/*" hidden disabled={save.isPending} onChange={async e => {
+          const f = e.target.files?.[0]; e.target.value = '';
+          if (!f) return;
+          try { await put(await photoDataUrl(f, size, maxChars)); } catch (x) { setErr((x as Error).message); }
+        }} />
+      </label>
+      {photo && <button className="link-btn" style={{ color: 'var(--red)' }} disabled={save.isPending} onClick={() => put(null)}>Remove</button>}
+      {err && <p className="error" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 function EditMemberSheet({ member, onClose }: { member: Member | null; onClose: () => void }) {
   const [name, setName] = useState('');
   const [relation, setRelation] = useState('other');
@@ -140,6 +167,7 @@ function EditMemberSheet({ member, onClose }: { member: Member | null; onClose: 
   return (
     <Sheet open onClose={onClose} title={member.display_name}>
       <div className="stack">
+        <PhotoField name={member.display_name} photo={member.photo} path={`/members/${member.id}`} />
         <Field label="Name"><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
         <div className="chips" style={{ flexWrap: 'wrap' }} role="group" aria-label="Relation">
           {[...new Set([...RELATIONS, member.relation])].filter(r => r !== 'self').map(r => <Chip key={r} on={relation === r} onClick={() => setRelation(r)}>{r}</Chip>)}
@@ -171,6 +199,7 @@ function EditContactSheet({ contact, onClose }: { contact: Contact | null; onClo
   return (
     <Sheet open onClose={onClose} title={`Edit ${contact.name}`}>
       <div className="stack">
+        <PhotoField name={contact.name} photo={contact.photo} path={`/contacts/${contact.id}`} />
         <Field label="Name"><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
         <Field label="Email (matches them when they join the app)"><input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" /></Field>
         <Field label="Phone"><input className="input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} /></Field>
@@ -334,6 +363,7 @@ export function Claims() {
   const deep = params.get('claim');
   useEffect(() => { if (deep && q.data) setOpen(q.data.items.find(c => c.id === deep) || null); }, [deep, q.data]);
   const paid = useWrite<{ id: string; txn_id?: string }>('POST', b => `/claims/${b.id}/paid`);
+  const move = useWrite<{ id: string; status: string; submitted_on?: string }, Claim>('PATCH', b => `/claims/${b.id}`);
   const toast = useToast();
   if (q.isLoading) return <PageSkeleton />;
   if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
@@ -362,6 +392,13 @@ export function Claims() {
               <dt>Status</dt><dd>{open.status}</dd><dt>Expected</dt><dd><Money m={open.expected} /></dd><dt>Received</dt><dd><Money m={open.received} /></dd>
               {open.submitted_on && <><dt>Submitted</dt><dd>{shortDate(open.submitted_on)}</dd></>}
             </dl>
+            {open.status !== 'paid' && (
+              <Segmented label="Claim status" value={open.status === 'draft' ? 'draft' : 'submitted'} onChange={async v => {
+                if (v === 'submitted' && open.status === 'draft') { setOpen(await move.mutateAsync({ id: open.id, status: 'submitted', submitted_on: today() })); toast('Marked submitted'); }
+                if (v === 'draft' && open.status !== 'draft') { setOpen(await move.mutateAsync({ id: open.id, status: 'draft', submitted_on: '' })); toast('Back to draft'); }
+              }} options={[{ value: 'draft', label: 'Draft' }, { value: 'submitted', label: 'Submitted' }]} />
+            )}
+            {move.error && <p className="error" role="alert">{move.error.message}</p>}
             {open.suggestion && open.status !== 'paid' && (
               <div className="glass card stack-sm" style={{ boxShadow: 'inset 0 0 0 1.5px var(--green-fill)' }}>
                 <b><Icon name="sparkle" size={15} /> Looks like it was paid</b>
@@ -370,7 +407,7 @@ export function Claims() {
               </div>
             )}
             <List>{open.items.map(t => <TxnRow key={t.id} t={t} onOpen={setTxn} />)}</List>
-            {open.status !== 'paid' && !open.suggestion && <button className="btn block secondary" onClick={async () => { await paid.mutateAsync({ id: open.id }); toast('Marked as paid'); setOpen(null); }}>Mark as paid</button>}
+            {open.status !== 'paid' && !open.suggestion && <button className="btn block secondary" onClick={async () => { await paid.mutateAsync({ id: open.id }); toast('Marked as received'); setOpen(null); }}><Icon name="check" size={16} />Money received</button>}
             <p className="footnote">When the reimbursement lands in your bank, we match it and close this claim.</p>
           </div>
         )}

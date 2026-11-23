@@ -231,7 +231,8 @@ class PlanTest(unittest.TestCase):
         self.assertGreater(w['extra_interest']['minor'], 0)
         self.assertIn(w['verdict'], ('tight', 'no'))
         e = self.ok('GET', '/insights/whatif', query='amount_minor=600000&pay=emi&months=6')
-        self.assertEqual(set(e), {'verdict', 'why', 'month_free_after', 'debt_free_before', 'debt_free_after', 'delay_months', 'extra_interest'})
+        self.assertEqual(set(e), {'verdict', 'why', 'month_free_after', 'debt_free_before', 'debt_free_after', 'delay_months', 'extra_interest',
+                                  'free_per_month', 'recover_months'})
         self.assertEqual(self.call('GET', '/api/insights/whatif', query='amount_minor=100&pay=gold')[0], 400)
 
     def test_advice(self):

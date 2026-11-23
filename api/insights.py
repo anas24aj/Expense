@@ -1,6 +1,7 @@
 """Insights for v3: loads the household's rows into the plain shapes engine.py works on (the math stays there), and
 serves /insights/*. load() is shared with api/plan.py and api/mcp.py. Amounts in the household's base currency."""
 import json
+import math
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
@@ -78,11 +79,15 @@ def load(req):
         if t and c['claimed_minor'] is not None and (src == t['currency'] or {src, t['currency']} <= engine.SUPPORTED):  # no rate: the whole amount
             claim_part[t['id']] = min(t['amount_minor'], round(engine.conv(c['claimed_minor'], src, t['currency'], r)))
     theirs = defaultdict(int)
-    for s in hh.run('SELECT txn_id, member_id, share_minor FROM splits WHERE household_id = :hid'):
+    splits = hh.run('SELECT txn_id, member_id, contact_id, share_minor FROM splits WHERE household_id = :hid')
+    for s in splits:
         t = by_id.get(s['txn_id'])
         if t and (s['member_id'] is None or s['member_id'] != t['member_id']):  # rows are other people's shares
             theirs[s['txn_id']] += s['share_minor']
     liabs = hh.run('SELECT * FROM liabilities WHERE household_id = :hid ORDER BY created_at, id')
+    for l in liabs:  # a loan you share with its holder: your share is what you owe (the whole loan stays in l['loan'])
+        l['loan'] = {k: l[k] for k in ('principal_minor', 'opening_balance_minor', 'emi_minor')}
+        l.update({k: round(v * (l.get('my_share_pct') or 100) / 100) for k, v in l['loan'].items()})
     commits = hh.run('SELECT * FROM commitments WHERE household_id = :hid AND ended_at IS NULL ORDER BY next_due, id')
     assets = hh.run('SELECT * FROM assets WHERE household_id = :hid AND sold_at IS NULL ORDER BY created_at, id')
     shares = defaultdict(list)
@@ -95,10 +100,14 @@ def load(req):
     sharers = defaultdict(list)
     for s in hh.run('SELECT * FROM asset_sharers WHERE household_id = :hid'):
         sharers[s['asset_id']].append(s)
-    costs = hh.run('SELECT * FROM asset_costs WHERE household_id = :hid')
+    from api import plan
+    costs = plan.asset_cost_rows(hh)
     for c in costs:
         asset_share[c['txn_id']] += sum(s['share_pct'] for s in sharers[c['asset_id']] if s['cost_type'] in (c['cost_type'], '*'))
     debt_rows = [l for l in liabs if l['kind'] not in ('credit_card',) and not l['closed_at']]
+    contact_names = {c['id']: c['name'].strip().lower() for c in hh.run('SELECT id, name FROM contacts WHERE household_id = :hid')}
+    holders = [(l, contact_names.get(l['holder_contact_id'])) for l in debt_rows if l.get('holder_contact_id') and l['emi_minor']]
+    lent = plan.borrowed(hh)  # a card lent for a period: its plain spending then is theirs
     commit_share = {c['id']: sum(s['share_minor'] for s in shares[c['id']]) for c in commits}
 
     pot_pct = defaultdict(int)  # fund id -> % of it the co-owners hold
@@ -111,6 +120,10 @@ def load(req):
         debit = t['direction'] == 'debit'
         purpose = t['purpose'] or ('spend' if debit else 'income')
         user = t['set_by'] == 'user'
+        if t['id'] in lent:
+            b = lent[t['id']]
+            t = {**t, 'purpose': b['purpose'], 'person_member_id': b['member_id'], 'person_contact_id': b['contact_id']}
+            purpose = b['purpose']
         e = {'id': t['id'], 'day': t['day'], 'amount_minor': t['amount_minor'], 'currency': t['currency'], 'direction': t['direction'],
              'purpose': purpose, 'theirs_minor': theirs[t['id']], 'category': t['category'] or 'Uncategorized', 'merchant': t['merchant'] or t['merchant_raw'],
              'commitment_id': t['commitment_id'], 'person_id': t['person_member_id'] or t['person_contact_id'],
@@ -122,6 +135,12 @@ def load(req):
         if debit and not user and e['purpose'] not in ('transfer', 'claim'):
             if not e['liability_id'] and (lid := _match(debt_rows, t)):
                 e.update(liability_id=lid, purpose='loan_payment')
+            if not e['liability_id'] and e['purpose'] == 'spend':  # your part of a shared loan, sent to its holder
+                text = _text(t)
+                e['liability_id'] = next((l['id'] for l, name in holders if name and name in text and l['currency'] == t['currency']
+                                          and l['emi_minor'] / 2 <= t['amount_minor'] <= l['emi_minor'] * 2), None)
+                if e['liability_id']:
+                    e['purpose'] = 'loan_payment'
             if not e['asset_id'] and (aid := _match(assets, t)):
                 e.update(asset_id=aid, purpose='asset')
             if not e['commitment_id']:
@@ -201,7 +220,7 @@ def load(req):
     return {'hh': hh, 'cur': cur, 'rate': rate, 'r': r, 'today': today, 'house': house, 'rows': rows, 'by_id': by_id, 'txns': eng_txns,
             'raw_txns': txns, 'status_txns': status_txns, 'liabs': liabs, 'commits': eng_commits, 'status': status, 'shares': shares,
             'payments': pays, 'funds': funds, 'loans': loans, 'assets': assets, 'costs': costs, 'asset_sharers': sharers,
-            'settings': s, 'eng_settings': eng_settings, 'claimed': claimed, 'claim_part': claim_part,
+            'settings': s, 'eng_settings': eng_settings, 'claimed': claimed, 'splits': splits, 'claim_part': claim_part,
             'trips': hh.run('SELECT * FROM trips WHERE household_id = :hid ORDER BY start_on DESC, id'), 'trip_tags': trip_tags,
             'claim_table': hh.run('SELECT * FROM claims WHERE household_id = :hid ORDER BY created_at DESC, id'),
             'milestones': milestones,
@@ -259,22 +278,16 @@ def claims_pending(ctx):
 
 
 def people_totals(ctx, hh):
-    """(owed to you, owed by you) by people, in the base currency: lent − repaid, borrowed − repaid, unsettled split shares."""
-    owes, owed = defaultdict(float), defaultdict(float)
-    for t in ctx['raw_txns']:
-        if t['person_id']:
-            v = to_cur(t['amount_minor'], t['currency'], ctx)
-            owes[t['person_id']] += {'lend': v, 'repaid': -v}.get(t['purpose'], 0)
-            owed[t['person_id']] += {'borrow': v, 'repay': -v}.get(t['purpose'], 0)
-    for s in hh.run('SELECT txn_id, member_id, contact_id, share_minor FROM splits WHERE household_id = :hid AND settled_at IS NULL'):
-        t = ctx['by_id'].get(s['txn_id'])
-        if t and t['direction'] == 'debit' and (s['member_id'] or s['contact_id']) != t['member_id']:
-            owes[s['member_id'] or s['contact_id']] += to_cur(s['share_minor'], t['currency'], ctx)
-    from api import plan
-    for p in plan.pots(hh, ctx['today']):  # a co-owner's part of an overspent pot (+), or what the household owes them back (-)
-        for pid, v in p['owes'].items():
-            (owes if v > 0 else owed)[pid] += to_cur(abs(v), p['fund']['currency'], ctx)
-    return sum(v for v in owes.values() if v > 0), sum(v for v in owed.values() if v > 0)
+    """(owed to you, owed by you) by people, in the base currency: households.balances(), so Home and People agree."""
+    from api import households
+    owes = owed = 0.0
+    for bal in households.balances(hh).values():
+        for c, v in bal.items():
+            if v > 0:
+                owes += to_cur(v, c, ctx)
+            elif v < 0:
+                owed += to_cur(-v, c, ctx)
+    return owes, owed
 
 
 def month(req, ctx, m):
@@ -331,7 +344,11 @@ def whatif(ctx, q):
     amount = round(engine.conv(amount, (q.get('currency') or cur).upper(), cur, ctx['r']))
     la = lookahead(ctx, 12)
     loans = engine.to_cur(ctx['loans'], cur, ctx['r'])
-    return engine.what_if(loans, la['extra_to_debt']['minor'], la['months'][0]['free']['minor'], amount, cur, pay, ctx['today'], months, rate_bp)
+    out = engine.what_if(loans, la['extra_to_debt']['minor'], la['months'][0]['free']['minor'], amount, cur, pay, ctx['today'], months, rate_bp)
+    free = sum(m['free']['minor'] for m in la['months']) / len(la['months'])  # average free money a month, next 12 months
+    out['free_per_month'] = M(free, cur)
+    out['recover_months'] = math.ceil(amount / free) if free > 0 else None  # months of free money to earn it back
+    return out
 
 
 def advice(ctx):

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
-import type { Account, Coverage, Flows, FlowNode, HouseholdFull, Person, Txn } from '../api/types';
+import type { Account, Coverage, Flows, FlowNode, HouseholdFull, Person, Txn, UsedBy } from '../api/types';
 import { fmt, monthLabel, shiftMonth, shortDate, thisMonth, today } from '../lib/format';
 import { Avatar, BrandTile, brandOf, Chip, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
@@ -265,10 +265,11 @@ export function AccountPage() {
             <List>
               <ListRow to={`/activity?account_id=${a.id}`} icon={<Tile icon="activity" color="#0a84ff" />} title="All transactions" />
               <ListRow to={`/more/import?account=${a.id}`} icon={<Tile icon="upload" color="#30b0c7" />} title="Import a statement" sub="Fills any missing months" />
-              <ListRow onClick={() => setLending(true)} icon={<Tile icon="person" color="#ff9f0a" />} title="Someone else used it" sub="Mark every spend between two dates as theirs" />
+              <ListRow onClick={() => setLending(true)} icon={<Tile icon="person" color="#ff9f0a" />} title="Someone else used it" sub="Spending between two dates is theirs, now and when imported later" />
               <ListRow to="/more/flows" icon={<Tile icon="chart" color="#bf5af2" />} title="Money flow" sub="Where this account’s money went" />
             </List>
           </Section>
+          <UsedByRanges a={a} />
           <Section title="Recent">
             {txns.data?.items.length ? <List>{txns.data.items.slice(0, 15).map(t => <TxnRow key={t.id} t={t} onOpen={setOpen} />)}</List>
               : txns.isLoading ? <PageSkeleton /> : <p className="caption" style={{ marginLeft: 4 }}>No transactions yet.</p>}
@@ -279,6 +280,22 @@ export function AccountPage() {
       {a && <EditAccountSheet key={a.id} a={a} open={editing} onClose={() => setEditing(false)} />}
       {a && <UsedBySheet a={a} open={lending} onClose={() => setLending(false)} />}
     </Page>
+  );
+}
+
+/** The saved "someone else used it" ranges, each removable (what it tagged goes back to being yours). */
+function UsedByRanges({ a }: { a: Account }) {
+  const q = useApi<{ items: UsedBy[] }>(`/accounts/${a.id}/used-by`);
+  const del = useWrite<{ id: string }>('DELETE', b => `/accounts/${a.id}/used-by/${b.id}`);
+  if (!q.data?.items.length) return null;
+  return (
+    <Section title="Lent to someone">
+      <List>{q.data.items.map(r => (
+        <ListRow key={r.id} icon={<Avatar name={r.person.name || '?'} />} title={r.person.name} sub={`${shortDate(r.from)} – ${shortDate(r.to)} · ${r.purpose === 'support' ? 'family support' : 'they owe you'}`}
+          end={<button className="link-btn" style={{ color: 'var(--red)' }} disabled={del.isPending} aria-label={`Remove ${r.person.name}’s range`}
+            onClick={() => confirm(`Remove this range? Its spending goes back to being yours.`) && del.mutate({ id: r.id })}>Remove</button>} chevron={false} />
+      ))}</List>
+    </Section>
   );
 }
 
@@ -294,7 +311,7 @@ function UsedBySheet({ a, open, onClose }: { a: Account; open: boolean; onClose:
     <Sheet open={open} onClose={close} title="Someone else used it">
       {done !== null ? <div className="stack"><p>{done} spend{done === 1 ? '' : 's'} marked as {who?.name}’s.</p><button className="btn block" onClick={close}>Done</button></div> : (
         <div className="stack">
-          <p className="caption">Every money-out on {a.name} between these days becomes {who ? who.name + '’s' : 'theirs'}: friends then owe you, family counts as support.</p>
+          <p className="caption">Spending on {a.name} between these days becomes {who ? who.name + '’s' : 'theirs'}, including statements and SMS that arrive later: friends then owe you, family counts as support. Fees, interest and card charges stay yours.</p>
           <div className="row-flex" style={{ gap: 8 }}>
             <Field label="From"><input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></Field>
             <Field label="To"><input className="input" type="date" value={to} onChange={e => setTo(e.target.value)} /></Field>

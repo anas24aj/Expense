@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, Person, Pot, WhatIf } from '../api/types';
+import type { Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, Money as MoneyT, Person, Pot, WhatIf } from '../api/types';
 import { fmt, monthLabel, shortDate, sumByCurrency, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast,
@@ -66,7 +66,9 @@ function Afford() {
             <dt>Free this month after</dt><dd className={res.month_free_after.minor < 0 ? 'neg' : ''}><Money m={res.month_free_after} /></dd>
             <dt>Debt-free</dt><dd>{(() => { const d = res.debt_free_after, m = typeof d === 'string' ? d : d?.month; return m ? monthLabel(m, true) : '—'; })()}{res.delay_months > 0 && <span className="neg"> (+{res.delay_months} mo)</span>}</dd>
             {res.extra_interest.minor > 0 && <><dt>Extra interest</dt><dd className="neg"><Money m={res.extra_interest} /></dd></>}
+            {res.recover_months !== undefined && <><dt>Earned back in</dt><dd>{res.recover_months === null ? 'no free money to recover it' : `${res.recover_months} ${res.recover_months === 1 ? 'month' : 'months'}`}</dd></>}
           </dl>
+          {res.free_per_month && res.recover_months != null && <p className="footnote" style={{ marginTop: 8 }}>At your average free money of <Money m={res.free_per_month} /> a month over the next year.</p>}
         </div>
       )}
     </section>
@@ -108,6 +110,8 @@ function Commitments({ q }: { q: ReturnType<typeof useApi<{ items: Commitment[] 
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState<Commitment | null>(null);
+  const [editing, setEditing] = useState<Commitment | null>(null);
+  const del = useWrite<{ id: string }>('DELETE', b => `/commitments/${b.id}`);
   const deep = new URLSearchParams(useLocation().search).get('commitment');
   useEffect(() => { if (deep && q.data) setOpen(q.data.items.find(c => c.id === deep) || null); }, [deep, q.data]);
   if (q.isLoading) return <PageSkeleton />;
@@ -159,31 +163,48 @@ function Commitments({ q }: { q: ReturnType<typeof useApi<{ items: Commitment[] 
               <dt>Repeats</dt><dd>{CYCLES.find(c => c.v === open.cycle_months)?.l || 'Once'}</dd>
               <dt>Next due</dt><dd>{shortDate(open.next_due)}</dd>
               <dt>Last paid</dt><dd>{open.last_paid ? shortDate(open.last_paid.day) : '—'}</dd>
-              {open.shares.length > 0 && <><dt>Shared with</dt><dd>{open.shares.map(s => s.name).join(', ')}</dd></>}
             </dl>
+            {open.shares.length > 0 && (
+              <Section title="Shared with">
+                <List>{open.shares.map(s => (
+                  <ListRow key={s.member_id || s.contact_id} icon={<Avatar name={s.name || '?'} size={32} />} title={s.name} sub={<>Share <Money m={s.share} /></>}
+                    end={s.paid_this_cycle ? <span className="badge green">Paid</span> : <span className="badge orange">Not paid</span>} />
+                ))}</List>
+              </Section>
+            )}
             {open.status !== 'paid' && <button className="btn block" onClick={async () => { await markPaid.mutateAsync({ id: open.id }); toast('Marked paid for this cycle'); setOpen(null); }}><Icon name="check" />Mark paid</button>}
+            <div className="grid-2">
+              <button className="btn secondary" onClick={() => { setEditing(open); setOpen(null); }}><Icon name="note" size={16} />Edit</button>
+              <button className="btn danger" disabled={del.isPending} onClick={async () => {
+                if (!confirm(`Delete ${open.name}? Past payments stay in your transactions.`)) return;
+                await del.mutateAsync({ id: open.id }); toast(`${open.name} deleted`); setOpen(null);
+              }}><Icon name="trash" size={16} />Delete</button>
+            </div>
             <p className="footnote" style={{ textAlign: 'center' }}>Payments tick this off automatically when the bank SMS matches.</p>
           </div>
         )}
       </Sheet>
       <NewCommitmentSheet open={creating} onClose={() => setCreating(false)} />
+      {editing && <NewCommitmentSheet open edit={editing} onClose={() => setEditing(null)} />}
     </Section>
   );
 }
 
-function NewCommitmentSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [name, setName] = useState('');
-  const [kind, setKind] = useState('bill');
-  const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState('SAR');
-  const [cycle, setCycle] = useState(1);
-  const [due, setDue] = useState(today());
-  const [country, setCountry] = useState<'SA' | 'IN' | 'other'>('SA');
-  const [sharers, setSharers] = useState<string[]>([]);
-  const [equal, setEqual] = useState<'equal' | 'custom'>('equal');
-  const [custom, setCustom] = useState<Record<string, string>>({});
+/** Add a commitment, or change one (`edit`): the same form, saved with PATCH. */
+function NewCommitmentSheet({ open, onClose, edit }: { open: boolean; onClose: () => void; edit?: Commitment }) {
+  const [name, setName] = useState(edit?.name || '');
+  const [kind, setKind] = useState<string>(edit?.kind || 'bill');
+  const [amount, setAmount] = useState(edit ? String(edit.amount.minor / 100) : '');
+  const [currency, setCurrency] = useState<string>(edit?.amount.currency || 'SAR');
+  const [cycle, setCycle] = useState(edit?.cycle_months || 1);
+  const [due, setDue] = useState(edit?.next_due || today());
+  const [country, setCountry] = useState<'SA' | 'IN' | 'other'>(edit ? (edit.country === 'IN' ? 'IN' : edit.country === 'SA' ? 'SA' : 'other') : 'SA');
+  const editShares = (edit?.shares || []).map(s => [s.member_id || s.contact_id || '', s] as const);
+  const [sharers, setSharers] = useState<string[]>(editShares.map(([id]) => id));
+  const [equal, setEqual] = useState<'equal' | 'custom'>(editShares.length ? 'custom' : 'equal');
+  const [custom, setCustom] = useState<Record<string, string>>(Object.fromEntries(editShares.map(([id, s]) => [id, String(s.share.minor / 100)])));
   const people = (useApi<{ items: Person[] }>(open ? '/people' : null).data?.items || []).filter(p => p.relation !== 'self');
-  const add = useWrite<Record<string, unknown>>('POST', '/commitments');
+  const add = useWrite<Record<string, unknown>>(edit ? 'PATCH' : 'POST', edit ? `/commitments/${edit.id}` : '/commitments');
   const toast = useToast();
   const total = toMinor(Number(amount) || 0, currency);
   const each = Math.floor(total / (sharers.length + 1));  // you're one of the equal shares
@@ -193,10 +214,10 @@ function NewCommitmentSheet({ open, onClose }: { open: boolean; onClose: () => v
   const save = async () => {
     const shares = sharers.map(id => { const p = people.find(x => x.id === id)!; return { [p.kind === 'member' ? 'member_id' : 'contact_id']: id, share_minor: shareOf(id) }; });
     await add.mutateAsync({ name, kind, amount_minor: total, currency, cycle_months: cycle, next_due: due, country: country === 'other' ? '' : country, shares });
-    toast(`${name} added`); setName(''); setAmount(''); setSharers([]); setCustom({}); onClose();
+    toast(edit ? `${name} saved` : `${name} added`); if (!edit) { setName(''); setAmount(''); setSharers([]); setCustom({}); } onClose();
   };
   return (
-    <Sheet open={open} onClose={onClose} title="New commitment" detent="large">
+    <Sheet open={open} onClose={onClose} title={edit ? `Edit ${edit.name}` : 'New commitment'} detent="large">
       <div className="stack">
         <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={pickCurrency} />
         <Field label="What"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Rent, DEWA, Amma…" /></Field>
@@ -226,7 +247,7 @@ function NewCommitmentSheet({ open, onClose }: { open: boolean; onClose: () => v
           </List>
           {!people.length && <p className="caption" style={{ marginLeft: 4 }}>Add family or friends in People to share a bill.</p>}
         </div>
-        <button className="btn block" disabled={!name || !Number(amount) || others > total || add.isPending} onClick={save}>Add</button>
+        <button className="btn block" disabled={!name || !Number(amount) || others > total || add.isPending} onClick={save}>{edit ? 'Save' : 'Add'}</button>
         {others > total && <p className="error" role="alert">Shares add up to more than the bill.</p>}
         {add.error && <p className="error" role="alert">{add.error.message}</p>}
         {cycle > 1 && <p className="footnote" style={{ textAlign: 'center' }}>We’ll make a fund and suggest a monthly set-aside.</p>}
@@ -427,19 +448,31 @@ function NewFundSheet({ open, onClose }: { open: boolean; onClose: () => void })
 }
 
 function Debts() {
-  const q = useApi<{ items: Liability[] }>('/liabilities');
+  const q = useApi<{ items: Liability[]; emi_total: MoneyT; outstanding_total: MoneyT }>('/liabilities');
   const [open, setOpen] = useState<Liability | 'new' | null>(null);
+  const items = q.data?.items || [];
+  const done = items.filter(l => l.closed || l.outstanding.minor <= 0).length;
   return (
     <Section title="What you owe" action={<button onClick={() => setOpen('new')}>Add</button>}>
       <div id="debts" style={{ scrollMarginTop: 80 }} />
       {!q.data ? <PageSkeleton /> : !q.data.items.length ? <div className="glass card caption"><Icon name="check" size={14} className="pos" /> No loans or card debt tracked. Card and BNPL balances appear from your SMS.</div> : (
+        <>
+        <div className="glass card stack-sm" aria-label="Loans summary">
+          <div className="grid-2">
+            <div className="stat"><span className="k">EMIs a month</span><span className="v"><Money m={q.data.emi_total} compact /></span></div>
+            <div className="stat"><span className="k">Still owed</span><span className="v warn"><Money m={q.data.outstanding_total} compact /></span></div>
+          </div>
+          <div className="between caption"><span>{items.length - done} pending · {done} closed</span><span>your share where a loan is shared</span></div>
+        </div>
         <List>
           {q.data.items.map(l => (
             <button key={l.id} type="button" className="list-row" onClick={() => setOpen(l)} aria-label={`${l.name}, edit`}
               style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8, paddingTop: 14, paddingBottom: 14, width: '100%', textAlign: 'left', opacity: l.closed ? .55 : 1 }}>
               <div className="between">
                 <span className="row-flex" style={{ minWidth: 0 }}><Tile icon={LOAN_ICON[l.kind] || 'bank'} color={l.rate_bp > 1500 ? '#ff453a' : '#5e5ce6'} />
-                  <span style={{ minWidth: 0 }}><b>{l.name}</b><br /><span className="caption">{[l.lender, `${(l.rate_bp / 100).toFixed(2)}%`, l.closed && 'closed'].filter(Boolean).join(' · ')}</span></span></span>
+                  <span style={{ minWidth: 0 }}><b>{l.name}</b><br /><span className="caption">{[l.lender, `${(l.rate_bp / 100).toFixed(2)}%`, l.closed && 'closed'].filter(Boolean).join(' · ')}</span>
+                    {l.shared && <><br /><span className="caption">{l.my_share_pct}% yours{l.shared.holder ? ` · in ${l.shared.holder.name}’s name` : ''} </span>
+                      <span className={`badge ${l.shared.sent_this_month ? 'green' : 'orange'}`}>{l.shared.sent_this_month ? 'Sent this month' : 'Not sent yet'}</span></>}</span></span>
                 <span style={{ textAlign: 'right' }}><b className="num"><Money m={l.outstanding} compact /></b><br /><span className="caption"><Money m={l.emi} compact />/mo</span></span>
               </div>
               <Meter pct={l.paid_pct ?? 0} color={l.rate_bp > 1500 ? 'var(--red-fill)' : undefined} />
@@ -447,6 +480,7 @@ function Debts() {
             </button>
           ))}
         </List>
+        </>
       )}
       <LoanSheet loan={open} onClose={() => setOpen(null)} />
     </Section>
@@ -462,8 +496,11 @@ function LoanSheet({ loan, onClose }: { loan: Liability | 'new' | null; onClose:
   const [f, setF] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!loan) return;
-    setF(l ? { kind: l.kind, name: l.name, lender: l.lender || '', currency: l.currency, principal: major(l.principal), opening: major(l.opening_balance), as_of: l.as_of || '',
-      rate: l.rate_bp ? String(l.rate_bp / 100) : '', emi: major(l.emi), start_on: l.start_on || '', end_on: l.end_on || '', match_pattern: l.match_pattern || '' }
+    // a shared loan is edited as the whole loan (the list shows your share)
+    setF(l ? { kind: l.kind, name: l.name, lender: l.lender || '', currency: l.currency, principal: major(l.shared?.loan_principal || l.principal),
+      opening: major(l.shared?.loan_opening_balance || l.opening_balance), as_of: l.as_of || '', rate: l.rate_bp ? String(l.rate_bp / 100) : '',
+      emi: major(l.shared?.loan_emi || l.emi), start_on: l.start_on || '', end_on: l.end_on || '', match_pattern: l.match_pattern || '',
+      holder: l.holder_contact_id || '', share: String(l.my_share_pct ?? 100) }
       : { kind: 'loan', currency: 'SAR', as_of: today() });
   }, [loan]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k: string) => (v: string) => setF(x => ({ ...x, [k]: v }));
@@ -478,13 +515,15 @@ function LoanSheet({ loan, onClose }: { loan: Liability | 'new' | null; onClose:
     const day = (k: string) => f[k] || (l ? null : undefined);  // editing: an emptied date clears it
     const body = { kind: f.kind, name: f.name.trim(), lender: f.lender || '', currency: cur, principal_minor: amt('principal'), opening_balance_minor: amt('opening'),
       as_of: f.as_of || undefined, rate_bp: f.rate ? Math.round(Number(f.rate) * 100) : 0, emi_minor: amt('emi') ?? 0, start_on: day('start_on'), end_on: day('end_on'),
-      match_pattern: f.match_pattern || '' };
+      match_pattern: f.match_pattern || '', holder_contact_id: f.holder || (l ? null : undefined), my_share_pct: Math.round(Number(f.share) || 100) };
     if (l) await edit.mutateAsync(body); else await add.mutateAsync(body);
     toast(l ? `${body.name} saved` : `${body.name} added`); onClose();
   };
   const busy = add.isPending || edit.isPending || del.isPending;
   const err = add.error || edit.error || del.error;
   const badRate = !!f.rate && !(Number(f.rate) >= 0 && Number(f.rate) <= 1000);
+  const badShare = !!f.share && !(Number(f.share) >= 1 && Number(f.share) <= 100);
+  const contacts = useApi<HouseholdFull>(loan ? '/households/current' : null).data?.contacts || [];
   return (
     <Sheet open={!!loan} onClose={onClose} title={l ? l.name : 'Add a loan'} detent="large">
       {loan && (
@@ -506,8 +545,16 @@ function LoanSheet({ loan, onClose }: { loan: Liability | 'new' | null; onClose:
             <Field label="Started"><input className="input" type="date" {...input('start_on')} /></Field>
             <Field label="Ends"><input className="input" type="date" {...input('end_on')} /></Field>
           </div>
+          <div className="glass card stack-sm">
+            <b>In someone else’s name?</b>
+            <div className="grid-2">
+              <Field label="Held by"><select className="input" {...input('holder')}><option value="">Me</option>{contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+              <Field label="My share (%)"><input className="input" inputMode="numeric" maxLength={3} {...input('share')} placeholder="100" /></Field>
+            </div>
+            <p className="footnote">Enter the whole loan above. Your share sets your EMI, balance and payoff; what you send them each month counts as your payment.</p>
+          </div>
           <Field label="Match bank SMS containing"><input className="input" {...input('match_pattern')} placeholder="e.g. AUTO LOAN 3302" /></Field>
-          <button className="btn block" disabled={!f.name?.trim() || badRate || busy} onClick={save}>{l ? 'Save' : 'Add loan'}</button>
+          <button className="btn block" disabled={!f.name?.trim() || badRate || badShare || busy} onClick={save}>{l ? 'Save' : 'Add loan'}</button>
           {err && <p className="error" role="alert">{err.message}</p>}
           {l && (
             <div className="grid-2">
