@@ -10,7 +10,8 @@ from api.app import ApiError, route
 
 FALLBACK_SAR_INR = 24.9  # used only when no rate service answers and none was ever stored
 SETTINGS = {'salary_minor': None, 'salary_currency': None, 'salary_day': None, 'emergency_months': 6,
-            'debt_strategy': 'avalanche', 'extra_to_debt_minor': None}
+            'debt_strategy': 'avalanche', 'extra_to_debt_minor': None,
+            'fd_rates_bp': {'INR': engine.NRE_FD_RATE_BP, 'SAR': 500}}  # what "a safe deposit" pays, per currency: the asset verdict's yardstick
 TXN_SQL = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id, m.person_contact_id, m.liability_id, m.asset_id, '
            'm.commitment_id, m.claim_id, m.fund_id, a.name AS account_name, a.visibility, a.owner_member_id '
            'FROM transactions t LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id '
@@ -348,7 +349,7 @@ def loan_alerts(ctx):
             continue
         asset = next((a['id'] for a in ctx['assets'] if a['liability_id'] == l['id']), None)
         for m in engine.missed_months(l['due_day'], [p['day'] for p in l['payments']], l['as_of'], ctx['today']):
-            out.append({'level': 'bad', 'link': f'/more/assets/{asset}' if asset else '/plan', 'liability_id': l['id'], 'month': m,
+            out.append({'level': 'bad', 'link': f'/assets/{asset}' if asset else '/plan', 'liability_id': l['id'], 'month': m,
                         'text': f"{l['name']}: no {'pre-EMI' if pre else 'EMI'} payment seen for {m} ({engine.fmt(due, l['currency'])}). "
                                 'Bounced? Pay it and link the payment to the loan.'})
     return out

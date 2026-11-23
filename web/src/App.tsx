@@ -17,6 +17,7 @@ const TABS = [
   { to: '/activity', label: 'Activity', icon: 'activity' },
   { to: '/people', label: 'People', icon: 'people' },
   { to: '/plan', label: 'Plan', icon: 'plan' },
+  { to: '/assets', label: 'Assets', icon: 'building' },
   { to: '/more', label: 'More', icon: 'more' },
 ];
 
@@ -67,8 +68,10 @@ function Authed() {
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/more" element={<MorePage me={me.data} />} />
         <Route path="/more/accounts" element={<AccountsPage />} />
-        <Route path="/more/assets" element={<AssetsPage />} />
-        <Route path="/more/assets/:id" element={<AssetPage />} />
+        <Route path="/assets" element={<AssetsPage />} />
+        <Route path="/assets/:id" element={<AssetPage />} />
+        <Route path="/more/assets" element={<Navigate to="/assets" replace />} />
+        <Route path="/more/assets/:id" element={<Redirect to={id => `/assets/${id}`} />} />
         <Route path="/more/import" element={<ImportPage />} />
         <Route path="/more/devices" element={<DevicesPage />} />
         <Route path="/more/claude" element={<ClaudePage />} />

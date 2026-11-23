@@ -63,18 +63,29 @@ export interface Fund { id: string; name: string; target: Money; due_on: string;
 export interface Milestone { id: string; name: string; due_on: string; amount: Money; paid: boolean; paid_on?: string | null; paid_txn_id?: string | null; liability_id?: string | null; disbursed_on?: string | null }
 export interface AssetCost { txn_id: string; day: string; merchant: string; cost_type: string; amount: Money }
 export interface AssetSharer { id?: string; cost_type: string; name: string; member_id?: string | null; contact_id?: string | null; share_pct: number }
+export interface AssetDetails {
+  market_value?: { minor: number; as_of: string; source?: string }; disposal?: { status: 'sold' | 'written_off'; on: string; proceeds_minor: number; note?: string };
+  area_sqft?: number; depreciation_pct?: number; bought_on?: string; builder?: string; photo_url?: string; paid_cash_minor?: number;
+  [label: string]: unknown;
+}
 export interface Asset {
   id: string; kind: 'property' | 'vehicle' | 'investment'; name: string; currency: Currency; cost: Money; value: Money; paid: Money; financed: Money;
   remaining: Money; milestones: Milestone[]; next_milestone: Milestone | null; monthly_cost: Money; my_monthly_cost: Money;
   costs_by_type: Record<string, Money>; sharers: AssetSharer[];
-  liability_id: string | null; details: Record<string, string | number | null>; value_as_of?: string;
+  liability_id: string | null; details: AssetDetails; value_as_of?: string;
+  // api-v3.md "Asset pages": what it is worth, how it was paid for, and whether it was a good buy
+  status?: 'owned' | 'sold' | 'written_off'; under_construction?: boolean;
+  valuation?: { value: Money; as_of: string; basis: 'market' | 'depreciation' | 'recorded' | 'cost' | 'sold' | 'written_off'; note: string; depreciation_pct: number; bought_on: string };
+  funding?: { own: Money; loan: Money; interest: Money; cost_to_date: Money; own_sources: { name: string; amount: Money }[] };
+  verdict?: { cost: Money; gain: Money; fd_gain: Money; edge: Money; net_cost: Money; annual_pct: number | null; fd_rate_bp: number; provisional: boolean;
+    tone: 'good' | 'warn' | 'bad' | 'info'; text: string; assumptions: string[] };
   costs?: AssetCost[]; cost_totals?: Record<string, Money>; cost_total?: Money; my_cost_total?: Money;
   sharer_totals?: { member_id: string | null; contact_id: string | null; name: string; amount: Money }[];
 }
 export interface Claim { id: string; name: string; payer: string; status: 'draft' | 'submitted' | 'paid' | 'partly'; member_id: string; items: Txn[]; expected: Money; received: Money; age_days: number; submitted_on: string | null;
   suggestion?: { txn_id: string; day: string; amount: Money } | null; reimbursement_txn_ids?: string[] }
 export interface SalaryEntry { id: string; member_id: string | null; member_name: string; from_month: string; amount: Money; kind: 'base' | 'arrears' | 'bonus'; note: string }
-export interface Settings { salary: Money | null; salary_day: number | null; emergency_months: number; debt_strategy: 'avalanche' | 'snowball'; extra_to_debt_minor: number }
+export interface Settings { salary: Money | null; salary_day: number | null; emergency_months: number; debt_strategy: 'avalanche' | 'snowball'; extra_to_debt_minor: number; fd_rates_bp?: Record<string, number> | null }
 
 export interface MonthInsight {
   month: string; currency: Currency; income: Money; spent: Money; committed_due: Money; committed_paid: Money; set_aside: Money; free: Money;

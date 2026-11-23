@@ -62,7 +62,7 @@ commitment_shares(commitment_id, member_id|contact_id, share_minor)
 commitment_payments(commitment_id, cycle_start, txn_id NULL, paid_by_member_id, amount_minor)
 funds(id, household_id, name, target_minor, currency, due_on, commitment_id NULL)
 fund_moves(fund_id, on_day, amount_minor, txn_id NULL)
-assets(id, household_id, kind property|vehicle|investment, name, currency, cost_minor, value_minor, value_as_of)
+assets(id, household_id, kind property|vehicle|investment, name, currency, cost_minor, value_minor, value_as_of, details JSON)  -- details: market_value, disposal, bought_on, depreciation_pct, area_sqft, builder, photo_url (api-v3 "Asset pages")
 asset_milestones(asset_id, name, due_on, amount_minor, paid_txn_id NULL, paid_on, liability_id NULL, disbursed_on)  -- tranche: 006
 asset_costs(asset_id, txn_id, cost_type, shared_with_member_id|contact_id, share_pct)
 claims(id, household_id, member_id, name, status, submitted_on, expected_minor)

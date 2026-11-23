@@ -486,7 +486,7 @@ def asset_json(a, ctx, names):
             if s['cost_type'] in (c['cost_type'], '*'):
                 parts.setdefault(s['member_id'] or s['contact_id'], [s, 0])[1] += v * s['share_pct'] / 100
     return {'id': a['id'], 'kind': a['kind'], 'name': a['name'], 'currency': cur, 'cost': M(a['cost_minor'], cur),
-            'value': M(a['value_minor'] or a['cost_minor'], cur), 'value_as_of': a['value_as_of'], 'paid': M(paid, cur), 'financed': M(financed, cur),
+            'value_as_of': a['value_as_of'], 'paid': M(paid, cur), 'financed': M(financed, cur),
             'remaining': M(max(0, a['cost_minor'] - paid - financed), cur), 'milestones': [ms(m) for m in stones],
             'next_milestone': ms(nxt) if nxt else None, 'monthly_cost': M(sum(by_type.values()) + emi, cur), 'my_monthly_cost': M(mine + emi, cur),
             'costs_by_type': {k: M(v, cur) for k, v in sorted(by_type.items())},
@@ -498,7 +498,57 @@ def asset_json(a, ctx, names):
             'sharer_totals': [{'member_id': s['member_id'], 'contact_id': s['contact_id'], 'name': names.get(k, ''), 'amount': M(v, cur)}
                               for k, (s, v) in parts.items()],
             'my_cost_total': M(sum(totals.values()) - sum(v for _, v in parts.values()), cur),
-            'liability_id': a['liability_id'], 'match_pattern': a['match_pattern'], 'details': details}
+            'liability_id': a['liability_id'], 'match_pattern': a['match_pattern'], 'details': details,
+            **_asset_worth(a, ctx, details, stones, counted, loan, conv, sum(totals.values()) - sum(v for _, v in parts.values()))}
+
+
+def _asset_worth(a, ctx, details, stones, counted, loan, conv, my_running):
+    """Funding (own money by source, loan, interest), today's value (sold/written off, market value, depreciation or the
+    recorded one) and the "was it a good buy" verdict (engine.asset_verdict)."""
+    cur, today = a['currency'], ctx['today']
+    bought = details.get('bought_on') or a['value_as_of'] or (a['created_at'] or today)[:10]
+    own, sources = [], defaultdict(float)  # own money: (day, minor), and how much came from each account
+    for i in counted:
+        t = ctx['by_id'][i]
+        own.append((t['day'], conv(t['amount_minor'], t['currency'])))
+        sources[t['account_name'] or 'Other account'] += own[-1][1]
+    for m in stones:
+        if m['paid_on'] and not m['paid_txn_id']:
+            own.append((m['paid_on'], m['amount_minor']))
+            sources['Cash or not linked to a payment'] += m['amount_minor']
+    if details.get('paid_cash_minor'):
+        own.append((bought, details['paid_cash_minor']))
+        sources['Cash or not linked to a payment'] += details['paid_cash_minor']
+    lent = [(m['disbursed_on'], m['amount_minor']) for m in stones if m['disbursed_on'] and m['disbursed_on'] <= today]
+    if loan and not lent:  # a loan that paid for it in one go (a car loan): up to what you did not pay yourself
+        principal = conv(loan['principal_minor'] or loan['opening_balance_minor'], loan['currency'])
+        lent = [(loan['start_on'] or bought, min(principal, max(0, a['cost_minor'] - sum(v for _, v in own))) if a['cost_minor'] else principal)]
+    interest = [(p['day'], conv(p['interest'], loan['currency'])) for p in (loan['payments'] if loan else []) if p['interest']]
+    flows = own + lent + interest
+    if not any(v for _, v in own + lent) and a['cost_minor']:  # nothing recorded: the price, on the day it was bought
+        flows = [(bought, a['cost_minor'])] + interest
+    disposal, mv = details.get('disposal') or None, details.get('market_value') or None
+    dep = details.get('depreciation_pct', 15)
+    if disposal:
+        value, day, basis, note = disposal['proceeds_minor'], disposal['on'], disposal['status'], disposal.get('note') or ''
+    elif mv:
+        value, day, basis, note = mv['minor'], mv.get('as_of') or today, 'market', mv.get('source') or ''
+    elif a['kind'] == 'vehicle':
+        value, day, basis, note = engine.depreciated(a['cost_minor'], bought, today, dep), today, 'depreciation', f'{dep:g}% a year since {bought}'
+    else:
+        value, day, basis, note = a['value_minor'] or a['cost_minor'], a['value_as_of'] or today, 'recorded' if a['value_minor'] else 'cost', ''
+    cons = (loan or {}).get('construction')
+    building = a['kind'] == 'property' and (any(not (m['paid_on'] or m['paid_txn_id'] or m['disbursed_on']) for m in stones)
+                                            or bool(cons and cons['phase'] == 'pre_emi'))
+    rates = ctx['settings']['fd_rates_bp'] or {}
+    v = engine.asset_verdict(a['kind'], flows, value, day, rates.get(cur, 500), cur, building, round(my_running) if a['kind'] == 'vehicle' else 0,
+                             basis if disposal else 'owned', note)
+    return {'value': M(value, cur), 'status': disposal['status'] if disposal else 'owned', 'under_construction': building,
+            'valuation': {'value': M(value, cur), 'as_of': day, 'basis': basis, 'note': note, 'depreciation_pct': dep, 'bought_on': bought},
+            'funding': {'own': M(sum(x for _, x in own), cur), 'loan': M(sum(x for _, x in lent), cur), 'interest': M(sum(x for _, x in interest), cur),
+                        'cost_to_date': M(v['cost'], cur), 'own_sources': [{'name': k, 'amount': M(x, cur)} for k, x in sorted(sources.items(), key=lambda kv: -kv[1])]},
+            'verdict': {**{k: M(v[k], cur) for k in ('cost', 'gain', 'fd_gain', 'edge', 'net_cost')},
+                        **{k: v[k] for k in ('annual_pct', 'fd_rate_bp', 'provisional', 'tone', 'text', 'assumptions')}}}
 
 
 def _one_asset(req, id):
@@ -520,16 +570,51 @@ def asset(req):
     return _one_asset(req, req.params['id'])
 
 
+def _day(v):
+    try:
+        return date.fromisoformat(v).isoformat() == v
+    except (TypeError, ValueError):
+        return False
+
+
+_int = lambda v, hi=10 ** 15: isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= hi
+_text = lambda v, n=200: isinstance(v, str) and len(v) <= n
+DETAIL_CHECKS = {  # the details the asset pages read; other keys stay free-form (label: text or number)
+    'market_value': lambda v: isinstance(v, dict) and _int(v.get('minor')) and _day(v.get('as_of')) and _text(v.get('source', '')),
+    'disposal': lambda v: isinstance(v, dict) and v.get('status') in ('sold', 'written_off') and _day(v.get('on'))
+    and _int(v.get('proceeds_minor')) and _text(v.get('note', '')),
+    'area_sqft': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 10 ** 6,
+    'depreciation_pct': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100,
+    'bought_on': _day, 'paid_cash_minor': _int, 'builder': _text,
+    'photo_url': lambda v: _text(v, 500) and re.fullmatch(r'https://[^\s"<>]+', v) is not None,
+}
+
+
+def _details(cols, old=None):
+    """Check the known detail keys; on an edit, merge into the stored details (a key sent as null is removed)."""
+    if 'details' not in cols:
+        return cols
+    new = {**json.loads(old or '{}'), **json.loads(cols['details'])}
+    for k, v in list(new.items()):
+        if v is None:
+            del new[k]
+        elif k in DETAIL_CHECKS and not DETAIL_CHECKS[k](v):
+            raise ApiError(400, f'details.{k} is not valid')
+        elif k not in DETAIL_CHECKS and not (_text(v) or isinstance(v, (int, float))):
+            raise ApiError(400, f'details.{k} must be text or a number')
+    return {**cols, 'details': json.dumps(new)}
+
+
 @route('POST', '/api/assets')
 def asset_add(req):
-    row = req.hh.insert('assets', created_at=now(), **clean(req.hh, 'assets', req.json, True))
+    row = req.hh.insert('assets', created_at=now(), **_details(clean(req.hh, 'assets', req.json, True)))
     return 201, _one_asset(req, row['id'])
 
 
 @route('PATCH', '/api/assets/{id}')
 def asset_edit(req):
-    _get(req.hh, 'assets', req.params['id'], 'asset')
-    req.hh.update('assets', req.params['id'], **clean(req.hh, 'assets', req.json, False))
+    a = _get(req.hh, 'assets', req.params['id'], 'asset')
+    req.hh.update('assets', req.params['id'], **_details(clean(req.hh, 'assets', req.json, False), a['details']))
     return _one_asset(req, req.params['id'])
 
 
@@ -1027,7 +1112,8 @@ def claims_import(req):
 
 def settings_json(s):
     return {'salary': M(s['salary_minor'], s['salary_currency'] or 'SAR') if s['salary_minor'] else None, 'salary_day': s['salary_day'],
-            'emergency_months': s['emergency_months'], 'debt_strategy': s['debt_strategy'], 'extra_to_debt_minor': s['extra_to_debt_minor']}
+            'emergency_months': s['emergency_months'], 'debt_strategy': s['debt_strategy'], 'extra_to_debt_minor': s['extra_to_debt_minor'],
+            'fd_rates_bp': s['fd_rates_bp']}
 
 
 @route('GET', '/api/settings')
@@ -1045,7 +1131,8 @@ def settings_put(req):
         b['salary_minor'] = None
     checks = {'salary_minor': lambda v: isinstance(v, int) and v >= 0, 'salary_currency': lambda v: isinstance(v, str) and len(v) == 3 and v.isalpha(),
               'salary_day': lambda v: isinstance(v, int) and 1 <= v <= 31, 'emergency_months': lambda v: isinstance(v, (int, float)) and 0 <= v <= 24,
-              'debt_strategy': lambda v: v in ('avalanche', 'snowball'), 'extra_to_debt_minor': lambda v: isinstance(v, int) and v >= 0}
+              'debt_strategy': lambda v: v in ('avalanche', 'snowball'), 'extra_to_debt_minor': lambda v: isinstance(v, int) and v >= 0,
+              'fd_rates_bp': lambda v: isinstance(v, dict) and all(isinstance(c, str) and len(c) == 3 and _int(bp, 3000) for c, bp in v.items())}
     with req.db.tx():
         for k, ok in checks.items():
             if k not in b:

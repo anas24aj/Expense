@@ -214,3 +214,18 @@ SalaryEntry: `{id, member_id, member_name, from_month, amount: Money, kind, note
   `cost_total`, `sharer_totals: [{member_id, contact_id, name, amount}]` (each sharer's share_pct of matching types, `'*'` all),
   `my_cost_total`; milestones add `liability_id`, `disbursed_on` (`paid` is true for a disbursed one; `next_milestone` skips them).
 - Accounts: the web add sheet now sends an explicit `country`; edit/archive use the existing PATCH.
+
+## Asset pages (feat-asset-pages)
+
+No migration: everything lives in `assets.details` (JSON) and the `settings` table.
+- **PATCH /assets/{id}** now **merges** `details` into the stored ones; a key sent as `null` is removed. Checked keys (400 otherwise):
+  `market_value {minor, as_of, source?}`, `disposal {status sold|written_off, on, proceeds_minor, note?}`, `area_sqft`, `depreciation_pct` (0–100,
+  default 15), `bought_on`, `builder`, `photo_url` (https only), `paid_cash_minor`. Other keys stay free-form labels (text or number).
+- **Asset** adds `status` (owned|sold|written_off; `disposal` set), `under_construction` (a property with unpaid stages or a loan in pre-EMI),
+  `valuation {value, as_of, basis market|depreciation|recorded|cost|sold|written_off, note, depreciation_pct, bought_on}`,
+  `funding {own, loan, interest, cost_to_date, own_sources: [{name, amount}]}` (own = stages you paid + tagged payments + paid_cash, by account;
+  loan = disbursed tranches, or the linked loan's principal capped at the price when there are none; interest = the loan's payments' interest),
+  `verdict {cost, gain, fd_gain, edge, net_cost, annual_pct, fd_rate_bp, provisional, tone good|warn|bad|info, text, assumptions[]}` from
+  `engine.asset_verdict`. `value` follows `valuation` (disposal proceeds > market_value > vehicle depreciation > value_minor > cost).
+- **Settings** add `fd_rates_bp: {CUR: bp}` (default `{INR: 700, SAR: 500}`; other currencies 500): the verdict's FD yardstick.
+- Web: Assets is a top-level tab at `/assets` (`/more/assets[/id]` redirect). Home alert links for a property's loan use `/assets/{id}`.

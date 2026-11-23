@@ -235,12 +235,37 @@ const assets: Asset[] = [
       M('Brickwork', onDay(7, 1), 920000, false), M('Flooring & finishes', onDay(13, 1), 920000, false), M('Handover', onDay(18, 1), 910000, false)],
     next_milestone: null, monthly_cost: INR(42300), my_monthly_cost: INR(42300),
     costs_by_type: { 'Loan EMI': INR(39500), Maintenance: INR(0), 'Property tax': INR(800), Insurance: INR(2000) }, sharers: [], liability_id: 'l1',
-    details: { Builder: 'Riverside Developers', City: 'Kochi, Kerala', 'Carpet area': '1,420 sq ft', Possession: 'Mar 2028', 'Paid in cash': '₹18,50,000', 'Paid by loan': '₹33,00,000' } },
+    details: { builder: 'Riverside Developers', bought_on: '2023-02-14', area_sqft: 1420, City: 'Kochi, Kerala', Possession: 'Mar 2028',
+      market_value: { minor: 980000000, as_of: day(-12), source: '₹6,900 a sq ft × 1,420 sq ft, resale listings in the project' } },
+    status: 'owned', under_construction: true,
+    valuation: { value: INR(9800000), as_of: day(-12), basis: 'market', note: '₹6,900 a sq ft × 1,420 sq ft, resale listings in the project', depreciation_pct: 15, bought_on: '2023-02-14' },
+    funding: { own: INR(5150000), loan: INR(3300000), interest: INR(486000), cost_to_date: INR(8936000),
+      own_sources: [{ name: 'Canara savings', amount: INR(3300000) }, { name: 'Cash or not linked to a payment', amount: INR(1850000) }] },
+    verdict: { cost: INR(8936000), gain: INR(864000), fd_gain: INR(1218000), edge: INR(-354000), net_cost: INR(-864000), annual_pct: 4.6, fd_rate_bp: 700, provisional: true, tone: 'warn',
+      text: 'Provisional, still under construction: okay, not great: up INR 864,000 (+4.6% a year), but a 7% FD on the same money would have earned INR 1,218,000, INR 354,000 more. An unfinished flat\'s value is an estimate and stages are still to pay, so this can change a lot by handover.',
+      assumptions: ['Value INR 9,800,000 on ' + day(-12) + ' (₹6,900 a sq ft × 1,420 sq ft, resale listings in the project)', 'Cost counts your own money, the loan\'s payouts and interest paid, each from the day it went in',
+        'The FD pays 7% a year, compounded yearly, before tax', 'Leaves out rent saved or earned, tax benefits and selling costs unless you add them as costs'] } },
   { id: 'as2', kind: 'vehicle', name: 'Toyota Camry 2023', currency: 'SAR', cost: SAR(118000), value: SAR(92000), paid: SAR(54800), financed: SAR(96000),
     remaining: SAR(41200), milestones: [], next_milestone: null, monthly_cost: SAR(3237), my_monthly_cost: SAR(2917),
     costs_by_type: { Fuel: SAR(640), Service: SAR(180), Insurance: SAR(267), 'Loan EMI': SAR(2150) },
     sharers: [{ cost_type: 'Fuel', name: 'Sameer Khan', contact_id: 'c3', share_pct: 50 }], liability_id: 'l2',
-    details: { Plate: 'RUH 4821', Odometer: '38,420 km', 'Next service': 'Jan 2027', Insurance: 'Tawuniya, renews Mar' } },
+    details: { builder: 'Toyota', bought_on: '2023-07-28', Plate: 'RUH 4821', Odometer: '38,420 km', 'Next service': 'Jan 2027', Insurance: 'Tawuniya, renews Mar' },
+    status: 'owned', valuation: { value: SAR(92000), as_of: day(0), basis: 'depreciation', note: '15% a year since 2023-07-28', depreciation_pct: 15, bought_on: '2023-07-28' },
+    funding: { own: SAR(22000), loan: SAR(96000), interest: SAR(9800), cost_to_date: SAR(127800), own_sources: [{ name: 'Al Rajhi current', amount: SAR(22000) }] },
+    verdict: { cost: SAR(127800), gain: SAR(-35800), fd_gain: SAR(21400), edge: SAR(-57200), net_cost: SAR(54100), annual_pct: -10.2, fd_rate_bp: 500, provisional: false, tone: 'bad',
+      text: 'Worth about SAR 92,000 against SAR 127,800 paid with interest: SAR 35,800 less (-10.2% a year). With SAR 18,300 of running costs, owning it has cost you SAR 54,100 net. The same money in a 5% FD would have earned SAR 21,400.',
+      assumptions: ['Value SAR 92,000 on ' + day(0) + ' (15% a year since 2023-07-28)', 'Cost counts your own money, the loan\'s payouts and interest paid, each from the day it went in',
+        'The FD pays 5% a year, compounded yearly, before tax', 'Leaves out rent saved or earned, tax benefits and selling costs unless you add them as costs'] } },
+  { id: 'as5', kind: 'vehicle', name: 'Toyota Fortuner 2024', currency: 'SAR', cost: SAR(152000), value: SAR(80000), paid: SAR(12000), financed: SAR(140000),
+    remaining: SAR(0), milestones: [], next_milestone: null, monthly_cost: SAR(0), my_monthly_cost: SAR(0), costs_by_type: {}, sharers: [], liability_id: null,
+    cost_totals: { fuel: SAR(4200), service: SAR(900) }, cost_total: SAR(5100), my_cost_total: SAR(5100), costs: [],
+    details: { builder: 'Toyota', bought_on: '2025-01-12', disposal: { status: 'written_off', on: '2026-06-03', proceeds_minor: 8000000, note: 'Tawuniya payout after the accident' } },
+    status: 'written_off', valuation: { value: SAR(80000), as_of: '2026-06-03', basis: 'written_off', note: 'Tawuniya payout after the accident', depreciation_pct: 15, bought_on: '2025-01-12' },
+    funding: { own: SAR(12000), loan: SAR(140000), interest: SAR(11200), cost_to_date: SAR(163200), own_sources: [{ name: 'Al Rajhi current', amount: SAR(12000) }] },
+    verdict: { cost: SAR(163200), gain: SAR(-83200), fd_gain: SAR(11100), edge: SAR(-94300), net_cost: SAR(88300), annual_pct: -40.1, fd_rate_bp: 500, provisional: false, tone: 'bad',
+      text: 'Written off: it cost SAR 163,200 with interest and brought back SAR 80,000, a loss of SAR 83,200 (-40.1% a year). With SAR 5,100 of running costs, owning it has cost you SAR 88,300 net. The same money in a 5% FD would have earned SAR 11,100.',
+      assumptions: ['Value SAR 80,000 on 2026-06-03 (Tawuniya payout after the accident)', 'Cost counts your own money, the loan\'s payouts and interest paid, each from the day it went in',
+        'The FD pays 5% a year, compounded yearly, before tax', 'Leaves out rent saved or earned, tax benefits and selling costs unless you add them as costs'] } },
   { id: 'as3', kind: 'investment', name: 'HDFC NRE fixed deposit', currency: 'INR', cost: INR(500000), value: INR(538400), paid: INR(500000), financed: INR(0),
     remaining: INR(0), milestones: [], next_milestone: null, monthly_cost: INR(0), my_monthly_cost: INR(0), costs_by_type: {}, sharers: [], liability_id: null,
     details: { Rate: '7.10%', Matures: 'Aug 2027', 'Tax': 'Tax-free (NRE)' } },
@@ -375,6 +400,7 @@ on('GET', '/ingest/log', () => ({ items: [
   { at: day(-1) + 'T19:40:00Z', device: 'Priya’s Pixel', sender: 'HDFCBK', outcome: 'duplicate' }] }));
 
 on('GET', '/liabilities', () => ({ items: liabilities }));
+on('GET', '/liabilities/{id}', m => liabilities.find(x => x.id === m[1]));
 const liab = (l: Liability, b: any): Liability => {  // the fields LoanSheet sends, in the response shape
   const cur = b.currency || l.currency, M = (v: number | undefined, d: Money) => (v === undefined ? d : { minor: v, currency: cur });
   const principal = M(b.principal_minor, l.principal);
@@ -406,6 +432,15 @@ on('POST', '/funds', (_m, b) => { const f: Fund = { id: id(), name: b.name, targ
 on('POST', '/funds/{id}/move', (m, b) => { const f = funds.find(x => x.id === m[1])!; f.saved = { ...f.saved, minor: f.saved.minor + b.amount_minor }; return f; });
 on('GET', '/assets', () => ({ items: assets }));
 on('GET', '/assets/{id}', m => assets.find(a => a.id === m[1]));
+on('PATCH', '/assets/{id}', (m, b) => {  // details merge like the server (null removes a key); the verdict is not recomputed here
+  const a = assets.find(x => x.id === m[1])!;
+  if (b.details) { a.details = { ...a.details, ...b.details }; for (const k of Object.keys(a.details)) if (a.details[k] === null) delete a.details[k]; }
+  const mv = a.details.market_value, d = a.details.disposal;
+  if (d) { a.status = d.status; a.value = { minor: d.proceeds_minor, currency: a.currency }; } else a.status = 'owned';
+  if (!d && mv) a.value = { minor: mv.minor, currency: a.currency };
+  if (a.valuation) a.valuation = { ...a.valuation, value: a.value, basis: d ? d.status : mv ? 'market' : a.valuation.basis, as_of: d?.on || mv?.as_of || a.valuation.as_of, note: d?.note || mv?.source || '' };
+  return a;
+});
 on('POST', '/assets/{id}/costs', (m, b) => { if (!b.txn_id || !b.cost_type) throw new Err(400, 'cost_type is required (fuel, service, insurance…)'); return assets.find(a => a.id === m[1]); });
 on('POST', '/assets', (_m, b) => { const M0 = { minor: 0, currency: b.currency }; const a: Asset = { id: id(), kind: b.kind, name: b.name, currency: b.currency, cost: { minor: b.cost_minor || 0, currency: b.currency },
   value: { minor: b.value_minor || 0, currency: b.currency }, paid: M0, financed: M0, remaining: M0, milestones: [], next_milestone: null, monthly_cost: M0, my_monthly_cost: M0,

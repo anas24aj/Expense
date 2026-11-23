@@ -15,7 +15,7 @@ export function MorePage({ me }: { me: Me }) {
   const qc = useQueryClient();
   const signOut = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); qc.clear(); nav('/signin', { replace: true }); };
   const rows: [string, string, string, string, string?][][] = [
-    [['/more/accounts', 'Accounts & cards', 'bank', '#0a84ff', 'Balances and card limits'], ['/more/assets', 'Property, vehicles & investments', 'building', '#a2845e'], ['/more/flows', 'Money flow', 'chart', '#bf5af2', 'Income → accounts → spending'], ['/more/trips', 'Trips', 'plane', '#32ade6', 'Business trips and what to claim']],
+    [['/more/accounts', 'Accounts & cards', 'bank', '#0a84ff', 'Balances and card limits'], ['/more/flows', 'Money flow', 'chart', '#bf5af2', 'Income → accounts → spending'], ['/more/trips', 'Trips', 'plane', '#32ade6', 'Business trips and what to claim']],
     [['/more/import', 'Import statements', 'upload', '#30b0c7', 'PDF, Excel or CSV'], ['/more/devices', 'Phones & Shortcut', 'phone', '#34c759', 'Send bank SMS automatically'], ['/more/claude', 'Connect Claude', 'sparkle', '#d97757', 'Ask questions about your money']],
     [['/more/household', 'Household & members', 'family', '#ff375f', me.household.name], ['/more/profile', 'Profile & password', 'person', '#8e8e93'], ['/more/settings', 'Settings', 'gear', '#636366', 'Salary, currencies, timezone']],
   ];
@@ -214,7 +214,7 @@ export function AssetsPage() {
   const q = useApi<{ items: Asset[] }>('/assets');
   const [adding, setAdding] = useState(false);
   return (
-    <Page title="What you own" back="/more" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add property, vehicle or investment"><Icon name="plus" /></button>}>
+    <Page title="Assets" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add property, vehicle or investment"><Icon name="plus" /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !q.data!.items.length
         ? <EmptyState icon="building" title="Nothing yet" text="Property, vehicles and investments show here." action={<button className="btn" onClick={() => setAdding(true)}><Icon name="plus" />Add one</button>} /> : (
         (['property', 'vehicle', 'investment'] as const).map(k => {
@@ -223,9 +223,11 @@ export function AssetsPage() {
           return (
             <Section key={k} title={{ property: 'Property', vehicle: 'Vehicles', investment: 'Investments' }[k]}>
               <List>{items.map(a => (
-                <ListRow key={a.id} to={`/more/assets/${a.id}`} icon={<Tile icon={ASSET_TILE[k][0]} color={ASSET_TILE[k][1]} />} title={a.name}
-                  sub={k === 'property' ? `${Math.round(pctOf(a.paid, a.cost))}% paid · next: ${a.next_milestone?.name || '—'}` : k === 'vehicle' ? <>Costs <Money m={a.my_monthly_cost} />/mo (your share)</> : <>Invested <Money m={a.cost} compact /></>}
-                  end={<Money m={a.value} compact />} endSub={k === 'investment' && a.cost.minor ? <span className={a.value.minor >= a.cost.minor ? 'pos' : 'neg'}>{a.value.minor >= a.cost.minor ? '+' : ''}{(((a.value.minor - a.cost.minor) / a.cost.minor) * 100).toFixed(1)}%</span> : 'value'} />
+                <ListRow key={a.id} to={`/assets/${a.id}`} icon={<Tile icon={ASSET_TILE[k][0]} color={ASSET_TILE[k][1]} />} title={a.name}
+                  sub={a.status && a.status !== 'owned' ? <>{STATUS_LABEL[a.status]} · net cost <Money m={a.verdict?.net_cost} compact /></>
+                    : k === 'property' ? `${Math.round(pctOf(a.paid, a.cost))}% paid · next: ${a.next_milestone?.name || '—'}` : k === 'vehicle' ? <>Costs <Money m={a.my_monthly_cost} />/mo (your share)</> : <>Invested <Money m={a.cost} compact /></>}
+                  end={<Money m={a.value} compact />} endSub={k === 'investment' && a.cost.minor ? <span className={a.value.minor >= a.cost.minor ? 'pos' : 'neg'}>{a.value.minor >= a.cost.minor ? '+' : ''}{(((a.value.minor - a.cost.minor) / a.cost.minor) * 100).toFixed(1)}%</span>
+                    : a.verdict?.annual_pct != null && a.verdict.cost.minor ? <span className={a.verdict.annual_pct >= 0 ? 'pos' : 'neg'}>{a.verdict.annual_pct > 0 ? '+' : ''}{a.verdict.annual_pct}% a yr</span> : 'value'} />
               ))}</List>
             </Section>
           );
@@ -250,8 +252,9 @@ function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }
     try {
       const a = await add.mutateAsync({ kind, name, currency, cost_minor: toMinor(Number(cost) || 0, currency), value_minor: toMinor(Number(value || cost) || 0, currency), value_as_of: asOf,
         // a vehicle or investment is bought outright (a car loan is linked later); a property is paid in stages
-        ...(kind !== 'property' ? { details: { paid_cash_minor: toMinor(Number(cost) || 0, currency) } } : {}) });
-      toast(`${name} added`); setName(''); setCost(''); setValue(''); onClose(); nav(`/more/assets/${a.id}`);
+        details: { bought_on: asOf, ...(kind !== 'property' ? { paid_cash_minor: toMinor(Number(cost) || 0, currency) } : {}),
+          ...(value ? { market_value: { minor: toMinor(Number(value) || 0, currency), as_of: today(), source: 'Entered when added' } } : {}) } });
+      toast(`${name} added`); setName(''); setCost(''); setValue(''); onClose(); nav(`/assets/${a.id}`);
     } catch { /* shown below */ }
   };
   return (
@@ -264,7 +267,7 @@ function AddAssetSheet({ open, onClose }: { open: boolean; onClose: () => void }
           <Field label={kind === 'investment' ? 'Invested' : kind === 'property' ? 'Total cost' : 'Bought for'}><input className="input" inputMode="decimal" value={cost} onChange={e => setCost(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0" /></Field>
           <Field label="Worth now"><input className="input" inputMode="decimal" value={value} onChange={e => setValue(e.target.value.replace(/[^\d.]/g, ''))} placeholder={cost || '0'} /></Field>
         </div>
-        <Field label="Value as of"><input className="input" type="date" value={asOf} onChange={e => setAsOf(e.target.value)} /></Field>
+        <Field label="Bought on"><input className="input" type="date" value={asOf} onChange={e => setAsOf(e.target.value)} /></Field>
         {add.error && <p className="error" role="alert">{add.error.message}</p>}
         <button className="btn block" disabled={!name.trim() || add.isPending} onClick={save}>Add</button>
       </div>
@@ -279,10 +282,13 @@ export function AssetPage() {
   const [stone, setStone] = useState<Milestone | 'new' | null>(null);
   const done = a?.milestones.filter(m => m.paid).length || 0;
   const byLoan = a?.milestones.filter(m => m.disbursed_on).reduce((s, m) => s + m.amount.minor, 0) || 0;
+  // free-form labels (Plate, Odometer…); the keys the page reads itself are shown in their own cards
+  const labels = Object.entries(a?.details || {}).filter(([k, v]) => !DETAIL_KEYS.includes(k) && (typeof v !== 'object' || v === null));
   return (
-    <Page title={a?.name || 'Asset'} back="/more/assets">
+    <Page title={a?.name || 'Asset'} back="/assets">
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : a && (
         <div className="grid-desktop stack">
+          <AssetHeader a={a} />
           <section className="glass hero span-2 row-flex" style={{ gap: 18 }}>
             <ProgressRing pct={pctOf(a.paid, a.cost)} size={96} stroke={10} color="var(--green-fill)" />
             <div className="stack-sm" style={{ flex: 1, minWidth: 0 }}>
@@ -297,6 +303,9 @@ export function AssetPage() {
               <div className="glass card stat"><span className="k">Still to pay</span><span className="v warn"><Money m={a.remaining} compact /></span></div>
             </div>
           )}
+          {a.verdict && a.kind !== 'investment' && <VerdictCard a={a} />}
+          {a.funding && a.kind !== 'investment' && <FundingCard a={a} />}
+          {a.valuation && <ValueCard a={a} />}
           {a.kind === 'property' && <LoanCard a={a} />}
           {(a.kind === 'property' || a.milestones.length > 0) && (
             <Section title="Stages & tranches" action={<button className="link-btn" onClick={() => setStone('new')}>Add</button>}>
@@ -328,15 +337,232 @@ export function AssetPage() {
               </div>
             </Section>
           )}
-          {Object.keys(a.details).length > 0 && (
+          {labels.length > 0 && (
             <Section title="Details">
-              <dl className="kv glass card">{Object.entries(a.details).map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v ?? '—'}</dd></Fragment>)}</dl>
+              <dl className="kv glass card">{labels.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{String(v ?? '—')}</dd></Fragment>)}</dl>
             </Section>
           )}
+          {a.kind !== 'investment' && <DisposalCard a={a} />}
         </div>
       )}
       {a && <MilestoneSheet key={stone === 'new' ? 'new' : stone?.id || 'none'} a={a} m={stone === 'new' ? null : stone} open={stone !== null} onClose={() => setStone(null)} />}
     </Page>
+  );
+}
+
+const DETAIL_KEYS = ['market_value', 'disposal', 'area_sqft', 'depreciation_pct', 'bought_on', 'builder', 'photo_url', 'paid_cash_minor'];
+const TONE: Record<string, [string, string]> = { good: ['check', '#30d158'], warn: ['warn', '#ff9f0a'], bad: ['warn', '#ff453a'], info: ['info', '#0a84ff'] };
+const STATUS_LABEL = { sold: 'Sold', written_off: 'Written off' } as const;
+const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+
+/** Name, builder or maker as a monogram tile (no logos are fetched), your own photo if you added a link, and the status. */
+function AssetHeader({ a }: { a: Asset }) {
+  const [editing, setEditing] = useState(false);
+  const d = a.details, maker = d.builder || '';
+  const [tileIcon, tileColor] = ASSET_TILE[a.kind] || ['building', '#a2845e'];
+  return (
+    <section className="glass card span-2 stack-sm" style={{ padding: 0, overflow: 'hidden' }}>
+      {d.photo_url && <img src={d.photo_url} alt={`Photo of ${a.name}`} referrerPolicy="no-referrer" loading="lazy" style={{ width: '100%', height: 168, objectFit: 'cover', display: 'block' }} />}
+      <div className="row-flex" style={{ padding: '14px 16px', gap: 12 }}>
+        {maker ? <span className="icon-tile brand-tile" aria-hidden style={{ background: tileColor, color: '#fff', fontSize: 15 }}>{initials(maker)}</span> : <Tile icon={tileIcon} color={tileColor} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <b style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{maker || a.name}</b>
+          <span className="caption">{a.kind === 'property' ? (a.under_construction ? 'Under construction' : 'Property') : a.kind === 'vehicle' ? 'Vehicle' : 'Investment'}
+            {a.valuation?.bought_on ? ` · bought ${shortDate(a.valuation.bought_on)}` : ''}</span>
+        </div>
+        {a.status && a.status !== 'owned' ? <span className="badge red">{STATUS_LABEL[a.status]}</span> : <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>}
+      </div>
+      {editing && <HeaderSheet a={a} onClose={() => setEditing(false)} />}
+    </section>
+  );
+}
+
+function HeaderSheet({ a, onClose }: { a: Asset; onClose: () => void }) {
+  const [builder, setBuilder] = useState(a.details.builder || '');
+  const [photo, setPhoto] = useState(a.details.photo_url || '');
+  const [bought, setBought] = useState(a.details.bought_on || a.valuation?.bought_on || '');
+  const save = useWrite<Record<string, unknown>>('PATCH', `/assets/${a.id}`);
+  const toast = useToast();
+  const submit = async () => {
+    try { await save.mutateAsync({ details: { builder: builder.trim() || null, photo_url: photo.trim() || null, bought_on: bought || null } }); toast('Saved'); onClose(); } catch { /* shown below */ }
+  };
+  return (
+    <Sheet open onClose={onClose} title="About this asset">
+      <div className="stack">
+        <Field label={a.kind === 'vehicle' ? 'Make' : 'Builder'}><input className="input" value={builder} onChange={e => setBuilder(e.target.value)} placeholder={a.kind === 'vehicle' ? 'Toyota' : 'Shriram Properties'} /></Field>
+        <Field label="Bought on"><input className="input" type="date" value={bought} onChange={e => setBought(e.target.value)} /></Field>
+        <Field label="Photo link (https, optional)"><input className="input" type="url" inputMode="url" value={photo} onChange={e => setPhoto(e.target.value)} placeholder="https://…/my-flat.jpg" /></Field>
+        <p className="footnote">Use a photo you took and host yourself (an iCloud or Google Photos share link, for example). Uploading photos here isn’t supported yet.</p>
+        {save.error && <p className="error" role="alert">{save.error.message}</p>}
+        <button className="btn block" disabled={save.isPending || (!!photo.trim() && !photo.trim().startsWith('https://'))} onClick={submit}>Save</button>
+      </div>
+    </Sheet>
+  );
+}
+
+/** "Was it a good buy": the server's verdict, gain against an FD on the same money, and what it assumes. */
+function VerdictCard({ a }: { a: Asset }) {
+  const v = a.verdict!;
+  const [icon, color] = TONE[v.tone];
+  const ended = a.status && a.status !== 'owned';
+  return (
+    <Section title={a.kind === 'vehicle' || ended ? 'How it worked out' : 'Was it a good buy?'}>
+      <div className="glass card stack">
+        <div className="row-flex" style={{ gap: 12, alignItems: 'flex-start' }}>
+          <Tile icon={icon} color={color} />
+          <p style={{ margin: 0, flex: 1, minWidth: 0 }}>{v.text}</p>
+        </div>
+        <div className="grid-2">
+          <div className="stat"><span className="k">{v.gain.minor < 0 ? 'Loss' : 'Gain'}</span><span className={`v ${v.gain.minor < 0 ? 'neg' : 'pos'}`}><Money m={v.gain} compact sign /></span>
+            <span className="caption">{v.annual_pct === null ? '—' : `${v.annual_pct > 0 ? '+' : ''}${v.annual_pct}% a year`}</span></div>
+          <div className="stat"><span className="k">{(v.fd_rate_bp / 100).toFixed(1)}% FD instead</span><span className="v"><Money m={v.fd_gain} compact sign /></span>
+            <span className={`caption ${v.edge.minor < 0 ? 'neg' : 'pos'}`}>{v.edge.minor < 0 ? 'FD ahead by ' : 'ahead by '}{fmt({ ...v.edge, minor: Math.abs(v.edge.minor) }, { compact: true })}</span></div>
+        </div>
+        {(a.kind === 'vehicle' || ended) && <div className="between"><span>Net cost to you</span><b><Money m={v.net_cost} /></b></div>}
+        {v.provisional && <span className="badge orange" style={{ alignSelf: 'flex-start' }}>Provisional until handover</span>}
+        <details className="caption">
+          <summary>What this assumes</summary>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{v.assumptions.map(t => <li key={t}>{t}</li>)}</ul>
+          <p className="footnote" style={{ marginTop: 6 }}>Change the FD rate in <Link to="/more/settings">Settings</Link>.</p>
+        </details>
+      </div>
+    </Section>
+  );
+}
+
+/** What it has cost so far: your own money (by account) and the loan's, plus interest paid on the loan. */
+function FundingCard({ a }: { a: Asset }) {
+  const f = a.funding!;
+  const paidIn = f.own.minor + f.loan.minor;
+  return (
+    <Section title="What it has cost">
+      <div className="glass card stack">
+        <div className="between"><span className="caption">Cost to date, with interest</span><span className="caption">Price <Money m={a.cost} compact /></span></div>
+        <b className="num" style={{ fontSize: 26, letterSpacing: '-.02em' }}><Money m={f.cost_to_date} /></b>
+        <div className="meter" style={{ display: 'flex' }} role="img" aria-label={`Own money ${Math.round(pctOf(f.own, { ...f.own, minor: paidIn }))}%, loan the rest`}>
+          <i style={{ width: `${pctOf(f.own, { ...f.own, minor: paidIn })}%`, background: 'var(--green-fill)', borderRadius: 0 }} />
+          <i style={{ flex: 1, background: 'var(--tint-fill)', borderRadius: 0 }} />
+        </div>
+        <div className="grid-2">
+          <div className="stat"><span className="k"><i className="dot" style={{ background: 'var(--green-fill)' }} />Your money</span><span className="v"><Money m={f.own} compact /></span></div>
+          <div className="stat"><span className="k"><i className="dot" style={{ background: 'var(--tint-fill)' }} />By the loan</span><span className="v"><Money m={f.loan} compact /></span></div>
+        </div>
+        <div className="between"><span>Interest{a.kind === 'property' ? ' & pre-EMI' : ''} paid</span><b><Money m={f.interest} /></b></div>
+        {f.own_sources.length > 0 && (
+          <dl className="kv" style={{ fontSize: 14 }}>{f.own_sources.map(s => <Fragment key={s.name}><dt>{s.name}</dt><dd><Money m={s.amount} compact /></dd></Fragment>)}</dl>
+        )}
+        <p className="footnote">Your money is the stages you paid (from the linked payments, or marked paid) and payments tagged to this {a.kind}. The loan part is what the bank disbursed. Interest comes from the loan’s payments.</p>
+      </div>
+    </Section>
+  );
+}
+
+const BASIS: Record<string, string> = { market: 'Your market estimate', depreciation: 'Estimated by depreciation', recorded: 'Value you recorded', cost: 'At cost (no value yet)', sold: 'Sold for', written_off: 'Paid out (written off)' };
+
+/** Today's value and where it comes from, editable: a market value (with a price per sq ft helper) or, for a vehicle, a depreciation rate. */
+function ValueCard({ a }: { a: Asset }) {
+  const [editing, setEditing] = useState(false);
+  const v = a.valuation!;
+  const ended = a.status && a.status !== 'owned';
+  return (
+    <Section title={ended ? 'What it brought back' : 'Worth now'} action={ended ? undefined : <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>}>
+      <div className="glass card stack-sm">
+        <div className="between"><span className="caption">{BASIS[v.basis]}</span><span className="caption">{shortDate(v.as_of)}</span></div>
+        <b className="num" style={{ fontSize: 26, letterSpacing: '-.02em' }}><Money m={v.value} /></b>
+        {v.note && <span className="caption">{v.note}</span>}
+        {a.details.area_sqft ? <span className="caption">{a.details.area_sqft.toLocaleString()} sq ft · <Money m={{ ...v.value, minor: Math.round(v.value.minor / a.details.area_sqft) }} /> a sq ft</span> : null}
+        {!ended && v.basis !== 'market' && <span className="footnote">{a.kind === 'vehicle' ? 'Set your own value (a dealer quote or a Haraj listing) if you know it.' : 'Add a market value from recent sale prices nearby: nothing is looked up for you.'}</span>}
+      </div>
+      {editing && <ValueSheet a={a} onClose={() => setEditing(false)} />}
+    </Section>
+  );
+}
+
+function ValueSheet({ a, onClose }: { a: Asset; onClose: () => void }) {
+  const mv = a.details.market_value;
+  const [mode, setMode] = useState<'market' | 'depreciation'>(a.kind === 'vehicle' && !mv ? 'depreciation' : 'market');
+  const [value, setValue] = useState(mv ? String(major({ minor: mv.minor, currency: a.currency })) : '');
+  const [asOf, setAsOf] = useState(mv?.as_of || today());
+  const [source, setSource] = useState(mv?.source || '');
+  const [area, setArea] = useState(a.details.area_sqft ? String(a.details.area_sqft) : '');
+  const [rate, setRate] = useState('');
+  const [dep, setDep] = useState(String(a.details.depreciation_pct ?? a.valuation?.depreciation_pct ?? 15));
+  const save = useWrite<Record<string, unknown>>('PATCH', `/assets/${a.id}`);
+  const toast = useToast();
+  const useRate = () => { const v = Number(rate) * Number(area); if (v > 0) { setValue(String(Math.round(v))); if (!source) setSource(`${a.currency} ${Number(rate).toLocaleString()} a sq ft × ${Number(area).toLocaleString()} sq ft`); } };
+  const submit = async () => {
+    const details: Record<string, unknown> = { area_sqft: Number(area) > 0 ? Number(area) : null };
+    if (mode === 'market') details.market_value = { minor: toMinor(Number(value) || 0, a.currency), as_of: asOf, source: source.trim() };
+    else { details.market_value = null; details.depreciation_pct = Math.min(100, Math.max(0, Number(dep) || 0)); }
+    try { await save.mutateAsync({ details }); toast('Value saved'); onClose(); } catch { /* shown below */ }
+  };
+  return (
+    <Sheet open onClose={onClose} title="What it’s worth">
+      <div className="stack">
+        {a.kind === 'vehicle' && <Segmented label="Value from" value={mode} onChange={setMode} options={[{ value: 'depreciation', label: 'Depreciation' }, { value: 'market', label: 'My value' }]} />}
+        {mode === 'depreciation' ? (
+          <>
+            <Field label="Loses a year (%)"><input className="input" inputMode="decimal" value={dep} onChange={e => setDep(e.target.value.replace(/[^\d.]/g, ''))} /></Field>
+            <p className="footnote">The price less this much each year since it was bought. 15% suits most cars; set the bought-on date under Edit at the top.</p>
+          </>
+        ) : (
+          <>
+            {a.kind === 'property' && (
+              <div className="glass card stack-sm">
+                <span className="caption">Helper: price per sq ft × area</span>
+                <div className="grid-2">
+                  <Field label="Area (sq ft)"><input className="input" inputMode="decimal" value={area} onChange={e => setArea(e.target.value.replace(/[^\d.]/g, ''))} placeholder="1250" /></Field>
+                  <Field label={`${a.currency} a sq ft`}><input className="input" inputMode="decimal" value={rate} onChange={e => setRate(e.target.value.replace(/[^\d.]/g, ''))} placeholder="7500" /></Field>
+                </div>
+                <button className="btn block secondary" disabled={!(Number(rate) > 0 && Number(area) > 0)} onClick={useRate}>Use {Number(rate) > 0 && Number(area) > 0 ? fmt({ minor: toMinor(Number(rate) * Number(area), a.currency), currency: a.currency }, { compact: true }) : 'this'}</button>
+              </div>
+            )}
+            <Field label={`Worth now (${a.currency})`}><input className="input" inputMode="decimal" value={value} onChange={e => setValue(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0" /></Field>
+            <Field label="As of"><input className="input" type="date" value={asOf} onChange={e => setAsOf(e.target.value)} /></Field>
+            <Field label="Source"><input className="input" value={source} onChange={e => setSource(e.target.value)} placeholder="Resale listings in the same project, broker quote…" maxLength={200} /></Field>
+          </>
+        )}
+        {save.error && <p className="error" role="alert">{save.error.message}</p>}
+        <button className="btn block" disabled={save.isPending || (mode === 'market' && !(Number(value) > 0))} onClick={submit}>Save</button>
+      </div>
+    </Sheet>
+  );
+}
+
+/** Mark it sold or written off (an insurance payout after an accident), or undo that: the final net cost shows above. */
+function DisposalCard({ a }: { a: Asset }) {
+  const d = a.details.disposal;
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<'sold' | 'written_off'>(d?.status || 'written_off');
+  const [on, setOn] = useState(d?.on || today());
+  const [amount, setAmount] = useState(d ? String(major({ minor: d.proceeds_minor, currency: a.currency })) : '');
+  const [note, setNote] = useState(d?.note || '');
+  const save = useWrite<Record<string, unknown>>('PATCH', `/assets/${a.id}`);
+  const toast = useToast();
+  const submit = async (disposal: Record<string, unknown> | null) => {
+    try { await save.mutateAsync({ details: { disposal } }); toast(disposal ? 'Saved' : 'Marked as still owned'); setOpen(false); } catch { /* shown below */ }
+  };
+  return (
+    <div className="span-2 stack-sm">
+      {d ? (
+        <List><ListRow icon={<Tile icon="receipt" color="#8e8e93" />} title={`${STATUS_LABEL[d.status]} ${shortDate(d.on)}`} sub={d.note || undefined}
+          end={<Money m={{ minor: d.proceeds_minor, currency: a.currency }} />} endSub={d.status === 'sold' ? 'sale price' : 'paid out'} onClick={() => setOpen(true)} /></List>
+      ) : <button className="btn block secondary" onClick={() => setOpen(true)}>Mark sold or written off</button>}
+      <Sheet open={open} onClose={() => setOpen(false)} title={d ? 'Sold or written off' : 'No longer yours'}>
+        <div className="stack">
+          <Segmented label="What happened" value={status} onChange={setStatus} options={[{ value: 'written_off', label: 'Written off' }, { value: 'sold', label: 'Sold' }]} />
+          <div className="grid-2">
+            <Field label={status === 'sold' ? `Sold for (${a.currency})` : `Payout (${a.currency})`}><input className="input" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value.replace(/[^\d.]/g, ''))} placeholder="0" /></Field>
+            <Field label="On"><input className="input" type="date" value={on} onChange={e => setOn(e.target.value)} /></Field>
+          </div>
+          <Field label="Note"><input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder={status === 'sold' ? 'Sold on Haraj' : 'Insurance payout after the accident'} maxLength={200} /></Field>
+          <p className="footnote">It stays here with its final net cost: what it cost with interest and running costs, less what came back. The loan stays on Plan until it’s repaid.</p>
+          {save.error && <p className="error" role="alert">{save.error.message}</p>}
+          <button className="btn block" disabled={save.isPending || amount === ''} onClick={() => submit({ status, on, proceeds_minor: toMinor(Number(amount) || 0, a.currency), note: note.trim() })}>Save</button>
+          {d && <button className="btn block danger" onClick={() => submit(null)}>Still own it (undo)</button>}
+        </div>
+      </Sheet>
+    </div>
   );
 }
 
@@ -790,6 +1016,17 @@ export function SettingsPage({ me }: { me: Me }) {
               <Segmented label="Strategy" value={s.debt_strategy} onChange={v => set({ debt_strategy: v })} options={[{ value: 'avalanche', label: 'Highest rate first' }, { value: 'snowball', label: 'Smallest first' }]} />
               <span className="caption">Emergency fund target: months of expenses</span>
               <div className="chips">{[3, 6, 9, 12].map(n => <Chip key={n} on={s.emergency_months === n} onClick={() => set({ emergency_months: n })}>{n} months</Chip>)}</div>
+            </div>
+          </Section>
+          <Section title="Comparing purchases">
+            <div className="glass card stack">
+              <div className="grid-2">{['INR', 'SAR'].map(c => (
+                <Field key={c} label={`${c} FD rate (% a year)`}>
+                  <input className="input" inputMode="decimal" defaultValue={((s.fd_rates_bp?.[c] ?? (c === 'INR' ? 700 : 500)) / 100).toString()}
+                    onBlur={e => { const bp = Math.round(Number(e.target.value) * 100); if (bp >= 0 && bp <= 3000 && bp !== s.fd_rates_bp?.[c]) set({ fd_rates_bp: { INR: 700, SAR: 500, ...s.fd_rates_bp, [c]: bp } }); }} />
+                </Field>
+              ))}</div>
+              <span className="footnote">Your assets are compared with a fixed deposit at this rate on the same money: “was it a good buy?”</span>
             </div>
           </Section>
           <Section title="Household">

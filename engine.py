@@ -275,6 +275,76 @@ def missed_months(due_day, paid_days, since, today, grace=3, back=3):
     return out
 
 
+# ---------- assets: value, return, "was it a good buy" ----------
+
+def _years(a, b):
+    return (date.fromisoformat(b) - date.fromisoformat(a)).days / 365.25
+
+
+def depreciated(cost, bought_on, today, pct=15):
+    """A vehicle's estimated value: the price less `pct`% a year (declining balance) since it was bought."""
+    return round(cost * (1 - pct / 100) ** max(0.0, _years(bought_on, today)))
+
+
+def xirr(flows):
+    """The yearly rate r at which Σ amount / (1 + r)^years = 0 for dated flows [(day, minor)] (out < 0, in > 0);
+    None when it cannot be found (no money in, or none out, or all on one day)."""
+    if not flows:
+        return None
+    d0 = min(d for d, _ in flows)
+    npv = lambda r: sum(a / (1 + r) ** _years(d0, d) for d, a in flows)
+    lo, hi = -0.9999, 100.0
+    if npv(lo) * npv(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        lo, hi = (lo, mid) if npv(lo) * npv(mid) <= 0 else (mid, hi)
+    return (lo + hi) / 2
+
+
+def asset_verdict(kind, flows, value, value_day, fd_rate_bp, cur, provisional=False, running=0, status='owned', value_note=''):
+    """Was it a good buy? `flows` [(day, minor)] is every amount put into the asset: your own money, loan tranches or
+    the loan that paid for it, and interest paid on that loan, each on its day. `value` is what it is worth on
+    `value_day` (or what selling it, or the insurer, paid). Gain = value − cost to date. The FD line is what the same
+    amounts would have earned at `fd_rate_bp` a year, compounded yearly from each one's day, before tax.
+    `running` (a vehicle's fuel, service… your share) adds to its net cost but not to the comparison."""
+    cost = sum(a for _, a in flows)
+    gain = value - cost
+    r = fd_rate_bp / 10000
+    fd_gain = round(sum(a * ((1 + r) ** max(0.0, _years(d, value_day)) - 1) for d, a in flows))
+    irr = xirr([(d, -a) for d, a in flows if a] + [(value_day, value)]) if cost > 0 else None
+    pct = None if irr is None else round(irr * 100, 1)
+    net_cost = cost + running - value
+    f, fd = (lambda m: fmt(m, cur)), f'{fd_rate_bp / 100:g}% FD'
+    yearly = '' if pct is None else f' ({pct:+g}% a year)'
+    if cost <= 0:
+        tone, text = 'info', 'Add what you paid (stages, your own payments or the loan) to see how this purchase has done.'
+    elif kind == 'vehicle' or status != 'owned':
+        ended = {'sold': 'Sold', 'written_off': 'Written off'}.get(status)
+        tone = 'bad' if gain < 0 else 'good'
+        text = (f'{ended}: it cost {f(cost)} with interest and brought back {f(value)}, a {"loss" if gain < 0 else "gain"} of {f(abs(gain))}{yearly}. '
+                if ended else f'Worth about {f(value)} against {f(cost)} paid with interest: {f(abs(gain))} {"less" if gain < 0 else "more"}{yearly}. ')
+        if running:
+            text += f'With {f(running)} of running costs, owning it has cost you {f(net_cost)} net. '
+        text += f'The same money in a {fd} would have earned {f(fd_gain)}.'
+    elif gain >= fd_gain:
+        tone, text = 'good', f'Good buy so far: worth {f(gain)} more than it has cost{yearly}, {f(gain - fd_gain)} ahead of a {fd} on the same money ({f(fd_gain)}).'
+    elif gain >= 0:
+        tone, text = 'warn', f'Okay, not great: up {f(gain)}{yearly}, but a {fd} on the same money would have earned {f(fd_gain)}, {f(fd_gain - gain)} more.'
+    else:
+        tone, text = 'bad', f'Behind: worth {f(-gain)} less than it has cost{yearly}; a {fd} on the same money would have earned {f(fd_gain)}.'
+    if provisional and status == 'owned':
+        text = 'Provisional, still under construction: ' + text[0].lower() + text[1:] + \
+               ' An unfinished flat\'s value is an estimate and stages are still to pay, so this can change a lot by handover.'
+        tone = 'info' if tone == 'good' else tone
+    assumptions = [f'Value {f(value)} on {value_day}' + (f' ({value_note})' if value_note else ''),
+                   'Cost counts your own money, the loan\'s payouts and interest paid, each from the day it went in',
+                   f'The FD pays {fd_rate_bp / 100:g}% a year, compounded yearly, before tax',
+                   'Leaves out rent saved or earned, tax benefits and selling costs unless you add them as costs']
+    return {'cost': cost, 'gain': gain, 'fd_gain': fd_gain, 'edge': gain - fd_gain, 'annual_pct': pct, 'net_cost': net_cost,
+            'fd_rate_bp': fd_rate_bp, 'provisional': bool(provisional and status == 'owned'), 'tone': tone, 'text': text, 'assumptions': assumptions}
+
+
 def _days_in(month):
     return (date.fromisoformat(add_months(month, 1) + '-01') - timedelta(days=1)).day
 
