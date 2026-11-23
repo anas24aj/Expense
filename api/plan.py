@@ -916,7 +916,7 @@ def _claim_rows(grids):
 @route('POST', '/api/claims/import')
 def claims_import(req):
     """The company's claim sheet → a claim whose items are the matching transactions (date ± 3 days, amount within 1%,
-    3% across currencies); rows with no match come back as `unmatched`."""
+    6% across currencies); rows with no match come back as `unmatched`."""
     import statement
     b = req.json
     name = b.get('file_name') if isinstance(b.get('file_name'), str) else ''
@@ -950,7 +950,7 @@ def claims_import(req):
                 diff = abs(engine.conv(t['amount_minor'], t['currency'], cur, ctx['r']) - r['amount_minor'])
             except ValueError:  # a currency we have no rate for: that row stays unmatched
                 continue
-            tol = max(100, r['amount_minor'] * (0.01 if t['currency'] == cur else 0.03))  # FX moves a little between card and claim
+            tol = max(100, r['amount_minor'] * (0.01 if t['currency'] == cur else 0.06))  # a QAR bill on a SAR card carries ~2-5% FX fee
             if days <= 3 and diff <= tol and (best is None or (days, diff) < best[0]):
                 best = ((days, diff), t)
         out = {'row': r['row'], 'day': r['day'], 'description': r['description'], 'amount': M(r['amount_minor'], cur),
