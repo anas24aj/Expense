@@ -65,8 +65,9 @@ def ensure(db):
     import server
     key = ('domain', getattr(db, 'main_file', db.url), db.space)
     if key not in server.DB._schema_ready:
-        for s in SCHEMAS:
-            db.run(s.format(id='BIGSERIAL' if db.pg else 'INTEGER'))
+        with db.ddl_lock():
+            for s in SCHEMAS:
+                db.run(s.format(id='BIGSERIAL' if db.pg else 'INTEGER'))
         server.DB._schema_ready.add(key)
 
 

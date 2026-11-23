@@ -14,6 +14,7 @@ import sqlite3
 import ssl
 import sys
 from collections import defaultdict
+from contextlib import contextmanager
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -203,19 +204,33 @@ class DB:
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
         ready = url if space == 'public' else (url, space)
         if ready not in DB._schema_ready:  # once per process, not per request
-            if self.pg and space != 'public':
-                self.run(f'CREATE SCHEMA IF NOT EXISTS {space}')
-            self.run(schema)
-            for extra in [USERS_SCHEMA, SHARED_SCHEMA, *AUTH_SCHEMAS] if space == 'public' else []:
-                self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA, CONTACTS_SCHEMA, PEER_SCHEMA]:
-                self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
-            self.migrate()
-            DB._schema_ready.add(ready)  # before the re-read: if that fails, requests must still work and not retry it each time
-            try:
-                self.reread_amounts()
-            except Exception as e:  # a clean-up; never worth failing a request over
-                print(f'reread_amounts failed: {type(e).__name__}: {e}', file=sys.stderr)
+          with self.ddl_lock():
+              if self.pg and space != 'public':
+                  self.run(f'CREATE SCHEMA IF NOT EXISTS {space}')
+              self.run(schema)
+              for extra in [USERS_SCHEMA, SHARED_SCHEMA, *AUTH_SCHEMAS] if space == 'public' else []:
+                  self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
+              for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA, CONTACTS_SCHEMA, PEER_SCHEMA]:
+                  self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
+              self.migrate()
+              DB._schema_ready.add(ready)  # before the re-read: if that fails, requests must still work and not retry it each time
+              try:
+                  self.reread_amounts()
+              except Exception as e:  # a clean-up; never worth failing a request over
+                  print(f'reread_amounts failed: {type(e).__name__}: {e}', file=sys.stderr)
+
+    @contextmanager
+    def ddl_lock(self):
+        """Postgres' CREATE ... IF NOT EXISTS isn't safe when two requests make the same tables at once (a new person's
+        first page load fires several API calls): the loser fails on pg_type. One lock per data space serializes it."""
+        if not self.pg:
+            yield
+            return
+        self.run('SELECT pg_advisory_lock(hashtext(:s))', s=self.space)
+        try:
+            yield
+        finally:
+            self.run('SELECT pg_advisory_unlock(hashtext(:s))', s=self.space)
 
     def _enter(self):
         """Point this connection at this person's data space (pooled connections keep the last one's)."""
@@ -1564,7 +1579,8 @@ def _secret():
     if not _SECRET:
         db = DB()
         try:
-            db.run('CREATE TABLE IF NOT EXISTS app_secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            with db.ddl_lock():
+                db.run('CREATE TABLE IF NOT EXISTS app_secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
             db.run("INSERT INTO app_secrets (name, value) VALUES ('signing', :v) ON CONFLICT (name) DO NOTHING", v=secrets.token_hex(32))
             _SECRET.append(db.run("SELECT value FROM app_secrets WHERE name = 'signing'")[0]['value'])  # the first writer wins
         finally:
