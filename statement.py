@@ -26,9 +26,12 @@ HEAD = {
     'type': re.compile(r'^\s*(?:dr\s*/\s*cr|cr\s*/\s*dr|type|txn type|d/c|c/d)\s*$', re.I),
 }
 NUMBER = re.compile(r'\(?-?\d[\d,]*(?:\.\d{1,3})?\)?(?:\s*(?:cr|dr)\b)?', re.I)
-MONEY_TOKEN = re.compile(r'(?<![\w/:.-])\(?-?\d{1,3}(?:,\d{2,3})*(?:\.\d{2})\)?(?:\s{0,8}(?:cr|dr)\b)?(?![\w/:-])|(?<![\w/:.-])-?\d+\.\d{2}(?:\s{0,8}(?:cr|dr)\b)?(?![\w/:-])', re.I)
-CR_DR = re.compile(r'\b(cr|dr)\.?\s*$', re.I)
-SKIP_DESC = re.compile(r'^\s*(?:opening|closing|brought|carried)\s*(?:balance|forward)?|^\s*(?:b/f|c/f)\b|total', re.I)
+SFX = r'(?:\s{0,8}(?:cr|dr)\b|\s{1,16}[cdm]\b)?'  # 'Cr'/'Dr', or SBI Card's C/D/M (M = EMI instalment)
+MONEY_TOKEN = re.compile(rf'(?<![\w/:.-])\(?-?\d{{1,3}}(?:,\d{{2,3}})*(?:\.\d{{2}})\)?{SFX}(?![\w/:-])|(?<![\w/:.-])-?\d+\.\d{{2}}{SFX}(?![\w/:-])', re.I)
+CR_DR = re.compile(r'\b(cr|dr|c|d|m)\.?\s*$', re.I)
+SKIP_DESC = re.compile(r'^\s*(?:opening|closing|brought|carried)\s*(?:balance|forward)?|^\s*(?:b/f|c/f)\b|^\s*transfer to merchant emi\b|^\s*total(?:\s+(?:debits?|credits?|amount|withdrawals?|deposits?))?\s*:?\s*$', re.I)
+IGST = re.compile(r'^\s*IGST\s+(DB|CR)\b', re.I)  # SBI Card's undated GST lines
+RTL_ROW = re.compile(r'(\d{4}-\d\d-\d\d)\s+\d\d:\d\d:\d\d\s+\d+\s*$')  # Tiqmo: rows run right to left and end in date, time, serial
 PAGE_NOISE = re.compile(r'page\s*\d|statement of account|account (?:no|number|statement)|customer|ifsc|branch|generated on|this is a (?:computer|system)', re.I)
 MAX_ROWS = 20000
 
@@ -95,6 +98,8 @@ def _header(row):
         for key in ('type', 'balance', 'date', 'debit', 'credit', 'amount', 'desc'):
             if HEAD[key].search(text):
                 if key == 'date' and 'date' in cols:
+                    if re.search(r'transaction|txn', text, re.I) and not re.search(r'transaction|txn', str(row[cols['date']]), re.I):
+                        cols['date'] = i  # 'Transaction Date' beats an earlier 'Posting Date'
                     break  # 'Value Date' after 'Txn Date'
                 if key not in cols:
                     cols[key] = i
@@ -133,7 +138,7 @@ def rows_from_table(table):
             kind = str(cell('type') or '').strip().lower()
             raw = str(cell('amount') or '')
             direction = ('debit' if kind.startswith('d') or a < 0 or re.search(r'\bdr\.?$', raw, re.I) else
-                         'credit' if kind.startswith('c') or re.search(r'\bcr\.?$', raw, re.I) else None)
+                         'credit' if kind.startswith('c') or re.search(r'\bcr\.?$', raw, re.I) or not {'type', 'balance'} & cols.keys() else None)
             amount = abs(a)
         out.append({'day': day, 'desc': desc[:240], 'amount_minor': amount, 'direction': direction,
                     'balance_minor': minor_of(cell('balance'))})
@@ -245,14 +250,48 @@ def _columns(line):
     return cols
 
 
+def _join_wrapped_dates(lines):
+    """'12 Nov' on one line and '2026 <rest>' on the next (Barq): put the year back, keeping the columns in place."""
+    wrapped, out, i = re.compile(rf'(\s*\d{{1,2}}\s+{_MON})(?![\s,-]*\d)(\s+)', re.I), [], 0
+    while i < len(lines):
+        m = wrapped.match(lines[i])
+        k = i + 1 + bool(m and i + 1 < len(lines) and re.search(r'transaction id', lines[i + 1], re.I))  # a page break puts a header between
+        nxt = re.match(r'\s*(\d{4})(?:\s+(.*))?$', lines[k]) if m and k < len(lines) else None
+        if m and nxt:
+            out.append(m.group(1) + ' ' + nxt.group(1) + m.group(2)[min(5, len(m.group(2)) - 1):] + lines[i][m.end():])
+            out += [' ' * 8 + nxt.group(2)] if nxt.group(2) else []  # the rest of the next line (an id) continues the description
+            out += lines[i + 1:k]
+            i = k + 1
+        else:
+            out.append(lines[i])
+            i += 1
+    return out
+
+
 def rows_from_lines(lines):
     """Transactions from a PDF's text lines: a line that starts with a date (after an optional serial number) and
     ends in amounts is a row; lines without a date after it continue its description. Each amount goes to the
     nearest money column of the header line; without one, the last amount is the balance."""
-    out, cols = [], {}
+    out, cols, words, stmt_day = [], {}, [], None
     start = re.compile(rf'^\s*(?:\d{{1,5}}\s+)?({DATE.pattern})', re.I)
-    for line in lines:
+    for line in _join_wrapped_dates(lines):
         text = line.translate(ARABIC_DIGITS)
+        tail = RTL_ROW.search(text)
+        if tail and len(amounts := MONEY_TOKEN.findall(text[:tail.start()])) >= 2:  # balance, amount, … date time serial
+            bal, amt = minor_of(amounts[0]), abs(minor_of(amounts[1]))
+            out.append({'day': tail.group(1), 'desc': ' '.join(words)[:240], 'amount_minor': amt, 'balance_minor': bal,
+                        'direction': 'credit' if not out and bal == amt else None})  # a wallet starts empty; later rows: by_balance
+            words = []
+            continue
+        if text.isascii() and not re.search(r'\d', text) and re.search(r'[a-z]{3}', text, re.I):
+            words = (words + [' '.join(text.split())])[-2:]
+        if not start.match(text) and (igst := IGST.match(text)) and (money := list(MONEY_TOKEN.finditer(text))):
+            if not out and stmt_day is None:  # no earlier transaction: the statement date, which follows its label
+                stmt_day = next((day_of(' '.join(lines[i + 1:i + 4])) for i, l in enumerate(lines) if re.search(r'statement date', l, re.I)), None)
+            if out or stmt_day:
+                out.append({'day': out[-1]['day'] if out else stmt_day, 'desc': ' '.join(text[:money[0].start()].split()), 'amount_minor': abs(minor_of(money[-1].group(0))),
+                            'direction': 'debit' if igst.group(1).lower() == 'db' else 'credit', 'balance_minor': None})
+            continue
         m = start.match(text)
         if not m and not MONEY_TOKEN.search(text) and len(found := _columns(text)) >= 2:
             cols = found  # the header line (again on each page)
@@ -279,7 +318,8 @@ def rows_from_lines(lines):
             centre = (tok.start() + tok.end()) / 2
             key = min(cols, key=lambda k: abs(cols[k] - centre)) if cols else None
             amounts.append((key, v, tok.group(0)))
-        if cols:
+        sbi = re.search(r'\s[cdm]$', amounts[-1][2], re.I)  # SBI Card: the amount's own C/D/M says the way, whatever the header
+        if cols and not sbi:
             for key, v, raw in amounts:
                 if key == 'balance':
                     row['balance_minor'] = abs(v) * (-1 if CR_DR.search(raw) and CR_DR.search(raw).group(1).lower() == 'dr' else 1)
@@ -289,18 +329,26 @@ def rows_from_lines(lines):
                     row['amount_minor'] = abs(v)
                     row['direction'] = 'debit' if v < 0 else 'credit' if CR_DR.search(raw) else None
         if row['amount_minor'] is None:  # no header seen: amount, then balance
-            if len(amounts) >= 2:
+            if len(amounts) >= 2 and not sbi:
                 row['amount_minor'], row['balance_minor'] = abs(amounts[-2][1]), amounts[-1][1]
                 raw = amounts[-2][2]
             else:
-                row['amount_minor'], raw = abs(amounts[0][1]), amounts[0][2]
+                row['amount_minor'], raw = abs(amounts[-1][1]), amounts[-1][2]
             if CR_DR.search(raw):
-                row['direction'] = 'debit' if CR_DR.search(raw).group(1).lower() == 'dr' else 'credit'
+                row['direction'] = 'debit' if CR_DR.search(raw).group(1).lower() in ('dr', 'd', 'm') else 'credit'
         if row['amount_minor']:
             out.append(row)
+    seen, rows = set(), []
     for r in out:
         r.pop('closed', None)
-    return out
+        pre = re.match(r'[A-Z]+\d+-', r['desc'])  # Barq: 'CSO260101-' and, after the wrap, the rest of the Transaction Id
+        tail = pre and re.search(r'\b(?=[A-Z\d]*\d)(?=[A-Z\d]*[A-Z])[A-Z\d]{8,12}\b', r['desc'][pre.end():])
+        key = tail and (pre.group(0), tail.group(0), r['amount_minor'], r['direction'])  # a refund can repeat its purchase's id
+        if key and key in seen:
+            continue
+        seen.add(key)
+        rows.append(r)
+    return rows
 
 
 def by_balance(rows):
@@ -354,7 +402,7 @@ def read_statement(data, password=None):
             rows, found = rows + got, found or header
         if not found:
             raise StatementError('no table with Date and Debit/Credit (or Amount) columns was found in this file')
-        text = '\n'.join(' '.join(str(c) for c in r if c is not None) for s in sheets for r in s[:60])
+        text = '\n'.join(' '.join(str(c) for c in r if c is not None) for s in sheets for r in s[:60] + s[60:][-60:])  # the top, and the footer notes
     if len(rows) > MAX_ROWS:
         raise StatementError(f'more than {MAX_ROWS} rows: split the statement by year')
     checked = by_balance(rows)
@@ -362,7 +410,7 @@ def read_statement(data, password=None):
         if r['direction'] is None:
             r['direction'] = 'credit' if re.search(r'\b(?:credit|cr|received|deposit|salary|refund|reversal|inward)\b|إيداع|راتب', r['desc'], re.I) else 'debit'
     t = text.lower()
-    counts = {'SAR': len(re.findall(r'\bsar\b|ريال|\bsr\b', t)), 'INR': len(re.findall(r'\binr\b|₹|\brs\.?\s', t)), 'USD': len(re.findall(r'\busd\b', t))}
+    counts = {'SAR': len(re.findall(r'\bsar\b|ريال|\bsr\b', t)), 'INR': len(re.findall(r'\binr\b|₹|\brs\.?\s|\(rs\)', t)), 'USD': len(re.findall(r'\busd\b', t))}
     currency = max(counts, key=counts.get) if max(counts.values()) else None
     return {'rows': rows, 'checked': checked, 'currency': currency, 'kind': kind}
 
