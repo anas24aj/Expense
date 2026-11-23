@@ -90,6 +90,7 @@
       <div id="rows"></div>
     </section>
     <p class="status" id="status" aria-live="polite"></p>
+    <input type="file" id="import-file" accept=".json,application/json" hidden>
   </div>
 </main>
 <script>
@@ -117,7 +118,7 @@ function draw() {
   $('people-title').textContent = `People · ${U.users.length}`;
   $('people').innerHTML = U.users.map(u => `<div class="person"><div><b>${esc(u.email)}</b>${u.username ? ` · @${esc(u.username)}` : ''}${u.space === 'public' ? ' · owner' : ''}<div class="muted">Added ${esc(u.created_at.slice(0, 10))}${u.last_seen ? ` · last sign-in ${esc(u.last_seen.slice(0, 10))}` : ' · never signed in'}</div></div>` +
     `<div class="actions"><button data-do="open" data-space="${esc(u.space)}">Open their app</button><button data-do="password" data-id="${u.id}">New password</button>` +
-    `<button data-do="key" data-id="${u.id}">New sync key</button><button class="danger" data-do="delete" data-id="${u.id}" data-owner="${u.space === 'public'}">Delete</button></div></div>`).join('')
+    `<button data-do="key" data-id="${u.id}">New sync key</button><button data-do="import" data-space="${esc(u.space)}" data-email="${esc(u.email)}">Import data</button><button class="danger" data-do="delete" data-id="${u.id}" data-owner="${u.space === 'public'}">Delete</button></div></div>`).join('')
     || '<p class="muted">No one yet.</p>';
   const was = $('space').value;
   $('space').innerHTML = U.spaces.map(s => `<option value="${esc(s)}">${esc(who(s))}</option>`).join('');
@@ -169,6 +170,9 @@ document.addEventListener('click', async e => {
       const data = !owner && confirm('Also delete ALL their data (transactions, loans, plan)? This can’t be undone.');
       U = await api('/api/admin/users/delete', { id: +b.dataset.id, data }); draw(); await tables(); say(data ? 'Deleted with their data.' : 'Sign-in removed.');
     }
+    if (b.dataset.do === 'import') {  // a 'Download all my data' file (e.g. from her old site) into this person's account
+      const f = $('import-file'); f.dataset.space = b.dataset.space; f.dataset.email = b.dataset.email; f.value = ''; f.click(); return;
+    }
     if (b.dataset.table) { table = b.dataset.table; offset = 0; await tables(); }
     if (b.dataset.page) { offset = Math.max(0, offset + 100 * +b.dataset.page); await rows(); }
     if (b.dataset.del) {
@@ -176,6 +180,25 @@ document.addEventListener('click', async e => {
       await api('/api/admin/rows/delete', { space: $('space').value, table, key: JSON.parse(b.dataset.del) }); await tables(); say('Row deleted.');
     }
   } catch (err) { say(err.message, false); }
+});
+$('import-file').addEventListener('change', async e => {
+  const f = e.target, file = f.files[0];
+  if (!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); if (!data.expense_export || !data.tables) throw 0; }
+  catch { say('That isn’t a “Download all my data” file.', false); return; }
+  if (!confirm(`Import ${file.name} into ${f.dataset.email}? Only works into an account with no transactions yet.`)) return;
+  let added = 0, first = true;
+  try {
+    for (const [table, rows] of Object.entries(data.tables)) {
+      for (let i = 0; i < Math.max(rows.length, first ? 1 : 0); i += 300) {  // small batches: the site takes up to 2 MB a request
+        const r = await api('/api/admin/import', { space: f.dataset.space, table, rows: rows.slice(i, i + 300), first });
+        added += r.added; first = false;
+        say(`Importing ${table}… ${added.toLocaleString()} rows so far`);
+      }
+    }
+    say(`Imported ${added.toLocaleString()} rows into ${f.dataset.email}.`); await tables();
+  } catch (err) { say(`Stopped: ${err.message}`, false); }
 });
 $('space').addEventListener('change', () => { offset = 0; $('rows').innerHTML = ''; table = null; tables().catch(err => say(err.message, false)); });
 load().catch(() => {});

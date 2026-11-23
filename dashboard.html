@@ -2385,8 +2385,9 @@ function settings() {
       '<label>New password again<input type="password" name="again" required minlength="8" autocomplete="new-password"></label><button class="btn">Change password</button></form>' +
       '<p class="muted small">Changing it signs you out on your other devices.</p>'
       : '<p class="muted small">The site password is set in Vercel (EXPENSE_TOKEN). Link your data to an email on the admin page to get your own password.</p>') +
-    (me.sync_key ? `<p class="muted">Your phone sync key: use it in the phone app (or the iPhone shortcut after “Bearer ”) instead of a password. Keep it private.</p><p class="key" style="font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px">${esc(me.sync_key)}</p>`
-      : '<p class="muted">Your phone app uses the site password.</p>'));
+    (me.sync_key ? `<h3 style="font-size:14px;margin:14px 0 4px">Your phone sync key</h3><p class="muted">Put it in the phone app’s password box (iPhone shortcut: after “Bearer ”). It tells this site the SMS are yours. Keep it private.</p><p class="key" style="font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px">${esc(me.sync_key)}</p><button type="button" class="btn" data-copy="${esc(me.sync_key)}">Copy sync key</button>`
+      : '<p class="muted">Your phone app uses the site password.</p>') +
+    '<p style="margin-top:14px"><a class="btn" href="/api/export" download>Download all my data</a></p><p class="muted small">Every transaction, loan, plan and setting in one file: a backup, or to move to another site.</p>');
   // Claude / ChatGPT: the MCP connector link carries this person's key, so it opens only their data.
   const mcpUrl = me?.sync_key ? `${location.origin}/mcp/${me.sync_key}` : '';
   const assistant = !me ? '' : card('Connect Claude or ChatGPT', 'MCP', mcpUrl

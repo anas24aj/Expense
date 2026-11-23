@@ -1542,6 +1542,35 @@ def admin_rows(db, table, offset=0):
     return {'table': table, 'key': ADMIN_TABLES[table], 'rows': rows, 'offset': offset}
 
 
+def table_columns(db, table):
+    return ({r['column_name'] for r in db.run("SELECT column_name FROM information_schema.columns WHERE table_name = :t AND table_schema = current_schema()", t=table)}
+            if db.pg else {r['name'] for r in db.run(f'PRAGMA table_info({table})')})
+
+
+def export_data(db):
+    """All of this person's data, table by table: to move it to another site (or keep a copy)."""
+    return {'expense_export': 1, 'tables': {t: db.run(f'SELECT * FROM {t}') for t in ADMIN_TABLES}}
+
+
+def import_rows(db, table, rows, first=False):
+    """Add exported rows into this space (ids kept, so categories, splits and links still point at the right rows).
+    Only into an empty space: the first chunk refuses one that already has transactions."""
+    if table not in ADMIN_TABLES or not isinstance(rows, list):
+        raise ValueError('unknown table')
+    if first and db.run('SELECT COUNT(*) AS n FROM transactions')[0]['n']:
+        raise ValueError('this person already has transactions: import only into an empty account')
+    cols = table_columns(db, table)
+    added = 0
+    for r in rows:
+        if not isinstance(r, dict) or not r or not set(r) <= cols:
+            raise ValueError(f'a {table} row has columns this site doesn’t know')
+        names = sorted(r)
+        added += len(db.run(f'INSERT INTO {table} ({", ".join(names)}) VALUES ({", ".join(":" + n for n in names)}) ON CONFLICT DO NOTHING RETURNING 1', **r))
+    if db.pg and 'id' in cols and rows:  # explicit ids: move the counter past them, or the next new row would clash
+        db.run(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), (SELECT MAX(id) FROM {table}))")
+    return added
+
+
 def admin_delete_row(db, table, key):
     if table not in ADMIN_TABLES or set(key) != set(ADMIN_TABLES[table]):
         raise KeyError('no such table or key')
@@ -1687,7 +1716,7 @@ def _admin(environ, method, path, query, respond, redirect):
         return redirect('/admin', admin='')
     if not admin_ok(environ):
         return respond('401 Unauthorized', {'error': 'admin sign-in needed' if _admin_password() else 'the admin page is off: set ADMIN_PASSWORD in Vercel'})
-    body = read_json(environ, MAX_BODY) if method == 'POST' else {}
+    body = read_json(environ, MAX_IMPORT_BODY if path == '/api/admin/import' else MAX_BODY) if method == 'POST' else {}
     space = body.get('space') or query.get('space') or 'public'
     if not SPACE.match(str(space)):
         return respond('400 Bad Request', {'error': 'bad space'})
@@ -1740,6 +1769,11 @@ def _admin(environ, method, path, query, respond, redirect):
             try:
                 return respond('200 OK', admin_rows(db, query.get('table', ''), int(query.get('offset') or 0)))
             except (KeyError, ValueError) as e:
+                return respond('400 Bad Request', {'error': str(e)})
+        if (method, path) == ('POST', '/api/admin/import'):
+            try:
+                return respond('200 OK', {'added': import_rows(db, str(body.get('table')), body.get('rows'), bool(body.get('first')))})
+            except (ValueError, KeyError, TypeError) as e:
                 return respond('400 Bad Request', {'error': str(e)})
         if (method, path) == ('POST', '/api/admin/rows/delete'):
             try:
@@ -2137,7 +2171,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared'), ('GET', '/api/contact/check')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared'), ('GET', '/api/contact/check'), ('GET', '/api/export')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -2282,6 +2316,8 @@ def _app(environ, start_response):
             return respond('200 OK', statements(db))
         if path == '/api/statements':
             return respond('200 OK', statements(db))
+        if path == '/api/export':  # Settings → Download all my data
+            return respond('200 OK', export_data(db), headers=[('Content-Disposition', f'attachment; filename="expense-data-{date.today().isoformat()}.json"')])
         if path == '/api/shared':
             return respond('200 OK', shared(db))
         if path == '/api/contact/check':  # while typing a friend's email: are they on this app?

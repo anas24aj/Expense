@@ -385,6 +385,32 @@ class StoreMixin:
         finally:
             fresh.close()
 
+    def test_move_a_persons_data_to_another_account(self):
+        db = self.db  # her old site's data (exported), going into her new, empty account
+        server.store_sms(db, 'B', 'SAR 45.00 paid to PANDA', '2026-10-05T10:00:00+03:00')
+        server.store_sms(db, 'B', 'SAR 12.00 paid to CAFE', '2026-10-06T10:00:00+03:00')
+        cafe = next(t for t in server.transactions(db) if t['merchant'] == 'CAFE')
+        server.set_category(db, cafe['id'], 'Food', False)
+        server.set_friend(db, cafe['id'], 'Ali', 600)
+        db.run("INSERT INTO holdings (kind, name, currency, balance_minor, as_of) VALUES ('loan', 'Car loan', 'SAR', 5000000, '2026-10-01')")
+        data = json.loads(json.dumps(server.export_data(db), default=str))  # as the downloaded file
+        new = server.DB(self.url, 'u_902')
+        try:
+            for i, (table, rows) in enumerate(data['tables'].items()):
+                server.import_rows(new, table, rows, first=i == 0)
+            moved = {t['merchant']: (t['category'], t['friend']) for t in server.transactions(new)}
+            self.assertEqual(moved, {'PANDA': ('Groceries', ''), 'CAFE': ('Food', 'Ali')})  # categories and splits still point at the right rows
+            self.assertEqual([h['name'] for h in new.run('SELECT name FROM holdings')], ['Car loan'])
+            server.store_sms(new, 'B', 'SAR 1.00 paid to NEXT', '2026-10-07T10:00:00+03:00')  # new rows after the imported ids
+            self.assertEqual(len(server.transactions(new)), 3)
+            with self.assertRaisesRegex(ValueError, 'empty account'):
+                server.import_rows(new, 'transactions', data['tables']['transactions'], first=True)
+            with self.assertRaisesRegex(ValueError, 'columns'):
+                server.import_rows(new, 'holdings', [{'name': 'x', 'evil; DROP TABLE holdings': 1}])
+        finally:
+            server.drop_space(db, 'u_902')
+            new.close()
+
     def test_card_limit_is_kept(self):
         db = self.db
         server.save_holding(db, {'id': None, 'kind': 'card', 'name': 'Visa card', 'currency': 'SAR', 'balance_minor': 820000, 'rate_bp': 0, 'emi_minor': 0,
