@@ -95,6 +95,20 @@ Save, then send yourself a test SMS such as `Rs 1 paid to TEST`. It should appea
 | GET/POST | `/login` | Login page / sign in with field `password` |
 | POST | `/logout` | Sign out |
 
+## Your own login
+
+Make a login for your email without choosing a password anywhere in code or config:
+
+```sh
+python -m api.create_user you@example.com https://your-site.example   # prints a one-time link; open it and choose your password
+```
+
+With `DATABASE_URL` set it works on the live database; otherwise it uses the local `expense.db`. The first account made owns the data that existed before accounts.
+
+## Trips and travel claims
+
+`api/trips.py` (`/api/trips`), `trips.html`, migration `api/migrations/002_trips.sql`. Import a claim workbook (simple list or Pack lists) with `python -m api.claims <household_id> <trip_id> <file.xlsx>`, or upload it on the trips page.
+
 ## Running locally
 
 Uses only the Python 3.12+ standard library, plus `pg8000` if you want Postgres:

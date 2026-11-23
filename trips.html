@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Trips · Expenses</title>
+<link rel="icon" href="/icon-192.png">
+<style>
+  :root { --bg: #f7f7f8; --card: #fff; --text: #1d1d1f; --muted: #6b6b70; --line: #d4d4d8; --accent: #15803d; --accent-text: #fff; --error: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111113; --card: #1c1c1f; --text: #ececee; --muted: #9a9aa1; --line: #3a3a40; --accent: #4ade80; --accent-text: #052e16; --error: #f87171; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0 0 12px; } h2 { font-size: 16px; margin: 0 0 8px; }
+  input, select, button { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+  button { background: var(--accent); color: var(--accent-text); border: 0; font-weight: 600; cursor: pointer; }
+  button.link { background: none; color: var(--accent); padding: 0; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; } td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .muted { color: var(--muted); font-size: 14px; } .err { color: var(--error); } .n { text-align: right; white-space: nowrap; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Trips</h1>
+  <section><form id="new">
+    <input name="name" placeholder="Name" required aria-label="Name">
+    <input name="city" placeholder="City" aria-label="City"><input name="country" placeholder="Country" aria-label="Country">
+    <input name="start_on" type="date" required aria-label="Start"><input name="end_on" type="date" required aria-label="End">
+    <input name="currency" placeholder="Currency (QAR)" size="6" maxlength="3" aria-label="Currency">
+    <button>Add trip</button></form><p class="err" id="err" role="alert"></p></section>
+  <div id="list"></div>
+  <div id="detail"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const money = (m) => (m / 100).toFixed(2);
+const sums = (o) => Object.entries(o || {}).filter(([, v]) => v).map(([c, v]) => `${c} ${money(v)}`).join(' · ') || '–';
+async function api(method, path, body) {
+  const r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  const j = await r.json();
+  if (r.status === 401) location.href = '/login';
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const totals = (t) => `Spent ${sums(t.spent)} · Claimed ${sums(t.claimed)} · Personal ${sums(t.personal)} · Missed ${sums(t.missed)}`;
+async function load() {
+  const { items } = await api('GET', '/trips');
+  $('list').innerHTML = items.map((t) => `<section><h2><button class="link" data-open="${t.id}">${esc(t.name)}</button></h2>
+    <div class="muted">${esc([t.city, t.country].filter(Boolean).join(', '))} ${esc(t.start_on)} to ${esc(t.end_on)} ${esc(t.currency)}</div>
+    <div>${esc(totals(t.totals))}</div></section>`).join('') || '<p class="muted">No trips yet.</p>';
+}
+function rows(list, cols) { return `<table>${list.map((x) => `<tr>${cols(x)}</tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</table>`; }
+async function open(id) {
+  const d = await api('GET', '/trips/' + id);
+  const item = (i) => `<td>${esc(i.day)}</td><td>${esc(i.vendor || i.bill_ref)} <span class="muted">${esc(i.kind)}</span></td><td class="n">QAR ${money(i.qar_minor)} / SAR ${money(i.sar_minor)}</td>`;
+  const txn = (t) => `<td>${esc(t.day)}</td><td>${esc(t.merchant || t.merchant_raw)}</td><td class="n">${esc(t.currency)} ${money(t.amount_minor)}</td>`;
+  $('detail').innerHTML = `<section><h2>${esc(d.name)}</h2><p>${esc(totals(d.totals))}</p>
+    <label class="muted">Import a claim workbook <input type="file" id="file" accept=".xlsx"></label></section>
+    <section><h2>Matched (${d.matched.length})</h2>${rows(d.matched, (m) => txn(m.txn) + `<td class="muted">${esc(m.item.vendor || m.item.bill_ref)}</td>`)}</section>
+    <section><h2>Not claimed (${d.unclaimed.length})</h2>${rows(d.unclaimed, (t) => txn(t) + `<td><select data-tag="${t.id}" aria-label="Tag">${
+      [['', 'Untagged'], ['personal', 'Personal'], ['missed_claim', 'Missed claim']].map(([v, l]) => `<option value="${v}"${v === t.tag ? ' selected' : ''}>${l}</option>`).join('')}</select></td>`)}</section>
+    <section><h2>Claimed, no transaction (${d.unmatched_items.length})</h2>${rows(d.unmatched_items, item)}</section>`;
+  $('detail').dataset.id = id;
+}
+document.addEventListener('click', (e) => { if (e.target.dataset.open) open(e.target.dataset.open); });
+document.addEventListener('change', async (e) => {
+  const id = $('detail').dataset.id;
+  try {
+    if (e.target.dataset.tag) { await api('POST', `/trips/${id}/tag`, { txn_id: e.target.dataset.tag, status: e.target.value }); await open(id); await load(); }
+    if (e.target.id === 'file' && e.target.files[0]) {
+      const f = e.target.files[0], b = btoa(String.fromCharCode(...new Uint8Array(await f.arrayBuffer())));
+      await api('POST', `/trips/${id}/claims/import`, { file_name: f.name, data_base64: b }); await open(id); await load();
+    }
+  } catch (x) { $('err').textContent = x.message; }
+});
+$('new').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('err').textContent = '';
+  try { await api('POST', '/trips', Object.fromEntries(new FormData(e.target))); e.target.reset(); await load(); } catch (x) { $('err').textContent = x.message; }
+});
+load().catch((x) => { $('err').textContent = x.message; });
+</script>
+</body>
+</html>

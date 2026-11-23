@@ -7,6 +7,7 @@ import unittest
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import server
+from api import create_user
 
 TOKEN = 'test-token-1234567890'
 
@@ -107,6 +108,28 @@ class AuthTest(unittest.TestCase):
             pub.close()
         self.assertEqual(self.form('/reset', t=token, password='late-pass-123')[0], '/reset?error=expired')
         self.assertEqual(self.form('/reset', t='made-up', password='late-pass-123')[0], '/reset?error=expired')
+
+    def test_change_password(self):
+        _, cookie = self.signup()
+        change = lambda cur, new: self.call('POST', '/api/me/password', json.dumps({'current': cur, 'new': new}).encode(), cookie=cookie)
+        self.assertEqual(change('wrong-pass-123', 'brand-new-pass')[0], 400)  # current password checked
+        self.assertEqual(change('new-pass-123', 'short')[0], 400)
+        self.assertEqual(change('new-pass-123', 'brand-new-pass')[0], 200)
+        fresh = self.headers['Set-Cookie'].split(';')[0]
+        self.assertEqual(self.call('GET', '/api/me', cookie=fresh)[0], 200)  # this device stays in
+        self.assertEqual(self.call('GET', '/api/me', cookie=cookie)[0], 401)  # others are signed out
+        self.assertEqual(self.form('/login', email='new@example.com', password='new-pass-123')[0], '/login?error=1')
+        self.assertEqual(self.form('/login', email='new@example.com', password='brand-new-pass')[0], '/')
+
+    def test_create_user_cli_lets_the_owner_choose_the_password(self):
+        link = create_user.create(' Owner@Example.com ', 'https://expense.test')
+        token = parse_qs(urlparse(link).query)['t'][0]
+        self.assertEqual(self.form('/login', email='owner@example.com', password='')[0], '/login?error=1')
+        location, cookie = self.form('/reset', t=token, password='chosen-by-owner-1')
+        self.assertEqual(location, '/')
+        me = json.loads(self.call('GET', '/api/me', cookie=cookie)[1])
+        self.assertEqual((me['email'], me['owner']), ('owner@example.com', True))  # the first account owns the existing data
+        self.assertEqual(create_user.create('owner@example.com', 'https://expense.test') is not None, True)  # again: just a new link
 
     def test_device_keys(self):
         _, cookie = self.signup()
