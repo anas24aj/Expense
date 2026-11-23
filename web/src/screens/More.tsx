@@ -17,7 +17,8 @@ export function MorePage({ me }: { me: Me }) {
   const rows: [string, string, string, string, string?][][] = [
     [['/people', 'People', 'people', '#ff9f0a', 'Who owes whom, family, roommate, settle up'], ['/accounts', 'Accounts & property', 'bank', '#0a84ff', 'India and Saudi, cards, loans, flats, car'], ['/money', 'Money moved', 'transfer', '#5e5ce6', 'Saudi → India, card payments, family, people'],
       ['/trips', 'Trips & claims', 'plane', '#32ade6', 'Work and personal trips, what the company owes']],
-    [['/more/import', 'Import statements', 'upload', '#30b0c7', 'PDF, Excel or CSV'], ['/more/devices', 'Phones & Shortcut', 'phone', '#34c759', 'Send bank SMS automatically'], ['/more/claude', 'Connect Claude', 'sparkle', '#d97757', 'Ask questions about your money']],
+    [['/more/import', 'Import statements', 'upload', '#30b0c7', 'PDF, Excel or CSV'], ['/more/devices', 'Phones & Shortcut', 'phone', '#34c759', 'Send bank SMS automatically'], ['/more/claude', 'Connect Claude', 'sparkle', '#d97757', 'Ask questions about your money'],
+      ['/install', 'Install on your phone', 'download', '#0a84ff', 'Home Screen app for iPhone and Android']],
     [['/more/household', 'Household & members', 'family', '#ff375f', me.household.name], ['/more/profile', 'Profile & password', 'person', '#8e8e93'], ['/more/settings', 'Settings', 'gear', '#636366', 'Salary, currencies, timezone']],
   ];
   return (

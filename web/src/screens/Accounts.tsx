@@ -3,7 +3,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
 import type { Account, Asset, CardView, Coverage, HouseholdFull, Liability, Member, NetWorth, Person, Txn, UsedBy } from '../api/types';
 import { fmt, monthLabel, shortDate } from '../lib/format';
-import { Avatar, BarChart, BrandTile, brandOf, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
+import { Avatar, BrandTile, MiniBars, brandOf, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { FLAG } from './Home';
 import { AddAccountSheet, AddAssetSheet, ASSET_TILE, EditAccountSheet, KIND_LABEL, KIND_TILE, countryOf } from './More';
@@ -301,7 +301,9 @@ function CardDetails({ id }: { id: string }) {
       </Section>
       <Section title="Spent on this card, 6 months">
         <div className="glass card stack-sm">
-          <BarChart data={c.months.map(m => ({ month: m.month, value: m.spent.minor / 100 }))} highlight={c.months.length - 1} height={120} />
+          <MiniBars items={c.months.map(m => ({ label: monthLabel(m.month), value: m.spent.minor / 100 }))} format={v => fmt({ minor: Math.round(v * 100), currency: c.currency }, { compact: true })} label="Card spending by month" />
+          {lostTotal > 0 && <><span className="caption">Lost to interest &amp; fees</span>
+            <MiniBars items={c.months.map(m => ({ label: monthLabel(m.month), value: m.lost.minor / 100, color: 'var(--red-fill)' }))} height={80} format={v => fmt({ minor: Math.round(v * 100), currency: c.currency }, { compact: true })} label="Interest and fees by month" /></>}
           <div className="table-wrap"><table className="look">
             <thead><tr><th>Month</th><th>Spent</th><th>Paid</th><th>Lost</th></tr></thead>
             <tbody>{c.months.map(m => <tr key={m.month}><td>{monthLabel(m.month)}</td><td>{fmt(m.spent, { compact: true })}</td><td>{fmt(m.paid, { compact: true })}</td>

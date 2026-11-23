@@ -4,31 +4,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError, qs, useApi } from '../api/client';
 import type { MonthInsight, Payoff, Txn } from '../api/types';
 import { fmt, monthLabel, shiftMonth, thisMonth } from '../lib/format';
-import { AreaChart, BarChart, EmptyState, ErrorCard, Icon, List, ListRow, Money, Page, PageSkeleton, Section, Toggle } from '../ui';
+import { AreaChart, BarRow, CHART_COLORS, Donut, EmptyState, ErrorCard, Icon, List, ListRow, MiniBars, Money, Page, PageSkeleton, Section, Toggle } from '../ui';
+import type { ChartItem } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 
-// shortcut: swap for ui/Chart once glass merges (same props: {items:[{label,value,color?}]})
-const PALETTE = ['#0a84ff', '#30d158', '#ff9f0a', '#bf5af2', '#ff375f', '#64d2ff', '#ffd60a', '#5e5ce6', '#ac8e68', '#8e8e93'];
-const LOSS_COLOR = '#ff453a';
-type Item = { label: string; value: number; color?: string };
-function Donut({ items, center }: { items: Item[]; center?: React.ReactNode }) {
-  const total = items.reduce((a, x) => a + Math.max(0, x.value), 0) || 1, r = 52, c = 2 * Math.PI * r;
-  let at = 0;
-  return (
-    <div style={{ position: 'relative', width: 180, height: 180, margin: '0 auto' }}>
-      <svg viewBox="0 0 140 140" width={180} height={180} role="img" aria-label={items.map(x => `${x.label} ${Math.round(100 * x.value / total)}%`).join(', ')}>
-        <circle cx="70" cy="70" r={r} fill="none" stroke="var(--hairline)" strokeWidth="18" />
-        {items.map((x, i) => {
-          const len = c * Math.max(0, x.value) / total, off = at;
-          at += len;
-          return <circle key={x.label} cx="70" cy="70" r={r} fill="none" stroke={x.color || PALETTE[i % PALETTE.length]} strokeWidth="18"
-            strokeDasharray={`${Math.max(0, len - 1.5)} ${c}`} strokeDashoffset={-off} transform="rotate(-90 70 70)" />;
-        })}
-      </svg>
-      {center && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', textAlign: 'center' }}>{center}</div>}
-    </div>
-  );
-}
+const LOSS = 'var(--red-fill)';
 
 const pct = (now: number, then: number) => (then ? Math.round(100 * (now - then) / then) : null);
 function Delta({ now, then, good = 'down' }: { now: number; then: number; good?: 'up' | 'down' }) {
@@ -63,10 +43,14 @@ export default function MonthPage() {
 function MonthBody({ m, ym }: { m: MonthInsight; ym: string }) {
   const cur = m.currency, loss = m.loss, last = m.last_month;
   const cats = m.by_category.filter(c => c.amount.minor > 0);
-  const items: Item[] = [...cats.slice(0, 8).map((c, i) => ({ label: c.category, value: c.amount.minor, color: PALETTE[i] })),
-    ...(cats.length > 8 ? [{ label: 'Other', value: cats.slice(8).reduce((a, c) => a + c.amount.minor, 0), color: PALETTE[9] }] : []),
-    ...(loss && loss.total.minor ? [{ label: 'Lost to fees & interest', value: loss.total.minor, color: LOSS_COLOR }] : [])];
-  const top = Math.max(1, ...cats.map(c => c.amount.minor));
+  const nav = useNavigate();
+  const color = (i: number) => CHART_COLORS[Math.min(i, 8)];
+  const LOST = 'Lost to fees & interest';
+  const items: ChartItem[] = [...cats.slice(0, 8).map((c, i) => ({ label: c.category, value: c.amount.minor / 100, color: color(i) })),
+    ...(cats.length > 8 ? [{ label: 'Other', value: cats.slice(8).reduce((a, c) => a + c.amount.minor, 0) / 100, color: CHART_COLORS[9] }] : []),
+    ...(loss && loss.total.minor ? [{ label: LOST, value: loss.total.minor / 100, color: LOSS }] : [])];
+  const money = (v: number) => fmt({ minor: Math.round(v * 100), currency: cur }, { compact: true });
+  const open = (label: string) => label === LOST ? document.getElementById('lost')?.scrollIntoView({ behavior: 'smooth' }) : nav(label === 'Other' ? `/activity?month=${ym}` : `/month/${ym}/${encodeURIComponent(label)}`);
   const saved = m.saved ?? { minor: m.income.minor - m.spent.minor, currency: cur };
   if (!m.spent.minor && !m.income.minor) return <EmptyState icon="chart" title={`Nothing in ${monthLabel(ym, true)}`} text="Spending shows here by category once transactions arrive." />;
   return (
@@ -83,22 +67,17 @@ function MonthBody({ m, ym }: { m: MonthInsight; ym: string }) {
 
       <Section title="Where it went">
         <div className="glass card stack">
-          <Donut items={items} center={<div><div className="caption">Spent</div><b className="num" style={{ fontSize: 20 }}>{fmt(m.spent, { compact: true })}</b></div>} />
-          <List>
-            {cats.map((c, i) => (
-              <Link key={c.category} to={`/month/${ym}/${encodeURIComponent(c.category)}`} className="list-row" style={{ color: 'inherit', display: 'block' }}>
-                <div className="between"><span className="row-flex"><i aria-hidden style={{ width: 10, height: 10, borderRadius: 3, background: PALETTE[Math.min(i, 9)], display: 'inline-block' }} />{c.category}</span>
-                  <span className="num"><Money m={c.amount} /> {c.last && <Delta now={c.amount.minor} then={c.last.minor} />}</span></div>
-                <div className="meter" style={{ marginTop: 6 }}><i style={{ width: `${Math.max(2, 100 * c.amount.minor / top)}%`, background: PALETTE[Math.min(i, 9)] }} /></div>
-              </Link>
-            ))}
-          </List>
+          <Donut items={items} legend={false} format={money} onSelect={it => open(it.label)} label="Spending by category"
+            center={<div><div className="caption">Spent</div><b className="num count-up" style={{ fontSize: 20 }}>{fmt(m.spent, { compact: true })}</b></div>} />
+          <BarRow format={money} onSelect={it => open(it.label)} label="Spending by category, tap for its transactions"
+            items={[...cats.map((c, i) => ({ label: c.category, value: c.amount.minor / 100, color: color(i), hint: c.last ? <Delta now={c.amount.minor} then={c.last.minor} /> : undefined })),
+              ...(loss && loss.total.minor ? [{ label: LOST, value: loss.total.minor / 100, color: LOSS }] : [])]} />
         </div>
       </Section>
 
       {loss && loss.total.minor > 0 && (
         <Section title="Money lost">
-          <div className="glass card stack-sm" style={{ boxShadow: `inset 0 0 0 1.5px ${LOSS_COLOR}` }}>
+          <div id="lost" className="glass card stack-sm" style={{ boxShadow: `inset 0 0 0 1.5px ${LOSS}`, scrollMarginTop: 80 }}>
             <div className="between"><span>Interest, late fees, FX markup &amp; VAT, bank charges</span><b className="num neg">{fmt(loss.total)}</b></div>
             <p className="caption">Gone for nothing: kept apart from your spending categories. {loss.last.minor ? <>Last month <Money m={loss.last} />.</> : null}</p>
             <List>{loss.by_category.map(c => (
@@ -111,7 +90,8 @@ function MonthBody({ m, ym }: { m: MonthInsight; ym: string }) {
 
       {m.trend && (
         <Section title="Spending, last 12 months">
-          <div className="glass card"><BarChart data={m.trend.map(t => ({ month: t.month, value: t.spent.minor / 100 }))} highlight={m.trend.length - 1} /></div>
+          <div className="glass card"><MiniBars items={m.trend.map(t => ({ label: monthLabel(t.month), value: t.spent.minor / 100 }))} format={money}
+            onSelect={(_, i) => nav(`/month/${m.trend![i].month}`)} label="Spending by month" /></div>
         </Section>
       )}
 

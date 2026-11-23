@@ -2,7 +2,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useApi } from '../api/client';
 import type { Account, Commitment, Home, HouseholdFull, Items, MonthPlan, NetWorth, Payoff, Settings, Statement, Trip } from '../api/types';
 import { dueLabel, fmt, monthLabel, today } from '../lib/format';
-import { ErrorCard, Icon, List, ListRow, Money, PageSkeleton, Page, Section, StatusBadge, Tile } from '../ui';
+import { ErrorCard, Icon, InstallBanner, List, ListRow, Money, PageSkeleton, Page, Section, StatusBadge, Tile } from '../ui';
 import { DebtFreeLine } from './Month';
 
 export const KIND_ICON: Record<string, [string, string]> = {
@@ -78,6 +78,7 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
   const countries = n.countries.filter(c => c.code !== 'OTHER' || c.assets.minor || c.liabilities.minor);
   return (
     <div className="grid-desktop stack">
+      <div className="span-2"><InstallBanner /></div>
       {setup && <div className="span-2"><GetStarted steps={setup} /></div>}
 
       <Link to="/wealth" className="glass hero span-2" style={{ color: 'inherit' }} aria-label="Net worth, open assets and liabilities">

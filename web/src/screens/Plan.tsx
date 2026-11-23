@@ -67,9 +67,9 @@ function MonthPlanner() {
             <details key={kind} className="plan-group" open={kind !== 'fund'}>
               <summary className="between plan-line"><span>{label} <span className="caption">· {xs.length}</span></span><span className="num neg">−{fmt({ minor: total, currency: m.out.currency })}</span></summary>
               <List>{xs.map((l, i) => (
-                <Link key={i} to={l.link} className="list-row no-icon" style={{ minHeight: 48, opacity: l.paid ? .55 : 1 }}>
+                <Link key={i} to={l.link} className="list-row no-icon" style={{ minHeight: 48, color: l.paid ? 'var(--text-2)' : undefined }}>
                   <div className="body"><div className="title">{l.paid ? <s>{l.name}</s> : l.name}</div>
-                    <div className="sub">{[l.paid ? 'paid' : l.day ? `due ${when(l.day)}` : '', l.account_name ? `from ${l.account_name}` : '', l.counted || l.paid ? '' : 'from its fund'].filter(Boolean).join(' · ')}</div>
+                    <div className="sub" style={{ color: 'var(--text-2)' }}>{[l.paid ? 'paid' : l.day ? `due ${when(l.day)}` : '', l.account_name ? `from ${l.account_name}` : '', l.counted || l.paid ? '' : 'from its fund'].filter(Boolean).join(' · ')}</div>
                     {l.note && <div className="sub wrap warn">{l.note}</div>}</div>
                   <div className="end"><span className="amt"><Money m={l.amount} /></span></div>
                 </Link>
