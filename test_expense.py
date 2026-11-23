@@ -863,7 +863,7 @@ class StatementReaderTest(unittest.TestCase):
         rows = statement.read_statement(pdf(lines))['rows']
         self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in rows],
                          [('2026-03-19', 500, 'credit'), ('2026-03-02', 125000, 'debit'), ('2026-03-03', 200000, 'credit'),
-                          ('2026-03-04', 75000, 'debit'), ('2026-03-04', 350, 'debit')])
+                          ('2026-03-04', 350, 'debit')])  # the 'M' instalment is a grey memo line, outside the billed totals
 
     def test_pdf_locked_with_an_empty_password_opens(self):
         from reportlab.lib.pdfencrypt import StandardEncryption

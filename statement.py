@@ -26,11 +26,11 @@ HEAD = {
     'type': re.compile(r'^\s*(?:dr\s*/\s*cr|cr\s*/\s*dr|type|txn type|d/c|c/d)\s*$', re.I),
 }
 NUMBER = re.compile(r'\(?-?\d[\d,]*(?:\.\d{1,3})?\)?(?:\s*(?:cr|dr)\b)?', re.I)
-SFX = r'(?:\s{0,8}(?:cr|dr)\b|\s{1,16}[cdm]\b)?'  # 'Cr'/'Dr', or SBI Card's C/D/M (M = EMI instalment)
+SFX = r'(?:\s{0,8}(?:cr|dr)\b|\s{1,16}[cdm]\b)?'  # 'Cr'/'Dr', or SBI Card's C/D/M (M = EMI instalment, a memo line)
 MONEY_TOKEN = re.compile(rf'(?<![\w/:.-])\(?-?\d{{1,3}}(?:,\d{{2,3}})*(?:\.\d{{2}})\)?{SFX}(?![\w/:-])|(?<![\w/:.-])-?\d+\.\d{{2}}{SFX}(?![\w/:-])', re.I)
 CR_DR = re.compile(r'\b(cr|dr|c|d|m)\.?\s*$', re.I)
 SKIP_DESC = re.compile(r'^\s*(?:opening|closing|brought|carried)\s*(?:balance|forward)?|^\s*(?:b/f|c/f)\b|^\s*transfer to merchant emi\b|^\s*total(?:\s+(?:debits?|credits?|amount|withdrawals?|deposits?))?\s*:?\s*$', re.I)
-IGST = re.compile(r'^\s*IGST\s+(DB|CR)\b', re.I)  # SBI Card's undated GST lines
+IGST = re.compile(r'^\s*(?:IGST|FORGN CURR MARKUP)\s+(DB|CR)\b', re.I)  # SBI Card's undated GST and FX markup lines
 RTL_ROW = re.compile(r'(\d{4}-\d\d-\d\d)\s+\d\d:\d\d:\d\d\s+\d+\s*$')  # Tiqmo: rows run right to left and end in date, time, serial
 OPENING = re.compile(r'\s*opening balance\s*:?\s*(-?[\d,]+\.\d{2})\s*(?:cr)?\s*$', re.I)
 ACCOUNT_NO = re.compile(r'\s*account\s+(?:number|no\.?)\s*:\s*(\d{6,})', re.I)  # starts a section of a combined statement
@@ -358,6 +358,7 @@ def rows_from_lines(lines):
             if CR_DR.search(raw):
                 row['direction'] = 'debit' if CR_DR.search(raw).group(1).lower() in ('dr', 'd', 'm') else 'credit'
         if row['amount_minor']:
+            row['memo'] = bool(sbi) and sbi.group(0).strip().lower() == 'm'  # SBI 'M' (grey) EMI instalments: memo lines, not in the billed totals
             out.append(row)
     if out and opening is not None and out[0]['direction'] is None and out[0]['balance_minor'] is not None:  # Canara e-Pass: no header, so the opening balance says which way the first row went
         change = out[0]['balance_minor'] - opening
@@ -365,6 +366,8 @@ def rows_from_lines(lines):
     seen, rows, several = set(), [], len(accts) > 1
     for r in out:
         r.pop('closed', None)
+        if r.pop('memo', False):
+            continue
         if not several:
             r.pop('account', None)  # only a combined statement (HDFC: two savings accounts in one PDF) keeps it
         pre = re.match(r'[A-Z]+\d+-', r['desc'])  # Barq: 'CSO260101-' and, after the wrap, the rest of the Transaction Id
