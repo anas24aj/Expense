@@ -639,13 +639,14 @@ def asset_cost_rows(hh):
 
 def borrowed(hh):
     """{txn id: account_borrowers row} for plain spending on a lent card inside a saved range (POST /accounts/{id}/used-by)
-    that the user hasn't set themselves. Fees, interest and card charges are purpose fee, so they stay yours."""
+    that the user hasn't set themselves and that isn't split. Fees, interest and card charges are purpose fee, so they stay yours."""
     out = {}
     for r in hh.run("SELECT b.*, t.id AS txn_id, t.day, t.created_at AS txn_created_at, t.amount_minor, t.currency FROM account_borrowers b "
                     "JOIN transactions t ON t.account_id = b.account_id AND t.household_id = b.household_id "
                     "LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id "
                     "WHERE b.household_id = :hid AND t.deleted_at IS NULL AND t.direction = 'debit' AND t.day >= b.from_day AND t.day <= b.to_day "
-                    "AND (m.txn_id IS NULL OR (m.set_by != 'user' AND m.purpose = 'spend')) ORDER BY b.created_at"):
+                    "AND (m.txn_id IS NULL OR (m.set_by != 'user' AND m.purpose = 'spend')) "
+                    "AND t.id NOT IN (SELECT txn_id FROM splits WHERE household_id = :hid) ORDER BY b.created_at"):  # splits already say who owes
         out.setdefault(r['txn_id'], r)
     return out
 

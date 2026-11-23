@@ -103,6 +103,12 @@ class FeatureGapsTest(PlanTest):
         self.assertEqual(self.person(self.ali)['owes_you'], [])
         self.assertEqual(self.ok('GET', f'/transactions/{inside}')['purpose'], 'spend')
 
+    def test_card_lent_range_skips_split_rows(self):
+        split = self.txn(4000, 'debit', 'Hotel', '2026-04-25')
+        self.ok('POST', f'/transactions/{split}/split', {'shares': [{'contact_id': self.ali, 'share_minor': 4000}]})
+        self.ok('POST', f'/accounts/{self.bank}/used-by', {'person': {'kind': 'contact', 'id': self.ali}, 'from': '2026-04-20', 'to': '2026-05-21'})
+        self.assertEqual(self.person(self.ali)['owes_you'], [M(4000)])  # once, from the split
+
     def test_loan_in_someone_elses_name(self):
         harish = self.ins('contacts', name='Harish', created_at=now())['id']
         loan = self.ok('POST', '/liabilities', {'kind': 'loan', 'name': 'Harish personal loan (car)', 'currency': 'SAR', 'principal_minor': 60000_00,
