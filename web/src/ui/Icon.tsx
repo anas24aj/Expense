@@ -93,7 +93,33 @@ const PURPOSE_ICON: Record<string, [string, string]> = {
 export function Tile({ icon, color }: { icon: string; color: string }) {
   return <span className="icon-tile" style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${color} 82%, white), ${color})` }}><Icon name={icon} /></span>;
 }
-export function CategoryTile({ category, purpose }: { category: string | null; purpose?: string }) {
+// Well-known merchants get a brand-colored monogram tile (no external logo requests: nothing about your spending leaves the app).
+// [pattern, label, background, text color]
+const BRANDS: [RegExp, string, string, string][] = [
+  [/netflix/i, 'N', '#000', '#e50914'], [/youtube/i, '▶', '#ff0000', '#fff'], [/google ?play/i, '▶', '#fff', '#01875f'], [/google/i, 'G', '#fff', '#4285f4'],
+  [/apple|itunes|icloud/i, '', '#000', '#fff'], [/spotify/i, '♫', '#1db954', '#000'], [/amazon|amzn/i, 'a', '#232f3e', '#ff9900'],
+  [/shahid/i, 'S', '#00a95c', '#fff'], [/osn/i, 'OSN', '#000', '#fff'], [/disney|hotstar/i, 'D+', '#0e3a8c', '#fff'], [/anghami/i, 'A', '#8d1ee8', '#fff'],
+  [/openai|chatgpt/i, 'AI', '#10a37f', '#fff'], [/anthropic|claude/i, 'A', '#d97757', '#fff'], [/microsoft|office 365|xbox/i, '⊞', '#fff', '#00a4ef'],
+  [/\bstc\b|stc pay|stc bank/i, 'stc', '#4f008c', '#fff'], [/mobily/i, 'M', '#00a3e0', '#fff'], [/\bzain\b/i, 'Z', '#000', '#00b5a7'],
+  [/ooredoo/i, 'O', '#ed1c24', '#fff'], [/\bjio\b/i, 'Jio', '#0f3cc9', '#fff'], [/airtel/i, 'a', '#e40000', '#fff'], [/asianet/i, 'A', '#e30613', '#fff'],
+  [/careem/i, 'C', '#00e784', '#000'], [/\buber\b/i, 'U', '#000', '#fff'], [/jahez/i, 'J', '#e4002b', '#fff'], [/hunger ?station/i, 'H', '#ffcc00', '#000'],
+  [/keeta/i, 'K', '#ffd100', '#000'], [/talabat/i, 't', '#ff5a00', '#fff'], [/snoonu/i, 'S', '#e30c17', '#fff'], [/\bnoon\b/i, 'n', '#feee00', '#000'],
+  [/zomato/i, 'z', '#e23744', '#fff'], [/swiggy/i, 'S', '#fc8019', '#fff'], [/starbucks/i, '★', '#00704a', '#fff'], [/mcdonald/i, 'M', '#da291c', '#ffc72c'],
+  [/\bkfc\b/i, 'KFC', '#a3080c', '#fff'], [/bazooka/i, 'B', '#d71920', '#fff'], [/carrefour/i, 'C', '#004e9f', '#fff'], [/lulu/i, 'L', '#00843d', '#fff'],
+  [/panda/i, 'P', '#00a651', '#fff'], [/danube/i, 'D', '#e30613', '#fff'], [/tamimi/i, 'T', '#e31b23', '#fff'], [/ikea/i, 'IKEA', '#0058a3', '#ffdb00'],
+  [/xiaomi|\bmi store/i, 'mi', '#ff6900', '#fff'], [/jarir/i, 'J', '#e31e24', '#fff'], [/tamara/i, 't', '#000', '#f5c2a8'], [/tabby/i, 't', '#3bffc1', '#000'],
+  [/saudia/i, 'S', '#006c35', '#fff'], [/flynas/i, 'nas', '#00244e', '#fff'], [/air ?india ?express/i, 'IX', '#e31837', '#fff'], [/qatar airways/i, 'QR', '#5c0632', '#fff'],
+  [/phonepe/i, 'Pe', '#5f259f', '#fff'], [/paytm/i, 'P', '#00baf2', '#fff'], [/al ?rajhi/i, 'R', '#0d3b8f', '#fff'], [/urpay/i, 'ur', '#00b1a9', '#fff'],
+];
+export function brandOf(merchant?: string | null) {
+  return merchant ? BRANDS.find(([rx]) => rx.test(merchant)) : undefined;
+}
+export function CategoryTile({ category, purpose, merchant }: { category: string | null; purpose?: string; merchant?: string | null }) {
+  const brand = !purpose && brandOf(merchant);
+  if (brand) {
+    const [, label, bg, fg] = brand;
+    return <span className="icon-tile brand-tile" aria-hidden style={{ background: bg, color: fg, fontSize: label.length > 2 ? 10 : 17 }}>{label}</span>;
+  }
   const [icon, color] = (purpose && PURPOSE_ICON[purpose]) || (category && CAT[category]) || ['tag', '#8e8e93'];
   return <Tile icon={icon} color={color} />;
 }

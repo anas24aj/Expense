@@ -19,7 +19,7 @@ export function TxnRow({ t, onOpen }: { t: Txn; onOpen: (t: Txn) => void }) {
   const credit = t.direction === 'credit';
   const sub = [t.account_name, t.purpose !== 'spend' ? purposeLabel(t.purpose) : t.category, t.person?.name && `· ${t.person.name}`].filter(Boolean).join(' · ').replace('· ·', '·');
   return (
-    <ListRow icon={<CategoryTile category={t.category} purpose={t.purpose === 'spend' ? undefined : t.purpose} />} title={t.merchant} sub={sub}
+    <ListRow icon={<CategoryTile category={t.category} purpose={t.purpose === 'spend' ? undefined : t.purpose} merchant={t.merchant} />} title={t.merchant} sub={sub}
       end={<span className={credit ? 'pos' : ''}>{credit ? '+' : ''}{fmt(t.amount)}</span>}
       endSub={t.split_mine ? <>yours <Money m={t.split_mine} /></> : t.confidence < 0.7 ? <span className="badge orange">Check</span> : t.claim_id ? <span className="badge blue">Claim</span> : undefined}
       onClick={() => onOpen(t)} chevron={false} label={`${t.merchant}, ${fmt(t.amount)}`} />
@@ -145,7 +145,7 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
         : (
           <div className="stack">
             <div style={{ textAlign: 'center', padding: '4px 0 6px' }}>
-              <div style={{ display: 'grid', placeItems: 'center', marginBottom: 10 }}><CategoryTile category={t.category} purpose={t.purpose === 'spend' ? undefined : t.purpose} /></div>
+              <div style={{ display: 'grid', placeItems: 'center', marginBottom: 10 }}><CategoryTile category={t.category} purpose={t.purpose === 'spend' ? undefined : t.purpose} merchant={t.merchant} /></div>
               <div style={{ font: '700 40px var(--font-display)', letterSpacing: '-.03em' }} className={`num ${t.direction === 'credit' ? 'pos' : ''}`}>{t.direction === 'credit' ? '+' : ''}{fmt(t.amount, { cents: true })}</div>
               <div style={{ fontWeight: 600, fontSize: 18 }}>{t.merchant}</div>
               <div className="caption">{shortDate(t.day)} · {t.account_name || 'No account'}</div>
@@ -305,7 +305,7 @@ export function ReviewPage() {
                 onPointerMove={top ? e => { if (start.current !== null) setDx(e.clientX - start.current); } : undefined}
                 onPointerUp={top ? () => { start.current = null; if (Math.abs(dx) > 110) skip(); else setDx(0); } : undefined}>
                 <div className="between">
-                  <CategoryTile category={x.category} />
+                  <CategoryTile category={x.category} merchant={x.merchant} />
                   <span className="caption">{dayLabel(x.day)} · {x.account_name}</span>
                 </div>
                 <div>

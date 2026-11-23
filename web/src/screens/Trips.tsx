@@ -114,7 +114,7 @@ export function TripPage() {
                     {selecting
                       ? <button type="button" className="icon-tile" aria-pressed={on} aria-label={`Select ${x.merchant}`} onClick={() => setSel(on ? sel.filter(i => i !== x.id) : [...sel, x.id])}
                           style={{ background: on ? 'var(--tint-fill)' : 'var(--fill)', border: 0, borderRadius: '50%', color: '#fff' }}>{on && <Icon name="check" />}</button>
-                      : <CategoryTile category={x.category} />}
+                      : <CategoryTile category={x.category} merchant={x.merchant} />}
                     <div className="body"><div className="title">{x.merchant}</div><div className="sub">{shortDate(x.day)} · {x.account_name}</div></div>
                     <div className="end"><span className="amt"><Money m={x.amount} /></span><span className={`badge ${ST[x.trip_status].badge}`}>{ST[x.trip_status].label}</span></div>
                     {!selecting && x.trip_status !== 'claimed' && (
@@ -163,7 +163,7 @@ function ClaimTripSheet({ open, onClose, trip }: { open: boolean; onClose: () =>
     <Sheet open={open} onClose={onClose} title="Create claim">
       <div className="stack">
         <Field label="Claim name"><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
-        <List>{items.map(x => <ListRow key={x.id} icon={<CategoryTile category={x.category} />} title={x.merchant} sub={shortDate(x.day)} end={<Money m={x.amount} />} />)}</List>
+        <List>{items.map(x => <ListRow key={x.id} icon={<CategoryTile category={x.category} merchant={x.merchant} />} title={x.merchant} sub={shortDate(x.day)} end={<Money m={x.amount} />} />)}</List>
         <p className="caption" style={{ textAlign: 'center' }}>Everything marked <b>should claim</b> or <b>to sort</b>. Mark personal ones first.</p>
         {make.error && <p className="error" role="alert">{make.error.message}</p>}
         <button className="btn block" disabled={!name || make.isPending} onClick={async () => { const c = await make.mutateAsync({ name }); toast(`Claim made — ${fmt(c.expected)} expected`); onClose(); }}>Create claim</button>

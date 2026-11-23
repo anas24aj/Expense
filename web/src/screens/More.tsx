@@ -5,7 +5,7 @@ import { api, useApi, useWrite } from '../api/client';
 import type { Account, Asset, Coverage, DeviceCreated, Device, HouseholdFull, Me, Settings, Statement } from '../api/types';
 import { fmt, major, shortDate, toMinor } from '../lib/format';
 import {
-  AmountInput, Avatar, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
+  AmountInput, Avatar, brandOf, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
 } from '../ui';
 import { copy, InviteSheet } from './People';
 import { readFile } from './files';
@@ -35,6 +35,34 @@ export function MorePage({ me }: { me: Me }) {
 export const KIND_LABEL: Record<string, string> = { bank: 'Bank accounts', wallet: 'Wallets', credit_card: 'Credit cards', debit_card: 'Debit cards', bnpl: 'Pay later', loan: 'Loans', cash: 'Cash', investment: 'Investments' };
 export const KIND_TILE: Record<string, [string, string]> = { bank: ['bank', '#0a84ff'], wallet: ['wallet', '#5e5ce6'], credit_card: ['card', '#ff9f0a'], debit_card: ['card', '#30b0c7'], bnpl: ['wallet', '#bf5af2'], loan: ['bank', '#8e8e93'], cash: ['coin', '#34c759'], investment: ['chart', '#30d158'] };
 
+const COUNTRIES = [{ code: 'SA', name: 'Saudi Arabia', flag: '🇸🇦' }, { code: 'IN', name: 'India', flag: '🇮🇳' }, { code: 'QA', name: 'Qatar', flag: '🇶🇦' },
+  { code: 'AE', name: 'UAE', flag: '🇦🇪' }, { code: 'XX', name: 'Other', flag: '🌍' }];
+const CUR_COUNTRY: Record<string, string> = { SAR: 'SA', INR: 'IN', QAR: 'QA', AED: 'AE' };
+const countryOf = (a: Account) => { const c = (a.country || CUR_COUNTRY[a.currency] || 'XX').toUpperCase(); return COUNTRIES.some(x => x.code === c) ? c : 'XX'; };
+const CASH = ['bank', 'wallet', 'cash', 'debit_card', 'investment'], DEBT = ['credit_card', 'bnpl', 'loan'];
+
+// One card per country: what you hold there and what you owe there, in that country's currency. Tap to show only that country.
+function CountryCards({ items, country, onPick }: { items: Account[]; country: string; onPick: (c: string) => void }) {
+  const live = items.filter(a => !a.archived);
+  const cards = COUNTRIES.map(c => {
+    const here = live.filter(a => countryOf(a) === c.code);
+    const cur = here[0]?.currency;
+    const sum = (kinds: string[]) => here.filter(a => kinds.includes(a.kind) && a.balance?.currency === cur).reduce((s, a) => s + (a.balance?.minor || 0), 0);
+    return { ...c, n: here.length, cur, held: sum(CASH), owed: -sum(DEBT) };
+  }).filter(c => c.n);
+  return (
+    <div className="grid-2">
+      {cards.map(c => (
+        <button key={c.code} className={`glass card stat country-card${country === c.code ? ' on' : ''}`} onClick={() => onPick(c.code)} aria-pressed={country === c.code}>
+          <span className="k">{c.flag} {c.name} · {c.n} account{c.n > 1 ? 's' : ''}</span>
+          <span className="v"><Money m={{ minor: c.held, currency: c.cur! }} /></span>
+          {c.owed > 0 && <span className="caption neg">owed <Money m={{ minor: c.owed, currency: c.cur! }} /></span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function AccountsPage() {
   const q = useApi<{ items: Account[] }>('/accounts');
   const cov = useApi<{ items: Coverage[] }>('/accounts/coverage');
@@ -45,22 +73,23 @@ export function AccountsPage() {
   const owners = new Set(items.map(a => a.owner_member_id));
   const covOf = (id: string) => cov.data?.items.find(c => c.account_id === id);
   const needs = (cov.data?.items || []).filter(c => c.status !== 'ok').length;
-  const total = (cur: string) => items.filter(a => a.currency === cur && ['bank', 'wallet', 'cash', 'debit_card'].includes(a.kind)).reduce((s, a) => s + (a.balance?.minor || 0), 0);
+  const [country, setCountry] = useState<string>('all');
   return (
     <Page title="Accounts" back="/more" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add account"><Icon name="plus" /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : (
         <>
-          <div className="grid-2">
-            <div className="glass card stat"><span className="k">🇸🇦 Cash in SAR</span><span className="v"><Money m={{ minor: total('SAR'), currency: 'SAR' }} /></span></div>
-            <div className="glass card stat"><span className="k">🇮🇳 Cash in INR</span><span className="v"><Money m={{ minor: total('INR'), currency: 'INR' }} /></span></div>
-          </div>
+          <CountryCards items={items} country={country} onPick={c => setCountry(country === c ? 'all' : c)} />
           <Link to="/more/coverage" className="glass pill-cta">
             <Tile icon={needs ? 'warn' : 'check'} color={needs ? '#ff9f0a' : '#30d158'} />
             <span style={{ flex: 1 }}><b>Up to date?</b><br /><span className="caption">{cov.data ? (needs ? `${needs} account${needs > 1 ? 's' : ''} with gaps or gone quiet` : 'Every account covered, no gaps') : 'Checking statements and SMS…'}</span></span>
             <Icon name="chevR" className="chev" size={14} />
           </Link>
+          {COUNTRIES.filter(c => country === 'all' || c.code === country).map(c => {
+            const here = items.filter(a => countryOf(a) === c.code && !a.archived);
+            if (!here.length) return null;
+            return (<Fragment key={c.code}>{country === 'all' && <h2 className="country-h">{c.flag} {c.name}</h2>}
           {Object.keys(KIND_LABEL).map(kind => {
-            const list = items.filter(a => a.kind === kind && !a.archived)
+            const list = here.filter(a => a.kind === kind)
               .sort((x, y) => ownerName(x.owner_member_id).localeCompare(ownerName(y.owner_member_id)) || x.institution.localeCompare(y.institution));
             if (!list.length) return null;
             return (
@@ -68,7 +97,7 @@ export function AccountsPage() {
                 <List>
                   {list.map(a => (
                     <Link key={a.id} to={`/more/accounts/${a.id}`} className="list-row" style={a.credit_limit ? { flexWrap: 'wrap' } : undefined}>
-                      <Tile icon={KIND_TILE[kind][0]} color={KIND_TILE[kind][1]} />
+                      {brandOf(a.institution) ? <CategoryTile category={null} merchant={a.institution} /> : <Tile icon={KIND_TILE[kind][0]} color={KIND_TILE[kind][1]} />}
                       <div className="body"><div className="title">{a.institution} {a.last4 && <span className="caption">··{a.last4}</span>}</div>
                         <div className="sub">{a.name.startsWith(a.institution) ? KIND_LABEL[a.kind].replace(/s$/, "") : a.name}{owners.size > 1 && a.owner_member_id ? ` · ${ownerName(a.owner_member_id)}` : ''}{covOf(a.id) && covOf(a.id)!.status !== 'ok' ? <span className="warn"> · {covOf(a.id)!.status === 'gaps' ? `${covOf(a.id)!.missing_months.length} month gap` : covOf(a.id)!.status === 'stale' ? 'quiet' : 'no data'}</span> : null}</div></div>
                       <div className="end"><span className={`amt ${a.balance && a.balance.minor < 0 ? 'neg' : ''}`}><Money m={a.balance} /></span>
@@ -84,6 +113,7 @@ export function AccountsPage() {
                 </List>
               </Section>
             );
+          })}</Fragment>);
           })}
         </>
       )}
