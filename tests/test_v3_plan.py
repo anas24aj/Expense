@@ -256,6 +256,14 @@ class PlanTest(unittest.TestCase):
                'later': self.txn(300_00, 'debit', 'AMAZON', m + '20', 'INR')}
         return self.ok('GET', f'/trips/{trip["id"]}'), ids, m[:7]
 
+    def test_trip_abroad_counts_base_currency_bookings(self):
+        m = engine.add_months(self.today, -2)[:8]
+        trip = self.ok('POST', '/trips', {'name': 'Doha', 'city': 'Doha', 'country': 'Qatar', 'start_on': m + '10', 'end_on': m + '12', 'kind': 'business'})
+        self.txn(400_00, 'debit', 'QATAR AIRWAYS', m + '10')  # billed in SAR
+        self.txn(100_00, 'debit', 'KARAK', m + '11', 'QAR')
+        self.txn(900_00, 'debit', 'AMAZON IN', m + '11', 'INR')  # family at home: not the trip
+        self.assertEqual(self.ok('GET', f'/trips/{trip["id"]}')['count'], 2)
+
     def test_trip_window_tags_claim_and_spending(self):
         trip, ids, month = self.trip_setup()
         self.assertEqual((trip['currency'], trip['count'], trip['totals']['total']), ('INR', 3, M(6500_00, 'INR')))

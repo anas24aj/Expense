@@ -724,14 +724,15 @@ def trip_currency(trip):
 
 
 def trip_expenses(trip, ctx):
-    """[(txn, status)]: debits in the trip's window (in its country's currency when known) plus anything tagged to it.
+    """[(txn, status)]: debits in the trip's window (in its country's currency; on a trip abroad also in the base currency, so
+    flights and hotels billed in SAR count, while on a trip home, base-currency spending back in Saudi does not) plus anything tagged to it.
     In a claim → claimed; else the tag; else unreviewed."""
-    cur = trip_currency(trip)
+    cur, home = trip_currency(trip), ctx['house'].get('home_currency') or 'INR'
     tags = {r['txn_id']: r['status'] for r in ctx['trip_tags'] if r['trip_id'] == trip['id']}
     out = []
     for t in ctx['raw_txns']:
         inside = (t['direction'] == 'debit' and trip['start_on'] <= t['day'] <= trip['end_on'] and t['purpose'] not in NOT_EXPENSE
-                  and (not cur or t['currency'] == cur))
+                  and (not cur or t['currency'] == cur or (t['currency'] == ctx['cur'] and cur != home)))
         if inside or t['id'] in tags:
             out.append((t, 'claimed' if t['id'] in ctx['claimed'] else tags.get(t['id'], 'unreviewed')))
     return out
