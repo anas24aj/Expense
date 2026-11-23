@@ -805,9 +805,35 @@ def balances(every):
             n = BAL_NUM.search(body[m.end():m.end() + 30])
             if n and not re.match(r'\s*(?:as\s+on|on)\b', body[m.end():m.end() + 8], re.I):
                 out[t['account']] = {'account': t['account'], 'kind': 'limit' if (m.group(1) or '').lower() in ('limit', 'lmt') else 'balance',
-                                     'amount': float(n.group(1).replace(',', '')), 'currency': t['currency'], 'day': t['received_at'][:10]}
+                                     'amount': float(n.group(1).replace(',', '')), 'currency': t['currency'], 'day': t['received_at'][:10], 'at': t['received_at']}
                 break
     return sorted(out.values(), key=lambda b: b['day'], reverse=True)
+
+
+def account_months(every, month):
+    """Each bank account's month: the balance carried in from the month before, money in, money out, and the balance
+    at the end (the next month's opening). Worked back and forward from the latest balance the bank stated, so it's
+    exact when every transaction of the account is here; a missing SMS shifts the months before it."""
+    tz = ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')
+    y, m = map(int, month.split('-'))
+    start = datetime(y, m, 1, tzinfo=tz)
+    end = datetime(y + m // 12, m % 12 + 1, 1, tzinfo=tz)
+    when = lambda t: datetime.fromisoformat(t['received_at'])
+    out = []
+    for b in balances(every):
+        if b['kind'] != 'balance':
+            continue  # a card's figure is its available limit, not money you hold
+        at, now = datetime.fromisoformat(b['at']), round(b['amount'] * 100)
+        mine = [(when(t), round(t['amount'] * 100) * (1 if t['direction'] == 'credit' else -1)) for t in every
+                if t['account'] == b['account'] and t['currency'] == b['currency'] and t['category'] != IGNORED]
+        # The balance just before moment x: back from the stated one (which already includes its own transaction).
+        before = lambda x: now - sum(v for w, v in mine if x <= w <= at) if x <= at else now + sum(v for w, v in mine if at < w < x)
+        got = sum(v for w, v in mine if start <= w < end and v > 0)
+        spent = -sum(v for w, v in mine if start <= w < end and v < 0)
+        opening = before(start)
+        out.append({'account': b['account'], 'currency': b['currency'], 'opening': opening / 100, 'in': got / 100, 'out': spent / 100,
+                    'closing': (opening + got - spent) / 100, 'current': b['amount'], 'as_of': b['day']})
+    return out
 
 
 def unmatched(every, inside):
@@ -1970,7 +1996,10 @@ def mcp_friends(db, a):
 
 
 def mcp_balances(db, a):
-    return {'accounts': balances(transactions(db))}
+    month = _month_arg(a) or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
+    every = transactions(db)
+    return {'month': month, 'bank_accounts': account_months(every, month),
+            'cards_available_limit': [b for b in balances(every) if b['kind'] == 'limit']}
 
 
 def mcp_add(db, a):
@@ -2021,7 +2050,8 @@ MCP_TOOLS = {
     'get_money_trail': ('How money moved between your own accounts (e.g. salary → Saudi bank → Indian bank → loan), with totals per route.',
                         _S({'month': _MONTH}), mcp_trail, True),
     'get_friends': ('What friends owe you for purchases you split, and what you owe people on this app.', _S({}), mcp_friends, True),
-    'get_account_balances': ('Each account’s latest balance (or a card’s available limit) from its newest bank SMS.', _S({}), mcp_balances, True),
+    'get_account_balances': ('Each bank account in a month: balance carried from the month before, money in, money out, closing balance, and the latest balance the bank stated; cards’ available limits.',
+                             _S({'month': _MONTH}), mcp_balances, True),
     'add_transaction': ('Record a purchase or money received that the bank SMS didn’t cover. Only when the user asks to add it.',
                         _S({'amount': {'type': 'number', 'exclusiveMinimum': 0}, 'currency': _CUR, 'merchant': {'type': 'string'},
                             'direction': {'type': 'string', 'enum': ['spent', 'received']}, 'date': {'type': 'string', 'description': 'YYYY-MM-DD; today if left out'},
@@ -2272,7 +2302,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared'), ('GET', '/api/contact/check'), ('GET', '/api/export')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared'), ('GET', '/api/contact/check'), ('GET', '/api/export'), ('GET', '/api/accounts')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -2443,6 +2473,11 @@ def _app(environ, start_response):
             except ValueError as e:
                 return respond('400 Bad Request', {'error': str(e)})
             return respond('200 OK', shared(db))
+        if path == '/api/accounts':
+            month = query.get('month') or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
+            if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', month):
+                return respond('400 Bad Request', {'error': 'month must look like 2026-10'})
+            return respond('200 OK', {'month': month, 'accounts': account_months(transactions(db), month)})
         if path == '/api/balances':
             return respond('200 OK', balances(transactions(db)))
         if path == '/api/trail':

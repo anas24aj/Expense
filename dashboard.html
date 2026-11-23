@@ -184,6 +184,10 @@
   details.lb .rk .nm b, details.lb .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
   details.lb .rk .v { font-size: 13px; } details.lb .rk .v small { font-size: 11px; }
   .banner.warn { border-color: #d97706; }
+  dl.carry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; margin: 12px 0 0; font-size: 14px; }
+  dl.carry dt { color: var(--text-2); } dl.carry dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  dl.carry dd.in { color: var(--good, #0f7b3e); } dl.carry dd.out { color: var(--bad, #b42318); }
+  dl.carry dt:nth-last-of-type(1), dl.carry dd:nth-last-of-type(1) { border-top: 1px solid var(--line); padding-top: 6px; }
   .simp .rk .nm b, .simp .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
   .owe + .owe { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
   .owe-h { display: flex; justify-content: space-between; gap: 12px; } .owe-h b { overflow-wrap: anywhere; } .owe-h span { font-weight: 700; color: var(--bad, #b42318); white-space: nowrap; }
@@ -1786,6 +1790,20 @@ function flowMap(flows) {
   return `<div class="sk"><svg viewBox="-2 -30 ${W + 4} ${H + 56}" role="img" aria-label="Money flow between your accounts">${bands}${nodes}</svg></div>` +
     '<p class="muted small">Band width is the money moved, in ₹ (SAR at today’s rate). Tap a band for its messages.</p>';
 }
+// ---------- Account balances: carried in from last month, in, out, closing; and what the bank last said ----------
+function balancesPage(rt, P) {
+  const m = P.kind === 'month' ? P.m : P.endMonth, url = `/api/accounts?month=${m}`;
+  if (state.acctUrl !== url) { state.acctMonth = null; state.acctUrl = url; }
+  if (!state.acctMonth) return waitFor('Account balances', [['acctMonth', () => fetchInto('acctMonth', url, () => { if (location.hash.startsWith('#/balances')) render(); })]]);
+  const A = state.acctMonth.accounts, prev = monthName(addM(m, -1), 'short'), cur = (v, c) => esc(owed(Math.round(v * 100), c));
+  const rows = A.map(a => `<section class="card"><h2>${splitAcct(a.account)}<span>${esc(a.currency)}</span></h2>` +
+    `<div class="big"><span class="muted">Balance now · bank said on ${esc(dayLabel(a.as_of))}</span><b>${cur(a.current, a.currency)}</b></div>` +
+    `<dl class="carry"><dt>Carried from ${esc(prev)}</dt><dd>${cur(a.opening, a.currency)}</dd>` +
+    `<dt>+ Money in</dt><dd class="in">${cur(a.in, a.currency)}</dd><dt>− Money out</dt><dd class="out">${cur(a.out, a.currency)}</dd>` +
+    `<dt><b>${m === today().slice(0, 7) ? 'So far this month' : `Closing ${esc(monthName(m, 'short'))}`}</b></dt><dd><b>${cur(a.closing, a.currency)}</b></dd></dl></section>`).join('');
+  return { title: 'Account balances', sub: monthName(m), html: chips(P) + (rows || `<section class="card">${empty('No balances yet', 'They come from the “Avl Bal” or “Balance” line in your bank SMS. Accounts whose SMS don’t show a balance can’t be listed.')}</section>`) +
+    '<section class="card"><p class="muted small">Worked out from the latest balance each bank stated and that account’s transactions, so each month starts where the last one ended. If an SMS was missed, the months before it are off by that amount.</p></section>' };
+}
 // ---------- Can I buy it? Each way to pay, checked against your money, with where it hits and where to cut ----------
 const loadBal = () => fetchInto('bal', '/api/balances');
 // Your optional spending, last 3 full months (SAR), and a 25% cut on the biggest three: the money a purchase can come from.
@@ -2090,7 +2108,8 @@ function txnList(list, title = 'Transactions', linkDays = true, aside = 'tap to 
 // Any month since your first transaction, newest first: first in the row so it's in view without scrolling.
 function monthPick(P) {
   const months = [];
-  for (let m = today().slice(0, 7), first = (state.earliest || today()).slice(0, 7); m >= first && months.length < 120; m = addM(m, -1)) months.push(m);
+  const back2y = addM(today().slice(0, 7), -23), mine = (state.earliest || today()).slice(0, 7);  // the other currency may go back further
+  for (let m = today().slice(0, 7), first = mine < back2y ? mine : back2y; m >= first && months.length < 120; m = addM(m, -1)) months.push(m);
   const on = P.kind === 'month' ? P.m : '';
   return `<select class="month-pick${on && !P.chip ? ' on' : ''}" aria-label="Choose a month"><option value="" ${on ? '' : 'selected'} disabled>📅 Month</option>` +
     months.map(m => `<option value="${m}" ${m === on ? 'selected' : ''}>📅 ${esc(monthName(m, 'short'))}</option>`).join('') + '</select>';
@@ -2166,6 +2185,7 @@ function overview(rt, P, X) {
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
       ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * worth(h), 0)) : '') +
+      ln(`#/balances?m=${P.endMonth}`, 'Account balances', 'Carried from last month, in, out, now', '') +
       ln('#/buy', 'Can I buy it?', 'Where to pay from, what it hits, where to cut', '') +
       ln(`#/trail?${q}`, 'Money trail', 'Between your accounts, on to the loans', '') +
       ln(`#/liabilities?m=${P.endMonth}`, 'Liabilities', 'Paid, due or missed this month', state.money ? String(liabBoard(P.endMonth).filter(r => r.st === 'late').length || '✓') : '') +
@@ -2430,7 +2450,7 @@ function renderResults() {
 const PAGES = { overview, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage, trail: trailPage, liabilities: liabPage, buy: buyPage };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage, trail: trailPage, liabilities: liabPage, buy: buyPage, balances: balancesPage };
 const TITLES = { ...Object.fromEntries(TABS.map(([k, label]) => [k, label])), merchants: 'Spending', cards: 'Spending' };
 
 function render() {

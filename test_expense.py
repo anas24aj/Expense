@@ -471,6 +471,18 @@ class StoreMixin:
         self.assertEqual(got, {'IDFCFB · Account •1234': ('balance', 65243.48), 'CANBNK · Account •864': ('balance', 31769.14),
                                'ICICI · Card •9012': ('limit', 120000.0)})  # newest per account; no date read as a balance
 
+    def test_balance_carried_month_to_month(self):
+        db = self.db
+        for body, at in (('Rs.1000.00 credited to A/c XX1234 by NEFT. Avl Bal Rs.1,500.00', '2026-10-10T10:00:00+05:30'),
+                         ('Rs.200.00 debited from A/c XX1234 to SHOP. Avl Bal Rs.1,300.00', '2026-11-03T10:00:00+05:30'),
+                         ('Rs.100.00 debited from A/c XX1234 to CAFE. Avl Bal Rs.1,200.00', '2026-11-20T10:00:00+05:30')):
+            server.store_sms(db, 'VM-HDFCBK', body, at)
+        every = server.transactions(db)
+        row = lambda m: {k: v for k, v in server.account_months(every, m)[0].items() if k in ('opening', 'in', 'out', 'closing', 'current')}
+        self.assertEqual(row('2026-10'), {'opening': 500.0, 'in': 1000.0, 'out': 0.0, 'closing': 1500.0, 'current': 1200.0})
+        self.assertEqual(row('2026-11'), {'opening': 1500.0, 'in': 0.0, 'out': 300.0, 'closing': 1200.0, 'current': 1200.0})  # Oct's closing carried in
+        self.assertEqual(row('2026-12')['opening'], 1200.0)
+
     def test_salary_from_the_plan_amount(self):
         db = self.db
         db.run("INSERT INTO settings (key, value) VALUES ('salary', :v)", v=json.dumps({'amount': 25000, 'day': 25, 'currency': 'SAR'}))
