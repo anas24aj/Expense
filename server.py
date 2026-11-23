@@ -230,6 +230,11 @@ class DB:
         if 'auto' not in cols:
             self.run('ALTER TABLE holdings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0')
             self.run("UPDATE holdings SET auto = 1 WHERE kind = 'loan'")
+        acols = table_columns(self, 'accounts')
+        for col, ddl in (('label', "label TEXT NOT NULL DEFAULT ''"), ('hidden', 'hidden INTEGER NOT NULL DEFAULT 0'),
+                         ('balance_minor', 'balance_minor BIGINT NOT NULL DEFAULT 0'), ('balance_at', "balance_at TEXT NOT NULL DEFAULT ''")):
+            if col not in acols:  # label: the name the SMS gave it (now shown as `name`); hidden: removed by you
+                self.run(f'ALTER TABLE accounts ADD COLUMN {ddl}')
         if 'limit_minor' not in cols:  # a card's credit limit, for the 70%-used warning
             self.run('ALTER TABLE holdings ADD COLUMN limit_minor BIGINT NOT NULL DEFAULT 0')
         if self.space == 'public':  # app_users.username: a unique name to sign in with instead of the email
@@ -267,6 +272,9 @@ class DB:
                     adverts.append(r['id'])
                 continue
             again = parse(r['body'])
+            if again is None and r['id'] not in has_category and r['sender'] != 'Assistant':
+                adverts.append(r['id'])  # no longer read as a transaction (e.g. EPFO passbook SMS): Ignored, unless you chose
+                continue
             if again and (again['amount_minor'], again['currency'], again['direction']) != (r['amount_minor'], r['currency'], r['direction']):
                 fixes.append((r['id'], again['amount_minor'], again['currency'], again['direction']))
         for i in range(0, len(adverts), 300):
@@ -404,6 +412,10 @@ def transactions(db, month=None, currency=None):
     only = {head.split(' · ')[0]: [f'{head}•{d}' for d in ds] for head, ds in ends.items() if head.endswith('Account ')}
     acct = {r['id']: only[acct[r['id']]][0] if not r['statement_id'] and len(only.get(acct[r['id']], ())) == 1 else acct[r['id']]
             for r in rows}
+    mine = db.run('SELECT name, label, hidden FROM accounts')
+    renamed = {a['label']: a['name'] for a in mine if a['label']}
+    acct = {k: renamed.get(v, v) for k, v in acct.items()}
+    removed = {a['name'] for a in mine if a['hidden']}
     linked = links(rows, acct, overrides, [(r['debit_id'], r['credit_id']) for r in db.run('SELECT * FROM txn_links')])
     own |= set(linked)
     result = []
@@ -421,7 +433,7 @@ def transactions(db, month=None, currency=None):
             'account': acct[r['id']], 'statement': bool(r['statement_id']), 'linked': linked.get(r['id']), 'fixed': r['id'] in overrides,
             'friend': f['friend'] if f else '', 'theirs': theirs / 100, 'settled': bool(f and f['settled']),
             'peer': {'who': peers[r['id']]['who'], 'account': peers[r['id']]['their_account'], 'day': peers[r['id']]['their_day']} if r['id'] in peers else None,
-            'category': overrides.get(r['id']) or (OWN_TRANSFER if r['id'] in own else None)
+            'category': overrides.get(r['id']) or (IGNORED if acct[r['id']] in removed else None) or (OWN_TRANSFER if r['id'] in own else None)
                         or (merchant and for_merchant(merchant))
                         or (not merchant and by_wording.get(wording(r['body'])))
                         or (r['id'] in peers and 'Family')
@@ -791,14 +803,16 @@ def why_not(a, b):
 # 'Avl Bal INR 65,243.48', 'Balance: SAR 18,200.00', 'Avl Limit: INR 3,14,721.04', '· balance 12,345.67' (statements), 'الرصيد'.
 # The number needs decimals, Indian/Western commas or 3+ digits, and isn't a date, so 'balance as on 26/10' isn't read.
 BALANCE = re.compile(r'\b(limit|lmt|bal(?:ance)?)\b|(الرصيد)', re.I)
-BAL_NUM = re.compile(r'(\d[\d,]*\.\d{1,2}|\d{1,3}(?:,\d{2,3})+|\d{3,})(?![\d/]|-\d)')
+# Never the middle of a longer number, and a plain number has at most 9 digits: the 17 digits of a PF ID
+# ('MHBAN00123450000012345') are not a balance.
+BAL_NUM = re.compile(r'(?<![\d,])(\d[\d,]*\.\d{1,2}|\d{1,3}(?:,\d{2,3})+|\d{3,9})(?![\d/]|-\d)')
 
 
 def balances(every):
     """Each account's latest balance (or a card's available limit) from the newest SMS or statement row that states one."""
     out = {}
     for t in sorted(every, key=lambda t: t['received_at'], reverse=True):
-        if t['account'] in out:
+        if t['account'] in out or t['category'] == IGNORED:
             continue
         body = t['body'].translate(ARABIC_DIGITS)
         for m in BALANCE.finditer(body):
@@ -810,7 +824,37 @@ def balances(every):
     return sorted(out.values(), key=lambda b: b['day'], reverse=True)
 
 
-def account_months(every, month):
+def save_account(db, label, name, currency='', balance=None, hidden=None, kind=''):
+    """Rename an account the SMS named (label → name), hide or show it, or type its balance now. With no label: add an
+    account of your own (its SMS join it through `digits` in the name's last 4, e.g. 'SNB salary 1234')."""
+    name = ' '.join(str(name).split())[:60]
+    if not name:
+        raise ValueError('a name is needed')
+    rows = db.run('SELECT * FROM accounts WHERE label = :l OR name = :l', l=label) if label else []
+    if any(r['name'] == name for r in db.run('SELECT name FROM accounts WHERE name = :n', n=name)) and not (rows and rows[0]['name'] == name):
+        raise ValueError('another account already has that name')
+    digits = (re.findall(r'(\d{3,4})(?!.*\d)', label or name) or [''])[0]
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    if rows:
+        r = rows[0]
+        if r['name'] != name and not r['label']:  # an account from a statement: its rows carry the name
+            db.run('UPDATE transactions SET sender = :n WHERE statement_id IS NOT NULL AND sender = :o', n=name, o=r['name'])
+            db.run('UPDATE statements SET account = :n WHERE account = :o', n=name, o=r['name'])
+        db.run('UPDATE accounts SET name = :n, hidden = :h WHERE name = :o', n=name, h=r['hidden'] if hidden is None else int(hidden), o=r['name'])
+    else:
+        db.run('INSERT INTO accounts (name, kind, currency, digits, label, hidden) VALUES (:n, :k, :c, :d, :l, :h)',
+               n=name, k=kind or ('card' if 'Card' in (label or '') else 'bank'), c=currency or 'SAR', d='' if label else digits, l=label, h=int(bool(hidden)))
+    if balance is not None:
+        db.run('UPDATE accounts SET balance_minor = :b, balance_at = :t WHERE name = :n', b=round(Decimal(str(balance)) * 100), t=now, n=name)
+    return name
+
+
+def delete_account(db, name):
+    """Remove an account you added (one the SMS named is hidden instead, so its messages don't come back)."""
+    db.run('DELETE FROM accounts WHERE name = :n AND label = \'\' AND name NOT IN (SELECT account FROM statements)', n=name)
+
+
+def account_months(every, month, typed=()):
     """Each bank account's month: the balance carried in from the month before, money in, money out, and the balance
     at the end (the next month's opening). Worked back and forward from the latest balance the bank stated, so it's
     exact when every transaction of the account is here; a missing SMS shifts the months before it."""
@@ -820,7 +864,13 @@ def account_months(every, month):
     end = datetime(y + m // 12, m % 12 + 1, 1, tzinfo=tz)
     when = lambda t: datetime.fromisoformat(t['received_at'])
     out = []
-    for b in balances(every):
+    stated = {b['account']: b for b in balances(every)}
+    for a in typed:  # a balance you typed: used when the SMS never state one, or it's newer than what they said
+        b = stated.get(a['name'])
+        if a['balance_at'] and not a['hidden'] and (not b or b['kind'] != 'balance' or a['balance_at'] > b['at']):
+            stated[a['name']] = {'account': a['name'], 'kind': 'balance', 'amount': a['balance_minor'] / 100, 'currency': a['currency'],
+                                 'day': a['balance_at'][:10], 'at': a['balance_at'], 'typed': True}
+    for b in stated.values():
         if b['kind'] != 'balance':
             continue  # a card's figure is its available limit, not money you hold
         at, now = datetime.fromisoformat(b['at']), round(b['amount'] * 100)
@@ -832,7 +882,7 @@ def account_months(every, month):
         spent = -sum(v for w, v in mine if start <= w < end and v < 0)
         opening = before(start)
         out.append({'account': b['account'], 'currency': b['currency'], 'opening': opening / 100, 'in': got / 100, 'out': spent / 100,
-                    'closing': (opening + got - spent) / 100, 'current': b['amount'], 'as_of': b['day']})
+                    'closing': (opening + got - spent) / 100, 'current': b['amount'], 'as_of': b['day'], 'typed': b.get('typed', False)})
     return out
 
 
@@ -2284,6 +2334,17 @@ def _app(environ, start_response):
             unpeer = int(read_json(environ, MAX_BODY)['id'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/account'):
+        try:
+            acc = read_json(environ, MAX_BODY)
+            if acc.get('currency') and acc['currency'] not in ('SAR', 'INR', 'USD'):
+                raise ValueError('currency must be SAR, INR or USD')
+            if acc.get('balance') not in (None, ''):
+                acc['balance'] = Decimal(str(acc['balance']).replace(',', '').strip())
+            else:
+                acc['balance'] = None
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/contact'):
         try:
             contact = read_json(environ, MAX_BODY)
@@ -2461,6 +2522,16 @@ def _app(environ, start_response):
             except KeyError as e:
                 return respond('400 Bad Request', {'error': str(e.args[0])})
             return respond('200 OK', shared(db))
+        if path == '/api/account':
+            try:
+                if acc.get('delete'):
+                    delete_account(db, str(acc.get('name') or ''))
+                else:
+                    save_account(db, str(acc.get('label') or ''), str(acc.get('name') or ''), str(acc.get('currency') or ''), acc['balance'],
+                                 None if acc.get('hidden') is None else bool(acc['hidden']), str(acc.get('kind') or ''))
+            except ValueError as e:
+                return respond('400 Bad Request', {'error': str(e)})
+            return respond('200 OK', {'saved': True})
         if path == '/api/peer/unlink':
             try:
                 unlink_peer(db, unpeer)
@@ -2477,7 +2548,18 @@ def _app(environ, start_response):
             month = query.get('month') or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
             if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', month):
                 return respond('400 Bad Request', {'error': 'month must look like 2026-10'})
-            return respond('200 OK', {'month': month, 'accounts': account_months(transactions(db), month)})
+            every, typed = transactions(db), db.run('SELECT * FROM accounts')
+            seen = defaultdict(lambda: {'count': 0, 'currency': ''})
+            for t in every:
+                if t['category'] != IGNORED:  # an account whose messages are all ignored (e.g. provident-fund SMS) isn't listed
+                    seen[t['account']]['count'] += 1
+                    seen[t['account']]['currency'] = t['currency']
+            hidden = {a['name'] for a in typed if a['hidden']}
+            names = sorted((set(seen) | {a['name'] for a in typed}) - hidden)
+            return respond('200 OK', {'month': month, 'accounts': account_months(every, month, typed),
+                                      'all': [{'name': n, 'transactions': seen[n]['count'], 'currency': seen[n]['currency'] or next((a['currency'] for a in typed if a['name'] == n), ''),
+                                               'added': any(a['name'] == n and not a['label'] for a in typed)} for n in names],
+                                      'hidden': sorted(hidden)})
         if path == '/api/balances':
             return respond('200 OK', balances(transactions(db)))
         if path == '/api/trail':

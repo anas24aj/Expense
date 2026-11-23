@@ -25,7 +25,8 @@ DEBIT = re.compile(r'\b(?:debited|spent|paid|sent|withdrawn|withdrawal|purchase|
 CREDIT = re.compile(r'\b(?:credited|received|deposited|deposit|incoming|refunded|refund|reversal|reversed|reverse|salary|payroll)\b|إيداع|ايداع|واردة|استرداد|مسترد|راتب', re.I)
 # Messages that mention money but are not a completed transaction.
 SKIP = re.compile(
-    r'\b(?:otp|one[- ]time password|verification code|passcode|will be debited|is due|due on|requested|pre-?approved|offer)\b'
+    r'\b(?:otp|one[- ]time password|verification code|passcode|will be debited|is due|due on|requested|pre-?approved|offer'
+    r'|passbook balance|epfo?|provident fund)\b'  # provident fund statements: a PF balance and contribution, not money in your bank
     r'|رمز التحقق|رمز التفعيل|كلمة المرور|لمرة واحدة|مستحق', re.I)
 # Adverts: "Purchase 20GB for SAR 99 now! Dial *1100#" has an amount and "purchase" but nothing was paid.
 AD = re.compile(

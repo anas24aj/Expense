@@ -1,6 +1,7 @@
 """Run: python3 -m unittest -v
 Set TEST_DATABASE_URL=postgresql://... to also run the storage tests against Postgres (the table is dropped first)."""
 import io
+from decimal import Decimal
 import json
 import os
 import tempfile
@@ -482,6 +483,39 @@ class StoreMixin:
         self.assertEqual(row('2026-10'), {'opening': 500.0, 'in': 1000.0, 'out': 0.0, 'closing': 1500.0, 'current': 1200.0})
         self.assertEqual(row('2026-11'), {'opening': 1500.0, 'in': 0.0, 'out': 300.0, 'closing': 1200.0, 'current': 1200.0})  # Oct's closing carried in
         self.assertEqual(row('2026-12')['opening'], 1200.0)
+        # A provident-fund passbook SMS is no transaction, and its long PF ID is never read as a balance.
+        epf = 'Dear XXXXXXXX0370, your passbook balance against MHBAN00123450000012345 is Rs. 2,44,760/-. Contribution of Rs. 7,476/- for due month 032026 has been received. -EPFOHO'
+        self.assertIsNone(parse(epf))
+        db.run("INSERT INTO transactions (received_at, sender, body, amount_minor, currency, direction, merchant) VALUES ('2026-11-21T10:00:00+05:30', 'VM-EPFOHO', :b, 24476000, 'INR', 'credit', '')", b=epf)
+        db.reread_amounts()  # stored before this fix: now Ignored, and out of the balances
+        self.assertEqual([b['account'] for b in server.balances(server.transactions(db))], ['HDFCBK · Account •1234'])
+
+    def test_rename_remove_and_add_accounts(self):
+        db = self.db
+        server.store_sms(db, 'SAB', 'PoS Purchase\nAmount: SAR 45.50\nCard: *2080\nAt: PANDA', '2026-11-20T10:00:00+03:00')
+        server.store_sms(db, 'VM-EPFOHO', 'Rs.500.00 credited to A/c XX0370 by NEFT', '2026-11-20T10:00:00+05:30')
+        accts = lambda: {t['merchant'] or t['body'][:8]: (t['account'], t['category']) for t in server.transactions(db)}
+        card = accts()['PANDA'][0]
+        server.save_account(db, card, 'SAB Visa')                                   # rename what the SMS called it
+        epf = next(a for _, (a, _) in accts().items() if 'EPFOHO' in a)
+        server.save_account(db, epf, epf, hidden=True)                             # remove: its messages stop counting
+        self.assertEqual(sorted(accts().values()), sorted([('SAB Visa', 'Groceries'), (epf, 'Ignored')]))
+        server.save_account(db, epf, epf, hidden=False)
+        self.assertNotEqual(dict(accts().values())[epf], 'Ignored')
+        with self.assertRaisesRegex(ValueError, 'already has that name'):
+            server.save_account(db, epf, 'SAB Visa')
+        # Your own account with a balance you typed: its SMS join it by the last 4 digits; the month starts from it.
+        server.save_account(db, '', 'SNB salary 7788', 'SAR', balance=Decimal('1000.00'))
+        server.store_sms(db, 'SNB', 'Purchase\nAmount: SAR 100.00\nAccount: 7788\nAt: JARIR', '2026-12-31T10:00:00+03:00')
+        typed = db.run('SELECT * FROM accounts')
+        row = next(r for r in server.account_months(server.transactions(db), '2026-12', typed) if r['account'] == 'SNB salary 7788')
+        self.assertEqual((row['current'], row['out'], row['closing'], row['typed']), (1000.0, 100.0, 900.0, True))
+        server.delete_account(db, 'SNB salary 7788')
+        self.assertFalse(db.run("SELECT 1 FROM accounts WHERE name = 'SNB salary 7788'"))
+        # An account from a statement keeps its rows when renamed.
+        server.import_statement(db, 'HDFC', 'bank', 'INR', '', 'h.csv', HDFC)
+        server.save_account(db, 'HDFC', 'HDFC savings')
+        self.assertEqual({t['account'] for t in server.transactions(db) if t['statement']}, {'HDFC savings'})
 
     def test_salary_from_the_plan_amount(self):
         db = self.db

@@ -184,6 +184,12 @@
   details.lb .rk .nm b, details.lb .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
   details.lb .rk .v { font-size: 13px; } details.lb .rk .v small { font-size: 11px; }
   .banner.warn { border-color: #d97706; }
+  details.acct-edit { margin-top: 10px; } details.acct-edit > summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; }
+  form.acct-form { display: grid; gap: 10px; margin-top: 10px; } form.acct-form label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
+  form.acct-form input, form.acct-form select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-width: 0; max-width: 100%; }
+  form.acct-form .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; } form.acct-form .btn { justify-self: start; }
+  .acct-row { border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 4px; } .acct-row:first-of-type { border-top: 0; }
+  .acct-row > button { justify-self: start; }
   dl.carry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; margin: 12px 0 0; font-size: 14px; }
   dl.carry dt { color: var(--text-2); } dl.carry dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
   dl.carry dd.in { color: var(--good, #0f7b3e); } dl.carry dd.out { color: var(--bad, #b42318); }
@@ -1794,16 +1800,49 @@ function flowMap(flows) {
 function balancesPage(rt, P) {
   const m = P.kind === 'month' ? P.m : P.endMonth, url = `/api/accounts?month=${m}`;
   if (state.acctUrl !== url) { state.acctMonth = null; state.acctUrl = url; }
-  if (!state.acctMonth) return waitFor('Account balances', [['acctMonth', () => fetchInto('acctMonth', url, () => { if (location.hash.startsWith('#/balances')) render(); })]]);
+  if (!state.acctMonth) return waitFor('Accounts & cards', [['acctMonth', () => fetchInto('acctMonth', url, () => { if (location.hash.startsWith('#/balances')) render(); })]]);
   const A = state.acctMonth.accounts, prev = monthName(addM(m, -1), 'short'), cur = (v, c) => esc(owed(Math.round(v * 100), c));
+  const info = n => (state.acctMonth.all || []).find(x => x.name === n) || { name: n, currency: '', added: false, transactions: 0 };
+  // Edit: rename, type its balance now, remove (or delete one you added)
+  const editor = (n, currency) => { const x = info(n);
+    return `<details class="acct-edit"><summary>Edit</summary><form class="acct-form" data-label="${esc(n)}"><label>Name<input type="text" name="name" maxlength="60" required value="${esc(n)}"></label>` +
+      `<label>Balance now <small class="muted">(only if its SMS don’t show it)</small><input type="text" name="balance" inputmode="decimal" placeholder="${esc(currency || x.currency || '')}"></label>` +
+      `<div class="actions"><button class="btn">Save</button><button type="button" class="link danger" data-acct-remove="${esc(n)}" data-added="${x.added && !x.transactions}">${x.added && !x.transactions ? 'Delete' : 'Remove'}</button></div>` +
+      '<p class="muted small">Remove hides it and stops counting its messages (for things like provident-fund SMS). You can show it again below.</p></form></details>'; };
   const rows = A.map(a => `<section class="card"><h2>${splitAcct(a.account)}<span>${esc(a.currency)}</span></h2>` +
-    `<div class="big"><span class="muted">Balance now · bank said on ${esc(dayLabel(a.as_of))}</span><b>${cur(a.current, a.currency)}</b></div>` +
+    `<div class="big"><span class="muted">Balance now · ${a.typed ? 'you entered it' : 'bank said'} on ${esc(dayLabel(a.as_of))}</span><b>${cur(a.current, a.currency)}</b></div>` +
     `<dl class="carry"><dt>Carried from ${esc(prev)}</dt><dd>${cur(a.opening, a.currency)}</dd>` +
     `<dt>+ Money in</dt><dd class="in">${cur(a.in, a.currency)}</dd><dt>− Money out</dt><dd class="out">${cur(a.out, a.currency)}</dd>` +
-    `<dt><b>${m === today().slice(0, 7) ? 'So far this month' : `Closing ${esc(monthName(m, 'short'))}`}</b></dt><dd><b>${cur(a.closing, a.currency)}</b></dd></dl></section>`).join('');
-  return { title: 'Account balances', sub: monthName(m), html: chips(P) + (rows || `<section class="card">${empty('No balances yet', 'They come from the “Avl Bal” or “Balance” line in your bank SMS. Accounts whose SMS don’t show a balance can’t be listed.')}</section>`) +
+    `<dt><b>${m === today().slice(0, 7) ? 'So far this month' : `Closing ${esc(monthName(m, 'short'))}`}</b></dt><dd><b>${cur(a.closing, a.currency)}</b></dd></dl>${editor(a.account, a.currency)}</section>`).join('');
+  const withBal = new Set(A.map(a => a.account)), rest = (state.acctMonth.all || []).filter(x => !withBal.has(x.name));
+  const others = rest.length ? card('Other accounts &amp; cards', 'no balance in their SMS', rest.map(x => `<div class="acct-row"><div>${splitAcct(x.name)}<small class="muted"> · ${plural(x.transactions, 'transaction')}${x.currency ? ' · ' + esc(x.currency) : ''}</small></div>${editor(x.name, x.currency)}</div>`).join(''), '') : '';
+  const hidden = (state.acctMonth.hidden || []).length ? card('Removed', 'not counted', state.acctMonth.hidden.map(n => `<div class="acct-row"><div>${esc(n)}</div><button type="button" class="link" data-acct-show="${esc(n)}">Show again</button></div>`).join(''), '') : '';
+  const add = '<section class="card"><h2>Add an account</h2><form class="acct-form" data-label=""><label>Name <small class="muted">(end it with the last 4 digits so its SMS join it, e.g. “SNB salary 7788”)</small><input type="text" name="name" maxlength="60" required></label>' +
+    '<div class="two"><label>Currency<select name="currency"><option>SAR</option><option>INR</option><option>USD</option></select></label><label>Balance now<input type="text" name="balance" inputmode="decimal" placeholder="optional"></label></div>' +
+    '<button class="btn">Add</button></form></section>';
+  return { title: 'Accounts & cards', sub: monthName(m), html: chips(P) + (rows || `<section class="card">${empty('No balances yet', 'They come from the “Avl Bal” or “Balance” line in your bank SMS, or a balance you type under Edit.')}</section>`) + others + hidden + add +
     '<section class="card"><p class="muted small">Worked out from the latest balance each bank stated and that account’s transactions, so each month starts where the last one ended. If an SMS was missed, the months before it are off by that amount.</p></section>' };
 }
+document.addEventListener('submit', async e => {
+  if (!e.target.matches('form.acct-form')) return;
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector('button');
+  btn.disabled = true;
+  try {
+    await post('/api/account', { label: f.dataset.label, name: f.name.value, balance: f.balance.value.trim() || null, currency: f.currency?.value || '' });
+    toast(f.dataset.label ? 'Saved.' : 'Added.'); state.acctMonth = null; state.acctUrl = null; await load(true); render();
+  } catch (err) { btn.disabled = false; toast(`Not saved: ${err.message}`); }
+});
+document.addEventListener('click', async e => {
+  const rm = e.target.closest('[data-acct-remove]'), show = e.target.closest('[data-acct-show]');
+  if (!rm && !show) return;
+  const n = (rm || show).dataset.acctRemove || show?.dataset.acctShow, del = rm?.dataset.added === 'true';
+  if (rm && !confirm(del ? `Delete ${n}?` : `Remove ${n}? Its messages stop counting; you can show it again.`)) return;
+  try {
+    await post('/api/account', del ? { name: n, delete: true } : { label: n, name: n, hidden: !!rm });
+    toast(del ? 'Deleted.' : rm ? 'Removed.' : 'Shown again.'); state.acctMonth = null; state.acctUrl = null; await load(true); render();
+  } catch (err) { toast(`Not saved: ${err.message}`); }
+});
 // ---------- Can I buy it? Each way to pay, checked against your money, with where it hits and where to cut ----------
 const loadBal = () => fetchInto('bal', '/api/balances');
 // Your optional spending, last 3 full months (SAR), and a 25% cut on the biggest three: the money a purchase can come from.
@@ -2185,7 +2224,7 @@ function overview(rt, P, X) {
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
       ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
       ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * worth(h), 0)) : '') +
-      ln(`#/balances?m=${P.endMonth}`, 'Account balances', 'Carried from last month, in, out, now', '') +
+      ln(`#/balances?m=${P.endMonth}`, 'Accounts & cards', 'Balances; rename, add or remove', '') +
       ln('#/buy', 'Can I buy it?', 'Where to pay from, what it hits, where to cut', '') +
       ln(`#/trail?${q}`, 'Money trail', 'Between your accounts, on to the loans', '') +
       ln(`#/liabilities?m=${P.endMonth}`, 'Liabilities', 'Paid, due or missed this month', state.money ? String(liabBoard(P.endMonth).filter(r => r.st === 'late').length || '✓') : '') +
@@ -2211,7 +2250,7 @@ function merchants(rt, P, X) {
 }
 function cards(rt, P, X) {
   const T = totals(X.cur), list = spendGroups(X.cur, t => t.account);
-  return { html: spendNav(rt, P) + chips(P) + card('Cards &amp; accounts', `${esc(state.currency)} ${fmt(T.spent)}`, list.map(e => {
+  return { html: spendNav(rt, P) + chips(P) + `<section class="card"><a class="ln" href="#/balances?${P.qs}"><span class="nm"><b>Rename, add or remove</b><small>Accounts &amp; cards, and their balances</small></span>${go1}</a></section>` + card('Cards &amp; accounts', `${esc(state.currency)} ${fmt(T.spent)}`, list.map(e => {
     const top = spendGroups(e.list, t => t.category)[0];
     return rk({ href: link('account', e.key, {}, P), icon: '💳', nameHtml: splitAcct(e.key), sub: `${plural(e.count, 'transaction')}${top ? ' · ' + esc(top.key) : ''}`, value: e.spent, pct: T.spent > 0 ? e.spent / T.spent : 0 });
   }).join('') || empty('No card spending in this period')) };
