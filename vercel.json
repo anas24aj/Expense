@@ -3,5 +3,6 @@
   "framework": "python",
   "regions": [
     "fra1"
-  ]
+  ],
+  "buildCommand": "cd web && npm ci && npm run build"
 }

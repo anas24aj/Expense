@@ -293,7 +293,7 @@ def what_if(loans, extra, month_free, amount, cur, pay, today, months=12, rate_b
     return {'debt_free_before': {'month': before['month'], 'months': before['months']},
             'debt_free_after': {'month': after['month'], 'months': after['months']},
             'delay_months': delay, 'extra_interest': money(extra_interest, cur), 'month_free_after': money(free_after, cur),
-            'verdict': verdict, 'why': '; '.join(why).capitalize() + '.'}
+            'verdict': verdict, 'why': (lambda s: s[:1].upper() + s[1:])('; '.join(why)) + '.'}
 
 
 def advice(loans, savings_minor, essentials, free, funds_monthly, settings, cur):
