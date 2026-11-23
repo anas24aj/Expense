@@ -94,6 +94,14 @@ ACCOUNT_KINDS = {'bank', 'card', 'wallet', 'bnpl', 'loan'}
 # adds people. sync_key: what their phone app sends instead of a password. pw_hash: PBKDF2, never the password.
 USERS_SCHEMA = '''CREATE TABLE IF NOT EXISTS app_users (id {id} PRIMARY KEY, email TEXT NOT NULL UNIQUE, pw_hash TEXT NOT NULL,
   space TEXT NOT NULL DEFAULT '', sync_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen TEXT NOT NULL DEFAULT '')'''
+# A split with someone who also uses this app (by their email): what they owe whom, kept in the public space so both
+# sides see it. One row per tagged transaction; amount_minor < 0 is them paying back. Rewritten from the tagging
+# person's own data each time it changes (share()), so it never drifts from it.
+SHARED_SCHEMA = '''CREATE TABLE IF NOT EXISTS shared_splits (from_space TEXT NOT NULL, txn_id BIGINT NOT NULL, from_email TEXT NOT NULL,
+  to_email TEXT NOT NULL, amount_minor BIGINT NOT NULL, currency TEXT NOT NULL, what TEXT NOT NULL, day TEXT NOT NULL,
+  settled INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (from_space, txn_id))'''
+# Your friends' emails, given once: name -> email (empty: not known).
+CONTACTS_SCHEMA = "CREATE TABLE IF NOT EXISTS contacts (name TEXT PRIMARY KEY, email TEXT NOT NULL DEFAULT '')"
 SPACE = re.compile(r'(?:public|u_\d{1,9})\Z')
 EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}\Z')
 MIN_USER_PASSWORD = 8
@@ -169,9 +177,9 @@ class DB:
             if self.pg and space != 'public':
                 self.run(f'CREATE SCHEMA IF NOT EXISTS {space}')
             self.run(schema)
-            for extra in [USERS_SCHEMA] if space == 'public' else []:
+            for extra in [USERS_SCHEMA, SHARED_SCHEMA] if space == 'public' else []:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA, CONTACTS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
             DB._schema_ready.add(ready)  # before the re-read: if that fails, requests must still work and not retry it each time
@@ -817,6 +825,7 @@ def set_friend(db, txn_id, friend, theirs_minor):
         raise KeyError('no such transaction')
     if not friend:
         db.run('DELETE FROM txn_friends WHERE txn_id = :id', id=txn_id)
+        share(db, [txn_id])
         return
     known = {r['friend'].lower(): r['friend'] for r in db.run('SELECT DISTINCT friend FROM txn_friends')}
     friend = known.get(friend.lower(), friend)
@@ -826,6 +835,7 @@ def set_friend(db, txn_id, friend, theirs_minor):
     db.run('INSERT INTO txn_friends (txn_id, friend, theirs_minor, settled) VALUES (:id, :f, :t, 0) '
            'ON CONFLICT (txn_id) DO UPDATE SET friend = excluded.friend, theirs_minor = excluded.theirs_minor, settled = 0',
            id=txn_id, f=friend, t=amount if credit else theirs_minor)
+    share(db, [txn_id])
 
 
 def delete_transaction(db, txn_id):
@@ -836,12 +846,102 @@ def delete_transaction(db, txn_id):
     db.run('INSERT INTO deleted_sms (body) VALUES (:b) ON CONFLICT (body) DO NOTHING', b=found[0]['body'])
     for table, key in (('txn_categories', 'txn_id'), ('txn_friends', 'txn_id'), ('transactions', 'id')):
         db.run(f'DELETE FROM {table} WHERE {key} = :id', id=txn_id)
+    share(db, [txn_id])
 
 
 def settle_friend(db, friend, currency):
     """Square up with a friend in one currency: everything so far stops counting toward what they owe."""
     db.run('UPDATE txn_friends SET settled = 1 WHERE friend = :f AND txn_id IN (SELECT id FROM transactions WHERE currency = :c)',
            f=friend, c=currency)
+    share(db, [r['txn_id'] for r in db.run('SELECT txn_id FROM txn_friends WHERE friend = :f', f=friend)])
+
+
+def public_of(db):
+    """The public space of the same database as `db` (where people and shared splits live)."""
+    return DB(db.url if db.pg else db.main_file)
+
+
+def set_contact(db, name, email):
+    """Remember a friend's email (once), and share what's tagged with them so far."""
+    email = email.strip().lower()
+    if email and not EMAIL.match(email):
+        raise ValueError('enter a valid email')
+    known = {r['friend'].lower(): r['friend'] for r in db.run('SELECT DISTINCT friend FROM txn_friends')}
+    name = known.get(name.lower(), name)
+    db.run('DELETE FROM contacts WHERE LOWER(name) = :n', n=name.lower())
+    db.run('INSERT INTO contacts (name, email) VALUES (:n, :e)', n=name, e=email)
+    share(db, [r['txn_id'] for r in db.run('SELECT txn_id FROM txn_friends WHERE LOWER(friend) = :n', n=name.lower())])
+
+
+def share(db, txn_ids):
+    """Rewrite the shared rows for these transactions from this person's own data: a tag with a friend whose email is
+    another person on this app becomes a row they see; anything else (no tag, no email, not on the app) has none."""
+    if not txn_ids:
+        return
+    emails = {r['name'].lower(): r['email'] for r in db.run("SELECT name, email FROM contacts WHERE email != ''")}
+    pub = public_of(db)
+    try:
+        me = pub.run('SELECT email FROM app_users WHERE space = :s', s=db.space)
+        people = {r['email'] for r in pub.run('SELECT email FROM app_users')}
+        for txn_id in txn_ids:
+            pub.run('DELETE FROM shared_splits WHERE from_space = :s AND txn_id = :id', s=db.space, id=txn_id)
+            found = db.run('SELECT t.amount_minor, t.currency, t.direction, t.body, t.received_at, f.friend, f.theirs_minor, f.settled '
+                           'FROM transactions t JOIN txn_friends f ON f.txn_id = t.id WHERE t.id = :id', id=txn_id)
+            if not found or not me:
+                continue  # untagged, deleted, or you have no email to be known by
+            t = found[0]
+            to = emails.get(t['friend'].lower())
+            if not to or to not in people or to == me[0]['email']:
+                continue
+            amount = -t['amount_minor'] if t['direction'] == 'credit' else min(t['theirs_minor'], t['amount_minor'])
+            pub.run('INSERT INTO shared_splits (from_space, txn_id, from_email, to_email, amount_minor, currency, what, day, settled) '
+                    'VALUES (:s, :id, :f, :to, :a, :c, :w, :d, :x)', s=db.space, id=txn_id, f=me[0]['email'], to=to, a=amount,
+                    c=t['currency'], w=(merchant_of(t['body']) or wording(t['body'])[len(WORDING):])[:60], d=t['received_at'][:10], x=t['settled'])
+    finally:
+        pub.close()
+
+
+def shared(db):
+    """What other people on the app say you owe them (unsettled), what you've told them they owe you, and your saved
+    friends (with whether their email is on the app)."""
+    pub = public_of(db)
+    try:
+        me = pub.run('SELECT email FROM app_users WHERE space = :s', s=db.space)
+        email = me[0]['email'] if me else None
+        people = {r['email'] for r in pub.run('SELECT email FROM app_users')}
+        to_me = pub.run('SELECT * FROM shared_splits WHERE to_email = :e AND settled = 0 ORDER BY day DESC', e=email) if email else []
+        from_me = pub.run('SELECT * FROM shared_splits WHERE from_space = :s AND settled = 0 ORDER BY day DESC', s=db.space)
+    finally:
+        pub.close()
+    contacts = [{'name': r['name'], 'email': r['email'], 'app': r['email'] in people} for r in db.run('SELECT * FROM contacts ORDER BY name')]
+    keep = lambda r: {k: r[k] for k in ('txn_id', 'from_email', 'to_email', 'amount_minor', 'currency', 'what', 'day')}
+    return {'me': email, 'to_me': [keep(r) for r in to_me], 'from_me': [keep(r) for r in from_me], 'contacts': contacts}
+
+
+def paid_back(db, from_email, currency):
+    """You paid someone back what they said you owe (one currency): their side shows it settled too."""
+    pub = public_of(db)
+    try:
+        me = pub.run('SELECT email FROM app_users WHERE space = :s', s=db.space)
+        if not me:
+            raise KeyError('no account')
+        rows = pub.run('SELECT from_space, txn_id FROM shared_splits WHERE to_email = :e AND from_email = :f AND currency = :c AND settled = 0',
+                       e=me[0]['email'], f=from_email.strip().lower(), c=currency)
+        pub.run('UPDATE shared_splits SET settled = 1 WHERE to_email = :e AND from_email = :f AND currency = :c',
+                e=me[0]['email'], f=from_email.strip().lower(), c=currency)
+    finally:
+        pub.close()
+    by_space = defaultdict(list)
+    for r in rows:
+        by_space[r['from_space']].append(r['txn_id'])
+    for space, ids in by_space.items():
+        theirs = DB(db.url if db.pg else db.main_file, space)
+        try:
+            for i in ids:
+                theirs.run('UPDATE txn_friends SET settled = 1 WHERE txn_id = :id', id=i)
+        finally:
+            theirs.close()
+    return len(rows)
 
 
 def plan(loans, extra, strategy=None):
@@ -1458,7 +1558,10 @@ def read_friend(environ):
     if len(friend) > MAX_FRIEND:
         raise ValueError(f'a name is at most {MAX_FRIEND} characters')
     theirs = int(Decimal(str(msg.get('theirs') or 0).replace(',', '').strip()) * 100)
-    return int(msg['id']), friend, theirs
+    email = str(msg.get('email') or '').strip().lower()
+    if email and not EMAIL.match(email):
+        raise ValueError('enter a valid email')
+    return int(msg['id']), friend, theirs, email
 
 
 def read_payment(environ):
@@ -1746,6 +1849,20 @@ def _app(environ, start_response):
             pair = (int(pair['debit']), None if pair.get('credit') is None else int(pair['credit']))
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/shared/paid'):
+        try:
+            paid = read_json(environ, MAX_BODY)
+            paid = (str(paid['from']), str(paid['currency']))
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/contact'):
+        try:
+            contact = read_json(environ, MAX_BODY)
+            contact = (' '.join(str(contact['name']).split())[:MAX_FRIEND], str(contact.get('email') or ''))
+            if not contact[0]:
+                raise ValueError('a name is needed')
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/statement/delete'):
         try:
             undone = int(read_json(environ, MAX_BODY)['id'])
@@ -1756,7 +1873,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -1791,7 +1908,9 @@ def _app(environ, start_response):
             return respond('200 OK', {'saved': True, 'category': now, **refreshed(db, query, every)})
         if path == '/api/friend':
             try:
-                set_friend(db, *tag)
+                set_friend(db, *tag[:3])
+                if tag[1] and tag[3]:
+                    set_contact(db, tag[1], tag[3])
             except KeyError:
                 return respond('404 Not Found', {'error': 'no such transaction'})
             except ValueError as e:
@@ -1884,6 +2003,20 @@ def _app(environ, start_response):
             return respond('200 OK', statements(db))
         if path == '/api/statements':
             return respond('200 OK', statements(db))
+        if path == '/api/shared':
+            return respond('200 OK', shared(db))
+        if path == '/api/shared/paid':
+            try:
+                paid_back(db, *paid)
+            except KeyError as e:
+                return respond('400 Bad Request', {'error': str(e.args[0])})
+            return respond('200 OK', shared(db))
+        if path == '/api/contact':
+            try:
+                set_contact(db, *contact)
+            except ValueError as e:
+                return respond('400 Bad Request', {'error': str(e)})
+            return respond('200 OK', shared(db))
         if path == '/api/balances':
             return respond('200 OK', balances(transactions(db)))
         if path == '/api/trail':

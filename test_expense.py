@@ -310,6 +310,43 @@ class StoreMixin:
         self.assertEqual((stored['amount_minor'], stored['currency'], stored['direction']), (2545000, 'SAR', 'credit'))
         self.assertEqual(server.transactions(db)[0]['category'], 'Salary')
 
+    def test_split_with_someone_on_the_app(self):
+        db = self.db
+        hari_id = server.new_user(db, 'hari@example.com', 'hari-pass-1')
+        wife_id = server.new_user(db, 'wife@example.com', 'wife-pass-1')
+        space = lambda uid: db.run('SELECT space FROM app_users WHERE id = :id', id=uid)[0]['space']
+        hari, wife = server.DB(self.url, space(hari_id)), server.DB(self.url, space(wife_id))
+        try:
+            dinner = server.store_sms(hari, 'B', 'Rs.900.00 paid to SWIGGY via UPI', '2026-11-20T21:00:00+05:30')
+            cab = server.store_sms(hari, 'B', 'Rs.300.00 paid to UBER via UPI', '2026-11-21T09:00:00+05:30')
+            ids = {t['merchant']: t['id'] for t in server.transactions(hari)}
+            server.set_friend(hari, ids['SWIGGY'], 'Wife', 45000)          # split 2 ways
+            server.set_contact(hari, 'wife', 'Wife@Example.com')            # her email, once: the earlier tag is shared too
+            server.set_friend(hari, ids['UBER'], 'WIFE', 30000)              # next time: just the name
+            mine = server.shared(hari)
+            self.assertEqual([(c['name'], c['email'], c['app']) for c in mine['contacts']], [('Wife', 'wife@example.com', True)])
+            hers = server.shared(wife)
+            self.assertEqual(sorted((r['what'], r['amount_minor'], r['from_email']) for r in hers['to_me']),
+                             [('SWIGGY', 45000, 'hari@example.com'), ('UBER', 30000, 'hari@example.com')])
+            # She bought something for him too: the two directions net out on each side.
+            server.store_sms(wife, 'B', 'Rs.400.00 paid to ZOMATO via UPI', '2026-11-22T20:00:00+05:30')
+            server.set_contact(wife, 'Hari', 'hari@example.com')
+            server.set_friend(wife, server.transactions(wife)[0]['id'], 'Hari', 20000)
+            self.assertEqual([r['amount_minor'] for r in server.shared(hari)['to_me']], [20000])
+            # She pays him back: settled on his side too, and gone from her list.
+            self.assertEqual(server.paid_back(wife, 'hari@example.com', 'INR'), 2)
+            self.assertEqual(server.shared(wife)['to_me'], [])
+            self.assertEqual({t['merchant']: t['settled'] for t in server.transactions(hari) if t['friend']}, {'SWIGGY': True, 'UBER': True})
+            # Removing a tag takes it off her list; a friend without an app email shares nothing.
+            server.set_friend(wife, server.transactions(wife)[0]['id'], '', 0)
+            self.assertEqual(server.shared(hari)['to_me'], [])
+            server.set_friend(hari, ids['UBER'], 'Ali', 30000)
+            self.assertEqual(server.shared(wife)['to_me'], [])
+        finally:
+            for d in (hari, wife):
+                server.drop_space(db, d.space)
+                d.close()
+
     def test_data_spaces_are_separate(self):
         db = self.db
         theirs = server.DB(self.url, 'u_901')
@@ -706,7 +743,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements, txn_links')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements, txn_links, app_users, shared_splits, contacts')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()

@@ -184,6 +184,14 @@
   details.lb .rk .nm b, details.lb .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
   details.lb .rk .v { font-size: 13px; } details.lb .rk .v small { font-size: 11px; }
   .banner.warn { border-color: #d97706; }
+  .simp .rk .nm b, .simp .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
+  .owe + .owe { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+  .owe-h { display: flex; justify-content: space-between; gap: 12px; } .owe-h b { overflow-wrap: anywhere; } .owe-h span { font-weight: 700; color: var(--bad, #b42318); white-space: nowrap; }
+  .owe ul { list-style: none; margin: 6px 0 10px; padding: 0; font-size: 13px; color: var(--text-2); }
+  .owe li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  form.contact { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } form.contact label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
+  form.contact input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-width: 0; max-width: 100%; }
+  .fix.friend .friend-email input { width: 100%; }
   form.buy { display: grid; gap: 12px; } form.buy label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
   form.buy input, form.buy select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; max-width: 100%; }
   form.buy .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
@@ -960,7 +968,8 @@ let pending = null, loadSeq = 0;  // pending: fresh data that arrived while a tr
 function setData(sum, all) {
   state.sum = sum; state.currency = sum.currency; state.all = prep(all);
   state.earliest = state.all.reduce((a, t) => t._d < a ? t._d : a, today());
-  $('friend-names').innerHTML = [...new Set(state.all.map(t => t.friend).filter(Boolean))].map(n => `<option value="${esc(n)}">`).join('');
+  friendNames();
+  if (!state.shared && !state.err.shared) loadShared();
   if (!state.moneyAt || Date.now() - state.moneyAt > 60000) { loadMoney(); loadRate(); loadPlan(); loadSettings(); }  // EMI alerts, net worth and the check-in banner on Overview need them
 }
 // Keep the screen current without a manual refresh: ask "anything new?" when the app comes back to the
@@ -1675,13 +1684,31 @@ function moneyPage() {
       `<p class="muted small">Gold: ${ls.get('goldMine') ? 'your price' : `today's price from ${esc(ls.get('goldSource') || 'gold-api.com')} ($${state.goldUsdOz} an ounce)`}; 22K is 22/24 of it, 18K 18/24. Type your jeweller's 24K rate to use that instead.</p>` +
       `<p class="muted small">Looked up every few hours from open exchange-rate services (open.er-api.com, or Frankfurter). Type your own to keep it; clear it to go back to today’s rate.</p>`) };
 }
+// Splits with people on this app: what they say you owe, what you've told them, and your saved friends (name + email).
+const loadShared = () => fetchInto('shared', '/api/shared', () => { friendNames(); if (/^#\/(friends?|overview)|^$/.test(location.hash)) render(); });
+const contactOf = name => (state.shared?.contacts || []).find(c => c.name.toLowerCase() === String(name).trim().toLowerCase());
+function friendNames() {  // the picker: saved friends first, then names only tagged so far
+  $('friend-names').innerHTML = [...new Set([...(state.shared?.contacts || []).map(c => c.name), ...state.all.map(t => t.friend).filter(Boolean)])]
+    .map(n => `<option value="${esc(n)}">`).join('');
+}
+const whoIs = email => (state.shared?.contacts || []).find(c => c.email === email)?.name || email;  // your name for them, else their email
+// Per person and currency: what they owe you minus what you owe them (both from the app), so one figure settles it.
+function sharedNet() {
+  const S = state.shared, m = new Map();
+  if (!S) return [];
+  const add = (email, cur, v, item) => { const k = `${email}|${cur}`, e = m.get(k) || { email, cur, net: 0, owe: 0, items: [] }; e.net += v; if (v < 0) e.owe -= v; if (item) e.items.push(item); m.set(k, e); };
+  for (const r of S.from_me) add(r.to_email, r.currency, r.amount_minor);
+  for (const r of S.to_me) add(r.from_email, r.currency, -r.amount_minor, r);
+  return [...m.values()].sort((a, b) => a.net - b.net);
+}
 const friendNote = t => `${t.friend} · ${t.direction === 'credit' ? 'paid you back'
   : t._t >= t._c ? 'all theirs' : `they owe ${fmt(t._t)}, yours ${fmt(t._mine)}`}${t.settled ? ' · settled' : ''}`;
 // "Bought for a friend": who, and how much of it is theirs. On a credit: a friend paying you back.
 function friendForm(t) {
   const debit = t.direction === 'debit', split = !t.friend ? '2' : t._t >= t._c ? 'all' : 'custom';
   return `<form class="fix friend" data-id="${t.id}" data-amount="${t._c}">` +
-    `<label>${debit ? 'Bought for a friend?' : 'Money back from a friend?'}<input type="text" name="friend" list="friend-names" maxlength="40" autocomplete="off" placeholder="Friend’s name" value="${esc(t.friend)}"></label>` +
+    `<label>${debit ? 'Bought for a friend?' : 'Money back from a friend?'}<input type="text" name="friend" list="friend-names" maxlength="40" autocomplete="off" placeholder="Pick or type a name" value="${esc(t.friend)}"></label>` +
+    `<label class="friend-email" ${!t.friend || contactOf(t.friend)?.email ? 'hidden' : ''}>Their email <small class="muted">(once; if they use this app they’ll see what they owe)</small><input type="email" name="email" autocomplete="off" placeholder="optional"></label>` +
     (debit ? `<label>Whose is it<select name="split">` +
       [['2', 'Shared: split 2 ways, they owe half'], ['3', 'Split 3 ways, they owe 2/3'], ['4', 'Split 4 ways, they owe 3/4'], ['all', 'All theirs'], ['custom', 'Their share: type it']]
         .map(([v, label]) => `<option value="${v}" ${v === split ? 'selected' : ''}>${label}</option>`).join('') + '</select></label>' +
@@ -2006,7 +2033,17 @@ function friendsPage(rt) {
   const all = friendBalances();
   if (!rt.arg) {
     const total = all.reduce((a, e) => a + Math.max(0, e.owed), 0);
-    return { title: 'Friends', sub: 'What friends owe you', html:
+    const N = sharedNet(), owe = N.filter(n => n.owe > 0);
+    const youOwe = owe.length ? card('You owe', 'from friends on this app', owe.map(n => `<div class="owe"><div class="owe-h"><b>${esc(whoIs(n.email))}</b><span>${esc(owed(n.owe, n.cur))}</span></div>` +
+        `<ul>${n.items.map(i => `<li>${esc(i.what || 'Shared')} · ${esc(dayLabel(i.day))}<span>${esc(owed(i.amount_minor, i.currency))}</span></li>`).join('')}</ul>` +
+        `<button type="button" class="btn" data-paid="${esc(n.email)}" data-cur="${esc(n.cur)}" data-name="${esc(whoIs(n.email))}">Mark paid</button></div>`).join(''), '') : '';
+    // only worth showing where money goes both ways with someone: then one figure replaces two lists
+    const net = N.some(n => n.owe > 0 && n.net !== -n.owe) ? card('Simplified', 'one figure per person', '<div class="simp">' + N.map(n => rk({ icon: n.net > 0 ? '⬅️' : n.net < 0 ? '➡️' : '✅', name: whoIs(n.email),
+        sub: n.net > 0 ? 'owes you, after what you owe them' : n.net < 0 ? 'you owe them, after what they owe you' : 'all square', valueText: esc(owed(Math.abs(n.net), n.cur)) }) +
+        (n.owe > 0 && n.net !== -n.owe ? `<button type="button" class="btn" data-settle-net="${esc(n.email)}" data-cur="${esc(n.cur)}" data-name="${esc(whoIs(n.email))}">Settle up (${n.net < 0 ? 'you pay' : 'they pay'} ${esc(owed(Math.abs(n.net), n.cur))})</button>` : '')).join('') + '</div>' +
+        '<p class="muted small">Only friends who use this app (their email is saved with them). Others are listed below as before.</p>', '') : '';
+    return { title: 'Friends', sub: 'Split with friends', html:
+      youOwe + net +
       `<section class="card"><div class="big"><span class="muted">Owed to you</span><b>${money(total)}</b></div></section>` +
       card('Friends', esc(state.currency), all.map(e => rk({ href: `#/friend/${enc(e.name)}`, icon: '👥', name: e.name,
         sub: `${plural(e.list.length, 'transaction')}${e.owed < 0 ? ' · you owe them' : e.owed ? '' : ' · all square'}`, value: e.owed })).join('')
@@ -2017,6 +2054,8 @@ function friendsPage(rt) {
   return { title: e.name, sub: 'Friend', html:
     `<section class="card"><div class="big"><span class="muted">${e.owed < 0 ? 'You owe them' : 'They owe you'}</span><b>${money(Math.abs(e.owed))}</b></div>` +
     (e.owed ? `<p class="muted">Paid back in cash, or squared up another way?</p><button type="button" class="btn" data-settle="${esc(e.name)}">Mark settled</button>` : '<p class="muted">All square.</p>') + '</section>' +
+    (c => `<section class="card"><h2>Email</h2>${c?.email ? `<p>${esc(c.email)} · ${c.app ? '✅ uses this app: sees what they owe you' : 'not on this app yet'}</p>` : ''}` +
+      `<form class="contact"><input type="hidden" name="name" value="${esc(e.name)}"><label>${c?.email ? 'Change' : 'Add their email (once)'}<input type="email" name="email" value="${esc(c?.email || '')}" placeholder="name@example.com"></label><button class="btn">Save</button></form></section>`)(contactOf(e.name)) +
     `<section class="card"><h2>Transactions<span>tap to change</span></h2>${e.list.map(t => row(t, true)).join('')}</section>` };
 }
 // Transactions grouped by day, each day header linking to that day and showing what it spent.
@@ -2051,8 +2090,9 @@ const chips = P => `<nav class="chips" aria-label="Period">` + monthPick(P) + [[
 const periodText = P => `${P.label}${P.sofar ? ' ' + P.sofar : ''}`;
 
 /* ---------- Pages ---------- */
+const oweAlerts = () => sharedNet().filter(n => n.owe > 0).map(n => `<a class="banner" href="#/friends"><span>You owe ${esc(whoIs(n.email))} ${esc(owed(n.owe, n.cur))} · ${plural(n.items.length, 'item')}</span>${go1}</a>`).join('');
 function overview(rt, P, X) {
-  if (!state.all.length) return { html: chips(P) + `<section class="card">${empty('No transactions yet', 'New bank SMS will appear here within seconds once your phone forwards them.<br><a href="/import">Import your old SMS</a>')}</section>` };
+  if (!state.all.length) return { html: chips(P) + oweAlerts() + `<section class="card">${empty('No transactions yet', 'New bank SMS will appear here within seconds once your phone forwards them.<br><a href="/import">Import your old SMS</a>')}</section>` };
   const T = totals(X.cur), d = deltaPct(T.spent, totals(X.prev)), net = T.received - T.spent;
   const prevQs = P.step(-1), nextQs = P.step(1), canPrev = prevQs && P.start > state.earliest;
   let proj = '';
@@ -2097,7 +2137,7 @@ function overview(rt, P, X) {
   const checkin = left ? `<a class="banner" href="#/plan"><span>${esc(monthName(today().slice(0, 7), 'short'))} check-in · ${plural(left, 'step')} left</span>${go1}</a>` : '';
   const Hh = state.money && health(), hcol = { Good: 'good', Fair: 'warn', 'Needs work': 'bad' };
   const healthCard = Hh?.score != null ? `<a class="banner health ${hcol[Hh.rating]}" href="#/health"><span>Money health: <b>${Hh.rating}</b> · ${Hh.score}/100 · ${esc(Hh.checks.find(c => c.tone === 'poor')?.label || Hh.checks.find(c => c.tone === 'fair')?.label || 'all checks good')}</span>${go1}</a>` : '';
-  const lalerts = liabAlerts().map(a => `<a class="banner" href="#/liabilities"><span>${esc(a)}</span>${go1}</a>`).join('');
+  const lalerts = oweAlerts() + liabAlerts().map(a => `<a class="banner" href="#/liabilities"><span>${esc(a)}</span>${go1}</a>`).join('');
   return { html: chips(P) + hero + healthCard + salaryBanner + checkin + emis + lalerts + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
@@ -2573,10 +2613,27 @@ async function saveFriend(form, remove) {
     : Math.round(amount * (Number(split) - 1) / Number(split)) / 100;
   if (split === 'custom' && !remove && !form.theirs.value.trim()) { form.theirs.focus(); return; }
   form.querySelectorAll('button').forEach(b => { b.disabled = true; });
-  const ok = await postAndRedraw('/api/friend', { id: Number(form.dataset.id), friend: name, theirs }, form.dataset.id);
-  if (ok) toast(remove ? 'Friend tag removed.' : `Tagged with ${name}.`);
+  const email = remove ? '' : (form.email?.value || '').trim();
+  const ok = await postAndRedraw('/api/friend', { id: Number(form.dataset.id), friend: name, theirs, email }, form.dataset.id);
+  if (ok) {
+    state.shared = null; loadShared();
+    const c = contactOf(name);
+    toast(remove ? 'Friend tag removed.' : email || c?.app ? `Tagged with ${name}. They see it in their app.` : `Tagged with ${name}.`);
+  }
   else form.querySelectorAll('button').forEach(b => { b.disabled = false; });
 }
+document.addEventListener('input', e => {
+  if (e.target.name !== 'friend' || !e.target.form?.matches('form.friend')) return;
+  const box = e.target.form.querySelector('.friend-email'), name = e.target.value.trim();
+  if (box) box.hidden = !name || !!contactOf(name)?.email;
+});
+document.addEventListener('submit', async e => {
+  if (!e.target.matches('form.contact')) return;
+  e.preventDefault();
+  const f = e.target;
+  try { state.shared = await post('/api/contact', { name: f.name.value, email: f.email.value }); friendNames(); toast('Saved.'); render(); }
+  catch { toast('Could not save: check the email.'); }
+});
 document.addEventListener('submit', e => {
   if (!e.target.matches('form.friend')) return;
   e.preventDefault();
@@ -2597,8 +2654,27 @@ document.addEventListener('click', async e => {
   const settle = e.target.closest('[data-settle]');
   if (settle) {
     settle.disabled = true;
-    if (await postAndRedraw('/api/friend/settle', { friend: settle.dataset.settle })) toast(`Settled with ${settle.dataset.settle}.`);
+    if (await postAndRedraw('/api/friend/settle', { friend: settle.dataset.settle })) { toast(`Settled with ${settle.dataset.settle}.`); state.shared = null; loadShared(); }
     else settle.disabled = false;
+  }
+  const net = e.target.closest('[data-settle-net]');
+  if (net) {  // one payment of the difference squares both directions with this person
+    if (!confirm(`Settle up with ${net.dataset.name}? Both what you owe them and what they owe you are marked settled.`)) return;
+    net.disabled = true;
+    try {
+      await post('/api/shared/paid', { from: net.dataset.settleNet, currency: net.dataset.cur });
+      const c = (state.shared?.contacts || []).find(x => x.email === net.dataset.settleNet);
+      if (c) await post(`/api/friend/settle?currency=${enc(net.dataset.cur)}`, { friend: c.name });
+      state.shared = null; await load(true); loadShared(); toast(`Settled up with ${net.dataset.name}.`);
+    } catch { net.disabled = false; toast('Could not save. Try again.'); }
+    return;
+  }
+  const paid = e.target.closest('[data-paid]');
+  if (paid) {
+    if (!confirm(`Mark everything you owe ${paid.dataset.name} in ${paid.dataset.cur} as paid? It shows as settled on their side too.`)) return;
+    paid.disabled = true;
+    try { state.shared = await post('/api/shared/paid', { from: paid.dataset.paid, currency: paid.dataset.cur }); toast(`Marked paid to ${paid.dataset.name}.`); render(); }
+    catch { paid.disabled = false; toast('Could not save. Try again.'); }
   }
 });
 
