@@ -32,6 +32,8 @@ CR_DR = re.compile(r'\b(cr|dr|c|d|m)\.?\s*$', re.I)
 SKIP_DESC = re.compile(r'^\s*(?:opening|closing|brought|carried)\s*(?:balance|forward)?|^\s*(?:b/f|c/f)\b|^\s*transfer to merchant emi\b|^\s*total(?:\s+(?:debits?|credits?|amount|withdrawals?|deposits?))?\s*:?\s*$', re.I)
 IGST = re.compile(r'^\s*IGST\s+(DB|CR)\b', re.I)  # SBI Card's undated GST lines
 RTL_ROW = re.compile(r'(\d{4}-\d\d-\d\d)\s+\d\d:\d\d:\d\d\s+\d+\s*$')  # Tiqmo: rows run right to left and end in date, time, serial
+OPENING = re.compile(r'\s*opening balance\s*:?\s*(-?[\d,]+\.\d{2})\s*(?:cr)?\s*$', re.I)
+ACCOUNT_NO = re.compile(r'\s*account\s+(?:number|no\.?)\s*:\s*(\d{6,})', re.I)  # starts a section of a combined statement
 PAGE_NOISE = re.compile(r'page\s*\d|statement of account|account (?:no|number|statement)|customer|ifsc|branch|generated on|this is a (?:computer|system)', re.I)
 MAX_ROWS = 20000
 
@@ -231,9 +233,23 @@ def _pdf_lines(data, password):
         try:
             text = page.extract_text(extraction_mode='layout')
         except Exception:
-            text = page.extract_text()
-        lines += [l.rstrip() for l in (text or '').splitlines() if l.strip()]
+            _trim_widths(page)  # HDFC card PDFs give a one-byte font 257 widths, which pypdf refuses
+            try:
+                text = page.extract_text(extraction_mode='layout')
+            except Exception:
+                text = page.extract_text()
+        lines += [re.sub(r'^(\s*)null(?=\d)', r'\1    ', l.rstrip()) for l in (text or '').splitlines() if l.strip()]  # pypdf prints 'null' before some HDFC card dates
     return lines
+
+
+def _trim_widths(page):
+    from pypdf.generic import ArrayObject, NameObject
+    fonts = (page.get('/Resources') or {}).get_object().get('/Font') or {}
+    for f in fonts.get_object().values():
+        f = f.get_object()
+        w = f.get('/Widths')
+        if w is not None and len(w.get_object()) > 256 - int(f.get('/FirstChar', 0)):
+            f[NameObject('/Widths')] = ArrayObject(list(w.get_object())[:256 - int(f.get('/FirstChar', 0))])
 
 
 def _columns(line):
@@ -272,10 +288,15 @@ def rows_from_lines(lines):
     """Transactions from a PDF's text lines: a line that starts with a date (after an optional serial number) and
     ends in amounts is a row; lines without a date after it continue its description. Each amount goes to the
     nearest money column of the header line; without one, the last amount is the balance."""
-    out, cols, words, stmt_day = [], {}, [], None
+    out, cols, words, stmt_day, acct, accts, opening = [], {}, [], None, None, set(), None
     start = re.compile(rf'^\s*(?:\d{{1,5}}\s+)?({DATE.pattern})', re.I)
     for line in _join_wrapped_dates(lines):
         text = line.translate(ARABIC_DIGITS)
+        if not out and (ob := OPENING.match(text)):
+            opening = minor_of(ob.group(1))
+        if a := ACCOUNT_NO.match(text):
+            acct = a.group(1)[-4:]
+            accts.add(acct)
         tail = RTL_ROW.search(text)
         if tail and len(amounts := MONEY_TOKEN.findall(text[:tail.start()])) >= 2:  # balance, amount, … date time serial
             bal, amt = minor_of(amounts[0]), abs(minor_of(amounts[1]))
@@ -293,7 +314,7 @@ def rows_from_lines(lines):
                             'direction': 'debit' if igst.group(1).lower() == 'db' else 'credit', 'balance_minor': None})
             continue
         m = start.match(text)
-        if not m and not MONEY_TOKEN.search(text) and len(found := _columns(text)) >= 2:
+        if not m and not MONEY_TOKEN.search(text) and not SKIP_DESC.match(text) and (len(found := _columns(text)) >= 2 or 'amount' in found and HEAD['date'].search(text)):  # HDFC card: Date … Amount  # Federal: 'Opening Balance … 0'
             cols = found  # the header line (again on each page)
             continue
         money = list(MONEY_TOKEN.finditer(text))
@@ -311,7 +332,7 @@ def rows_from_lines(lines):
         desc = ' '.join(rest.split())
         if SKIP_DESC.match(desc):
             continue
-        row = {'day': day, 'desc': desc[:240], 'amount_minor': None, 'direction': None, 'balance_minor': None}
+        row = {'day': day, 'desc': desc[:240], 'amount_minor': None, 'direction': None, 'balance_minor': None, 'account': acct}
         amounts = []
         for tok in money:
             v = minor_of(tok.group(0))
@@ -338,9 +359,14 @@ def rows_from_lines(lines):
                 row['direction'] = 'debit' if CR_DR.search(raw).group(1).lower() in ('dr', 'd', 'm') else 'credit'
         if row['amount_minor']:
             out.append(row)
-    seen, rows = set(), []
+    if out and opening is not None and out[0]['direction'] is None and out[0]['balance_minor'] is not None:  # Canara e-Pass: no header, so the opening balance says which way the first row went
+        change = out[0]['balance_minor'] - opening
+        out[0]['direction'] = 'credit' if change == out[0]['amount_minor'] else 'debit' if change == -out[0]['amount_minor'] else None
+    seen, rows, several = set(), [], len(accts) > 1
     for r in out:
         r.pop('closed', None)
+        if not several:
+            r.pop('account', None)  # only a combined statement (HDFC: two savings accounts in one PDF) keeps it
         pre = re.match(r'[A-Z]+\d+-', r['desc'])  # Barq: 'CSO260101-' and, after the wrap, the rest of the Transaction Id
         tail = pre and re.search(r'\b(?=[A-Z\d]*\d)(?=[A-Z\d]*[A-Z])[A-Z\d]{8,12}\b', r['desc'][pre.end():])
         key = tail and (pre.group(0), tail.group(0), r['amount_minor'], r['direction'])  # a refund can repeat its purchase's id
@@ -352,8 +378,8 @@ def rows_from_lines(lines):
 
 
 def by_balance(rows):
-    """Fill in missing directions from the running balance (in either order the file lists them), and say how
-    many rows the balances confirm."""
+    """Set each direction from the running balance where it moved by exactly the amount (in either order the
+    file lists them), and say how many rows the balances confirm."""
     def fits(seq):
         n = 0
         for prev, r in zip(seq, seq[1:]):
@@ -371,8 +397,8 @@ def by_balance(rows):
         change = r['balance_minor'] - prev['balance_minor']
         if abs(change) == r['amount_minor']:
             way = 'credit' if change > 0 else 'debit'
-            checked += r['direction'] in (None, way)
-            r['direction'] = r['direction'] or way
+            checked += 1
+            r['direction'] = way  # the balance beats a column guess (Federal's last page shifts its columns)
     return checked
 
 
