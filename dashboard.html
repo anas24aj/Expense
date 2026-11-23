@@ -118,7 +118,7 @@
   .more { display: flex; align-items: center; justify-content: center; min-height: 44px; margin-top: 4px; color: var(--accent); font-weight: 600; font-size: 15px; text-decoration: none; }
   .banner { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 16px; border-radius: 16px; background: var(--warn-soft); color: var(--text); text-decoration: none; font-weight: 600; }
   .banner span { flex: 1; }
-  .banner .go, .ln .go { color: var(--muted); font-size: 20px; }
+  .banner .go, .ln .go { flex: none; color: var(--muted); font-size: 20px; }
 
   /* Ranked bar row */
   .rk { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto 40px; grid-template-rows: auto 4px; column-gap: 12px; row-gap: 6px; align-items: center; min-height: 56px; padding: 8px 0; text-decoration: none; color: inherit; }
@@ -428,13 +428,6 @@
   .closein .chip.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } .closein .chip small { color: var(--muted); font-size: 12px; }
   .banner.health.good b { color: var(--good); } .banner.health.warn b { color: var(--warn); } .banner.health.bad b { color: var(--bad); }
   .hv { font-variant-numeric: tabular-nums; margin-left: 4px; }
-  .lc svg { display: block; width: 100%; height: 160px; overflow: visible; }
-  .lc polyline { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
-  .lc .axis { stroke: var(--line); vector-effect: non-scaling-stroke; }
-  .lc .past, .legend i.past { stroke: var(--text-2); background: var(--text-2); } .lc .plan, .legend i.plan { stroke: var(--accent); background: var(--accent); }
-  .lc .base { stroke: var(--muted); stroke-dasharray: 4 4; } .legend i.base { background: var(--muted); }
-  .lc .save, .legend i.save { stroke: var(--bar-2); background: var(--bar-2); } .lc .net, .legend i.net { stroke: var(--accent); background: var(--accent); }
-  .lc-zero { margin: 2px 0 0; }
   /* Savings vs debt: a diverging net-worth chart. Savings rise above ₹0, debt hangs below it, the ink line is net worth. */
   .dc { position: relative; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   .dc-head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 2px 0 12px; }
@@ -472,7 +465,6 @@
   html.motion .view.anim .dc .tdot { animation: fade .2s both 1.45s; }
   html.motion .view.anim .dc .dot { transform-box: fill-box; transform-origin: center; animation: dc-pop .45s ease-out both 1.45s; }
   html.motion .dc .pulse { transform-box: fill-box; transform-origin: center; animation: dc-pulse 2.8s ease-out infinite; animation-delay: var(--clock); }
-  .lc-x { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
   .tip { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 12px 0; text-decoration: none; color: inherit; border-top: 1px solid var(--line); }
   .tip:first-of-type { border-top: 0; }
   .tip .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; font-size: 18px; }
@@ -518,6 +510,122 @@
   .empty a { color: var(--accent); font-weight: 600; }
   .muted { color: var(--muted); }
   h3.sec { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 16px 0 0; }
+
+  /* ---------- v2 screens: Home, People, Plan, More, Review, sheets ---------- */
+  .bad-ink { color: var(--bad); } .good-ink { color: var(--good); }
+  .hero .total.neg span { color: #ffd2cc; }
+  .stack { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; margin: 14px 0 0; background: rgb(255 255 255 / .18); }
+  .stack i { display: block; min-width: 3px; }
+  .stack.light { background: var(--surface-2); margin: 8px 0; }
+  .s-spent { background: #ffb15c; } .s-comm { background: #b9a6ff; } .s-fund { background: #7fd6ff; } .s-free { background: var(--save); } .s-rest { background: var(--line); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+  .hero .kpis span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .skel { display: grid; gap: 10px; padding: 6px 0; }
+  .skel i, .skel-line { display: block; height: 14px; border-radius: 7px; background: linear-gradient(90deg, var(--surface-2) 30%, var(--line) 50%, var(--surface-2) 70%) 0 0 / 300% 100%; animation: shimmer 1.3s linear infinite; }
+  .skel i:nth-child(2n) { width: 70%; } .skel i:nth-child(3n) { width: 85%; }
+  .hero .skel-line { width: 60%; background: rgb(255 255 255 / .2); }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+  .banner.review { background: var(--accent-soft); }
+  .rv-n { flex: none !important; min-width: 32px; height: 32px; padding: 0 8px; border-radius: 16px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 14px; }
+  .duo { display: grid; grid-template-columns: 1fr 1fr; padding: 0; overflow: hidden; }
+  .duo a { display: grid; gap: 2px; padding: 16px; text-decoration: none; min-width: 0; }
+  .duo a + a { border-left: 1px solid var(--line); }
+  .duo span { font-size: 13px; color: var(--muted); } .duo b { font-size: 19px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; } .duo small { font-size: 12px; color: var(--muted); }
+  button.ln, button.pp, button.asset { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+  .ln + button.ln, button.ln + .ln, button.ln + button.ln, .sec + .ln { border-top: 1px solid var(--line); }
+  .sec + .ln, .sec + button.ln { border-top: 0; }
+  .ic2 { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; font-size: 17px; }
+  .ic2:empty { display: none; }
+  .ln .nm small .st { margin-left: 4px; }
+  .st { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); vertical-align: 1px; white-space: nowrap; }
+  .st.good { background: color-mix(in srgb, var(--good) 16%, var(--surface)); color: var(--good); }
+  .st.warn { background: var(--warn-soft); color: var(--warn); }
+  .st.bad { background: color-mix(in srgb, var(--bad) 14%, var(--surface)); color: var(--bad); }
+  .btn.ghost { background: var(--accent-soft); color: var(--accent); }
+  .btn.wide { width: 100%; margin-top: 12px; justify-content: center; }
+  .link.small { font-size: 13px; min-height: 44px; }
+  .bar { display: block; height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s cubic-bezier(.2, .8, .2, 1); } .bar i.ok { background: var(--good); }
+  .pp { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 0; }
+  .pp + .pp { border-top: 1px solid var(--line); }
+  .pp .nm { flex: 1; min-width: 0; } .pp .nm b { display: block; } .pp .nm small { display: block; font-size: 12px; color: var(--muted); }
+  .shr { padding: 10px 0; } .shr + .shr { border-top: 1px solid var(--line); }
+  .shr-h { display: flex; justify-content: space-between; gap: 12px; } .shr-h span { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .shr p { margin: 4px 0 8px; }
+  .picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+  .pick { min-height: 44px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .pick.sug { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .pick:active, .qa-grid button:active { transform: scale(.96); }
+  /* 12 months ahead: free money above the line, short months below it */
+  .ahead { display: flex; gap: 4px; height: 130px; margin: 4px 0 8px; }
+  .ahead.mini { height: 56px; }
+  .ahead > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .ahead .up, .ahead .dn { display: flex; justify-content: center; min-height: 0; }
+  .ahead .up { align-items: flex-end; border-bottom: 1px solid var(--line); } .ahead .dn { align-items: flex-start; }
+  .ahead i { display: block; width: 100%; max-width: 26px; border-radius: 3px 3px 0 0; background: var(--save); }
+  .ahead .dn i { border-radius: 0 0 3px 3px; background: var(--debt); }
+  .ahead small { height: 18px; line-height: 18px; text-align: center; font-size: 11px; color: var(--muted); }
+  html.motion .view.anim .ahead .up i { transform-origin: bottom; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; }
+  html.motion .view.anim .ahead .dn i { transform-origin: top; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; }
+  .tbl { overflow-x: auto; margin: 0 -4px; }
+  table.plan td:not(:first-child), table.plan th:not(:first-child) { text-align: right; }
+  table.plan tr.neg td { color: var(--bad); }
+  .fund { display: flex; align-items: center; gap: 12px; padding: 10px 0; } .fund + .fund { border-top: 1px solid var(--line); }
+  .fund .nm { flex: 1; min-width: 0; } .fund .nm b { display: block; } .fund .nm small { display: block; font-size: 12px; color: var(--muted); }
+  .fund-b { display: grid; justify-items: end; }
+  .ring2 { flex: none; width: 56px; height: 56px; }
+  .ring2 circle { fill: none; stroke-width: 3.6; } .ring2 .bg { stroke: var(--surface-2); } .ring2 .fg { stroke: var(--save); stroke-linecap: round; }
+  .ring2 text { font-size: 8px; font-weight: 700; text-anchor: middle; fill: var(--text); }
+  html.motion .view.anim .ring2 .fg { animation: ring-in 1s .2s cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes ring-in { from { stroke-dasharray: 0 100; } }
+  .found { display: flex; align-items: center; gap: 12px; padding: 8px 0; } .found + .found { border-top: 1px solid var(--line); }
+  .found .nm { flex: 1; min-width: 0; } .found .nm b { display: block; } .found .nm small { display: block; font-size: 12px; color: var(--muted); }
+  form.whatif { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; } form.whatif input { grid-column: 1 / -1; font-size: 20px; font-weight: 600; }
+  form.v2 input, form.v2 select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; min-width: 0; width: 100%; }
+  form.v2.inline { display: flex; gap: 8px; margin-top: 12px; } form.v2.inline .btn { flex: none; }
+  form.v2sheet { display: grid; gap: 12px; } form.v2sheet label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
+  form.v2sheet .actions { display: flex; gap: 16px; align-items: center; margin-top: 4px; } form.v2sheet .actions .btn { flex: 1; }
+  .verdict { margin-top: 14px; border-radius: 16px; padding: 16px; text-align: center; background: var(--surface-2); }
+  .verdict span { font-size: 34px; display: block; } .verdict b { display: block; font-size: 26px; letter-spacing: -.02em; } .verdict p { margin: 4px 0 0; color: var(--text-2); font-size: 14px; }
+  .verdict.good { background: color-mix(in srgb, var(--good) 14%, var(--surface)); } .verdict.good b { color: var(--good); }
+  .verdict.warn { background: var(--warn-soft); } .verdict.warn b { color: var(--warn); }
+  .verdict.bad { background: color-mix(in srgb, var(--bad) 12%, var(--surface)); } .verdict.bad b { color: var(--bad); }
+  html.motion .verdict { animation: pop .35s cubic-bezier(.2, .8, .2, 1.3) both; }
+  ol.steps { margin: 8px 0 0; padding-left: 22px; display: grid; gap: 10px; } ol.steps small { display: block; color: var(--text-2); font-size: 13px; }
+  .asset { display: grid; gap: 4px; padding: 12px 0; } .asset + .asset { border-top: 1px solid var(--line); }
+  .asset small { color: var(--muted); font-size: 12px; } .asset small b { color: var(--text); }
+  .kv { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--text-2); }
+  /* Review: one card at a time */
+  .rv { touch-action: pan-y; transition: transform .2s, opacity .2s; }
+  .rv.gone { transform: translateX(-110%) rotate(-6deg) !important; opacity: 0; }
+  .rv-top { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .rv-top .who { flex: 1; min-width: 0; } .rv-top .who b { display: block; font-size: 18px; overflow-wrap: anywhere; } .rv-top .who small { color: var(--muted); font-size: 13px; }
+  .rv-top .amount { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; } .rv-top .amount.credit { color: var(--good); }
+  .rv-nav { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+  /* Quick actions on a transaction row */
+  .txn summary .qa { flex: none; width: 36px; height: 44px; margin: -6px -8px -6px -6px; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; border-radius: 10px; }
+  .txn summary .qa:hover { background: var(--surface-2); color: var(--text); }
+  .qa-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+  .qa-grid button { display: grid; justify-items: center; gap: 4px; min-height: 76px; padding: 10px 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .qa-grid button span { font-size: 22px; }
+  /* Bottom sheet */
+  .sheet-bg { position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / .4); opacity: 0; transition: opacity .25s; }
+  .sheet-bg.open { opacity: 1; }
+  .sheet { position: fixed; z-index: 31; left: 0; right: 0; bottom: 0; max-width: 560px; margin: 0 auto; max-height: 86vh; overflow-y: auto; overscroll-behavior: contain; background: var(--surface); border-radius: 20px 20px 0 0;
+    padding: 6px 16px calc(20px + env(safe-area-inset-bottom)); box-shadow: 0 -10px 40px rgb(0 0 0 / .25); transform: translateY(100%); transition: transform .28s cubic-bezier(.2, .8, .2, 1); outline: none; }
+  .sheet.open { transform: none; }
+  .sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 4px auto 6px; }
+  .sheet header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; } .sheet header h2 { flex: 1; min-width: 0; margin: 0; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sheet .seg { margin: 4px 0; }
+  @media (prefers-reduced-motion: reduce) { .sheet, .sheet-bg, .rv { transition: none; } }
+  /* Wide screens: a centred column, two columns on the hub pages */
+  @media (min-width: 1000px) {
+    main { max-width: 1080px; padding-left: 24px; padding-right: 24px; }
+    .view.cols { display: block; columns: 2; column-gap: 16px; }  /* masonry-like: each card keeps its own height */
+    .view.cols > * { break-inside: avoid; margin-bottom: 16px; }
+    .view.cols > :is(.hero, .banner, .chips, .version) { column-span: all; }
+    .tabbar { max-width: 600px; margin: 0 auto; border: 1px solid var(--line); border-bottom: 0; border-radius: 18px 18px 0 0; }
+  }
 </style>
 </head>
 <body>
@@ -530,9 +638,6 @@
   <a class="icon-btn" href="#/search" aria-label="Search all SMS" title="Search all SMS">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
   </a>
-  <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-  </a>
 </header>
 <main>
   <p class="stale" id="stale" role="alert" hidden></p>
@@ -540,6 +645,8 @@
 </main>
 <nav class="tabbar" aria-label="Main" id="tabs"></nav>
 <div class="toast" id="toast" role="status" hidden></div>
+<div class="sheet-bg" id="sheet-bg" hidden></div>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-t" tabindex="-1" hidden><div class="grab" aria-hidden="true"></div><header><h2 id="sheet-t"></h2><button type="button" class="icon-btn" id="sheet-x" aria-label="Close">✕</button></header><div id="sheet-b"></div></section>
 <datalist id="friend-names"></datalist>
 <script>
 const ICONS = { 'Food': '🍔', 'Groceries': '🛒', 'Shopping': '🛍️', 'Transport': '🚗', 'Travel': '✈️', 'Bills & Utilities': '💡',
@@ -920,16 +1027,21 @@ function forecastPage() {
 
 /* ---------- Routing ---------- */
 const TABS = [
-  ['overview', 'Overview', '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>'],
-  ['categories', 'Spending', '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'],
-  ['debt', 'Debt', '<path d="M3 21h18"/><path d="M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/>'],
+  ['overview', 'Home', '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>'],
+  ['spending', 'Spending', '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'],
+  ['people', 'People', '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 14.6c2.6.2 4.4 1.9 5 5"/>'],
   ['plan', 'Plan', '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>'],
-  ['activity', 'Activity', '<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>'],
+  ['more', 'More', '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'],
 ];
-const PARENT = { category: 'categories', merchant: 'merchants', card: 'cards', friend: 'friends', money: 'debt' };  // everything else returns to Overview
-// Merchants and Cards sit under the Spending tab: no back arrow, and Spending stays highlighted.
-const SUBTABS = { merchants: 'categories', cards: 'categories' };
-const spendNav = (rt, P) => `<nav class="chips subnav" aria-label="Spending by">${[['categories', 'Categories'], ['merchants', 'Merchants'], ['cards', 'Cards']]
+const PARENT = { category: 'categories', merchant: 'merchants', card: 'cards', friend: 'friends', money: 'debt' };  // a drill-down's back arrow goes here, else to its tab
+// Every page lives under one of the five tabs: its tab stays lit and Back returns to it.
+const TAB_OF = { categories: 'spending', merchants: 'spending', cards: 'spending', activity: 'spending', category: 'spending', merchant: 'spending', card: 'spending',
+  month: 'spending', day: 'spending', cash: 'spending', trends: 'spending', income: 'spending', recurring: 'spending', large: 'spending', daily: 'spending', search: 'spending',
+  review: 'overview', friends: 'people', friend: 'people', checkin: 'plan', analysis: 'plan', debt: 'plan', money: 'plan', health: 'plan', forecast: 'plan', buy: 'plan',
+  liabilities: 'plan', trail: 'plan', balances: 'more', settings: 'more' };
+// Spending's sub-pages sit under the Spending tab with no back arrow.
+const SUBTABS = { categories: 'spending', merchants: 'spending', cards: 'spending', activity: 'spending' };
+const spendNav = (rt, P) => `<nav class="chips subnav" aria-label="Spending by">${[['spending', 'Summary'], ['categories', 'Categories'], ['merchants', 'Merchants'], ['cards', 'Cards'], ['activity', 'Transactions']]
   .map(([k, label]) => `<a href="#/${k}?${P.qs}" data-replace aria-current="${rt.name === k}">${label}</a>`).join('')}</nav>`;
 const DIM = { category: { path: 'category', param: 'cat', label: 'Category' }, merchant: { path: 'merchant', param: 'mer', label: 'Merchant' }, account: { path: 'card', param: 'acc', label: 'Card' } };
 const merKey = m => m === '' ? '_unknown' : m;
@@ -973,7 +1085,7 @@ addEventListener('hashchange', () => {
   popped = !!(st && typeof st.d === 'number');
   if (popped) depth = st.d;
   else {
-    depth = replacing ? (TABS.some(([k]) => k === parseRoute().name) || parseRoute().name in SUBTABS ? 0 : depth) : depth + 1;
+    depth = replacing ? (parseRoute().name in TITLES ? 0 : depth) : depth + 1;
     history.replaceState({ d: depth }, '');
   }
   replacing = false;
@@ -988,7 +1100,7 @@ function setData(sum, all) {
   state.earliest = state.all.reduce((a, t) => t._d < a ? t._d : a, today());
   friendNames();
   if (!state.shared && !state.err.shared) loadShared();
-  if (!state.me && !state.err.me) fetchInto('me', '/api/me', () => { if (/^#\/(overview|settings)|^$/.test(location.hash) && !typing()) render(); });
+  if (!state.me && !state.err.me) fetchInto('me', '/api/me', () => { if (!typing()) render(); });
   if (!state.moneyAt || Date.now() - state.moneyAt > 60000) { loadMoney(); loadRate(); loadPlan(); loadSettings(); }  // EMI alerts, net worth and the check-in banner on Overview need them
 }
 // Keep the screen current without a manual refresh: ask "anything new?" when the app comes back to the
@@ -1035,6 +1147,7 @@ async function load(force = false) {
   $('stale').hidden = true;
   cache.set('s|' + sum.currency, s); cache.set('t|' + sum.currency, t); cache.set('currency', sum.currency);
   if (s === cs && t === ct) return;  // unchanged: leave the screen alone
+  v2reset();
   // A redraw would snap an open transaction (and its category menu) shut, so wait until it's closed.
   if (!force && document.querySelector('details.txn[open]')) { pending = [sum, all]; return; }
   setData(sum, all); render();
@@ -1105,7 +1218,7 @@ function row(t, withDate) {
   return `<details class="txn${ignored ? ' ignored' : ''}" data-id="${t.id}" data-merchant="${esc(t.merchant)}" data-key="${esc(ruleKey(t))}" ${unsure ? 'data-unsure' : ''}>` +
     `<summary><span class="emoji" aria-hidden="true">${t.category === OWN_TRANSFER ? '🔁' : ignored ? '🚫' : icon(t.category)}</span>` +
     `<span class="who"><b>${esc(merName(t.merchant))}</b><small>${unsure ? '<span class="fixme">Needs a category</span>' : ignored ? `${t.category === OWN_TRANSFER ? 'Own transfer' : 'Ignored'}, not counted` : `${esc(t.category)} <span class="pen" aria-hidden="true">✎</span>`} · ${withDate ? dayLabel(t.received_at.slice(0, 10)) + (t.statement ? '' : ', ') : ''}${t.statement ? '' : t.received_at.slice(11, 16)}</small><small>${t.statement ? '📄' : '💳'} ${esc(t.account)}${linkNote(t)}</small>${t.friend ? `<small class="friend-tag">👥 ${esc(friendNote(t))}</small>` : ''}</span>` +
-    `<span class="amount ${t.direction}">${t.direction === 'debit' ? '−' : '+'}${fmt(t._c)}</span></summary>` +
+    `<span class="amount ${t.direction}">${t.direction === 'debit' ? '−' : '+'}${fmt(t._c)}</span><button type="button" class="qa" data-qa="${t.id}" aria-label="Quick actions">⋯</button></summary>` +
     `<pre>${esc(t.body)}</pre>` +
     `<form class="fix"><label>${unsure ? 'Category' : 'Wrong category? Choose the right one'}<select name="category">${unsure ? '<option value="" selected disabled>Choose…</option>' : ''}${options}` +
     `<option value="__new">+ New category…</option><option value="${OWN_TRANSFER}" ${t.category === OWN_TRANSFER ? 'selected' : ''}>🔁 Own transfer (don't count)</option>` +
@@ -1133,7 +1246,7 @@ state.extra = +(ls.get('extraInr') || 0) || 0;
 // button) instead of leaving the page on "Loading…"; one request per piece at a time.
 state.err = {}; const inflight = {};
 // Someone is filling in a form: a background refresh mustn't redraw it under their fingers.
-const typing = () => !!document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus, form.account:focus-within, form.friend:focus-within, form.contact:focus-within, form.buy:focus-within');
+const typing = () => !!document.querySelector('details.txn[open], form.v2:focus-within, form.holding:focus-within, .step input:focus, .setup input:focus, form.account:focus-within, form.friend:focus-within, form.contact:focus-within, form.buy:focus-within');
 function fetchInto(key, url, after) {
   if (inflight[url]) return inflight[url];
   return inflight[url] = (async () => {
@@ -1145,7 +1258,7 @@ function fetchInto(key, url, after) {
       after?.();
     } catch (e) { state.err[key] = e.message || 'no connection'; }
     finally { inflight[url] = null; }
-    if (/^#\/(money|debt|plan|analysis|overview|trail|liabilities|buy)|^$/.test(location.hash) && !typing()) render();
+    if (!typing()) render();
   })();
 }
 function loadMoney() { state.moneyAt = Date.now(); return fetchInto('money', `/api/money?${moneyQs()}`); }
@@ -1170,7 +1283,7 @@ async function loadRate() {
     state.rate = j.rate; ls.set('inrPerSar', j.rate); ls.set('rateAt', Date.now()); ls.set('rateSource', j.source);
     if (j.usd && !ls.get('usdMine')) { state.usd = j.usd; ls.set('inrPerUsd', j.usd); }
     if (j.gold_usd_oz) { state.goldUsdOz = j.gold_usd_oz; ls.set('goldUsdOz', j.gold_usd_oz); ls.set('goldSource', j.gold_source || ''); }
-    if (/^#\/(money|debt|plan|analysis|overview|trail)|^$/.test(location.hash)) render();
+    if (!typing()) render();
   } catch { state.rateFailAt = Date.now(); } finally { inflight.rate = false; }
 }
 const paidThisMonth = h => h.payments.find(p => p.date.slice(0, 7) === today().slice(0, 7));
@@ -1329,7 +1442,7 @@ async function loadOptions() {
   const opts = debtOptions(), key = opts.map(o => o.inr).join(',') + '|' + state.rate;
   if (state.optionsKey === key) return;
   state.optionsKey = key;
-  try { const r = await fetch(`/api/money?${moneyQs()}&options=${opts.map(o => o.inr).join(',')}`); if (r.ok) { state.optionData = await r.json(); if (/^#\/(plan|health|overview)|^$/.test(location.hash) && !document.querySelector('details.txn[open], .setup input:focus')) render(); } } catch {}
+  try { const r = await fetch(`/api/money?${moneyQs()}&options=${opts.map(o => o.inr).join(',')}`); if (r.ok) { state.optionData = await r.json(); if (!typing()) render(); } } catch {}
 }
 const chosen = () => { const c = state.settings?.debt_choice; return c && debtOptions().find(o => o.key === c.option); };
 // This month's salary SMS, if it came: the biggest SAR credit marked Salary or Income this month.
@@ -1613,18 +1726,6 @@ function chartTip(e) {
   const px = x * k, w = tip.offsetWidth, room = box.clientWidth;  // beside the finger, flipping sides so it never leaves the card
   tip.style.left = `${Math.max(0, Math.min(room - w, px > room / 2 ? px - w - 12 : px + 12))}px`;
 }
-// A small line chart: past points solid, the future dashed; x = months from the first point.
-function lineChart(series, months, labels) {
-  const vals = series.flatMap(s => s.points.map(p => p[1])), W = 320, H = 150;
-  const max = Math.max(1, ...vals), min = Math.min(0, ...vals);  // below zero too (net worth can be)
-  const X = m => (m / Math.max(1, months)) * W, Y = v => H - 8 - ((v - min) / (max - min)) * (H - 20);
-  const lines = series.map(s => s.points.length < 2 ? '' : `<polyline class="${s.cls}" points="${s.points.map(([m, v]) => `${X(m).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')}"/>`).join('');
-  return `<div class="lc"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(series.map(s => s.label).join(', '))}">` +
-    `<line class="axis" x1="0" y1="${Y(0).toFixed(1)}" x2="${W}" y2="${Y(0).toFixed(1)}"/>${lines}</svg>` +
-    (min < 0 ? `<p class="muted small lc-zero">Below the line: owing more than you have.</p>` : '') +
-    `<div class="lc-x">${labels.map(l => `<span>${esc(l)}</span>`).join('')}</div>` +
-    `<p class="legend">${series.map(s => `<span><i class="${s.cls}"></i>${esc(s.label)}</span>`).join('')}</p></div>`;
-}
 function healthPage(rt, P) {
   if (!state.money || !state.settings) return waitFor('Money health', [['money', loadMoney], ['settings', loadSettings]]);
   loadOptions(); loadRate();
@@ -1642,13 +1743,13 @@ function healthPage(rt, P) {
   for (let k = 1; k <= ahead; k++) { debt[now + k] = H.P.curve[k - 1] ?? 0; save[now + k] = H.saved / 100 + monthlySave * k; }
   const cross = debt.findIndex((d, i) => i >= now && d != null && save[i] != null && save[i] >= d && d >= 0);
   const facts = [['Debt-free', H.debt ? whenMonths(H.P.months) : '—'], ['Net positive', cross > 0 ? monthName(addM(start, cross), 'short') : cross === 0 ? 'already' : 'beyond 10 years'],
-    ['Saving', monthlySave ? `${short_inr(monthlySave)}<small>/mo</small>` : '<a href="#/plan">set on Plan</a>']];
+    ['Saving', monthlySave ? `${short_inr(monthlySave)}<small>/mo</small>` : '<a href="#/checkin">set on Plan</a>']];
   const chart = H.debt || H.saved ? dualChart({ start, now, N, debt, save, facts }) : empty('Add your loans and savings on the Debt tab');
   return { title: 'Money health', sub: 'Where you stand', html:
     (H.score != null ? `<section class="hero"><div class="label">Your money health</div><div class="total">${H.rating}<small> · ${H.score}/100</small></div>` +
       `<div class="meter"><i style="width:${H.score}%"></i></div><div class="kpis"><div><span>Savings</span><b>${rupees(H.saved)}</b></div><div><span>Debt</span><b>${rupees(H.debt)}</b></div></div></section>`
       : `<section class="card">${empty('Not enough to judge yet', 'Add your loans and savings on the Debt tab; the score needs a few months of transactions.')}</section>`) +
-    (H.checks.length ? `<section class="card"><h2>The checks<span>tap for what to do</span></h2>${H.checks.map(c => `<a class="tip" href="${c.label === 'Debt-free' ? '#/plan' : c.label === 'Safety buffer' ? '#/debt' : '#/categories'}">` +
+    (H.checks.length ? `<section class="card"><h2>The checks<span>tap for what to do</span></h2>${H.checks.map(c => `<a class="tip" href="${c.label === 'Debt-free' ? '#/checkin' : c.label === 'Safety buffer' ? '#/debt' : '#/categories'}">` +
       `<span class="ic" aria-hidden="true">${c.icon}</span><span><b>${c.label} <span class="hv" style="color:${color[c.tone]}">${esc(c.value)}</span></b><small>${c.text}</small></span></a>`).join('')}</section>` : '') +
     card('Savings vs debt', 'in ₹', chart) +
     card('Money in and out', `SAR, last 12 months`, `<p class="legend"><span><i style="background:var(--bar)"></i>Spent</span><span><i style="background:var(--bar-2)"></i>Received</span></p>` +
@@ -1707,7 +1808,7 @@ function moneyPage() {
       `<p class="muted small">Looked up every few hours from open exchange-rate services (open.er-api.com, or Frankfurter). Type your own to keep it; clear it to go back to today’s rate.</p>`) };
 }
 // Splits with people on this app: what they say you owe, what you've told them, and your saved friends (name + email).
-const loadShared = () => fetchInto('shared', '/api/shared', () => { friendNames(); if (/^#\/(friends?|overview)|^$/.test(location.hash) && !typing()) render(); });
+const loadShared = () => fetchInto('shared', '/api/shared', () => { friendNames(); if (!typing()) render(); });
 const contactOf = name => (state.shared?.contacts || []).find(c => c.name.toLowerCase() === String(name).trim().toLowerCase());
 function friendNames() {  // the picker: saved friends first, then names only tagged so far
   $('friend-names').innerHTML = [...new Set([...(state.shared?.contacts || []).map(c => c.name), ...state.all.map(t => t.friend).filter(Boolean)])]
@@ -2023,7 +2124,7 @@ function liabPage(rt, P) {
     `<section class="card"><div class="big"><span class="muted">Still to pay in ${esc(monthName(m, 'short'))}</span><b>${rupees(left)}</b></div>` +
       `<p class="muted small">${late ? `${plural(late, 'payment')} overdue or missed. ` : 'Nothing overdue. '}SAR amounts in ₹ at today’s rate.</p></section>` +
     card(`${esc(monthName(m))}`, 'tap for proof', rows || empty('No loans or cards yet', '<a href="#/debt">Add them on the Debt tab</a>'), '') +
-    card('Debt-to-income', 'EMIs and card dues ÷ salary', pct == null ? empty('Set your salary on the Plan tab', '<a href="#/plan">Open Plan</a>') :
+    card('Debt-to-income', 'EMIs and card dues ÷ salary', pct == null ? empty('Set your salary on the Plan tab', '<a href="#/checkin">Open Plan</a>') :
       `<div class="big"><span class="muted">${esc(money(D.monthly))} of ${esc(money(D.sal))} a month</span><b class="${tone}">${pct}%</b></div>` +
       `<div class="meter"><i class="${tone}" style="width:${Math.min(100, pct)}%"></i><s style="left:40%"></s></div>` +
       `<p class="muted small">${pct > 40 ? 'Above 40%: banks see this as stretched. Close the smallest debt first to free its EMI.' : pct > 30 ? 'Between 30% and 40%: manageable, keep it from rising.' : 'Under 30%: healthy.'}</p>`, '') +
@@ -2191,8 +2292,8 @@ const usernameCard = () => state.me?.email && !state.me.username ? '<section cla
   '<p class="muted">Next time you can sign in with it or your email. 3-30 letters or digits; dots, dashes and underscores are fine.</p>' +
   '<form class="account" data-act="username"><label>Username<input type="text" name="username" required minlength="3" maxlength="30" autocapitalize="none" spellcheck="false" autocomplete="username"></label>' +
   '<button class="btn">Save</button></form></section>' : '';
-function overview(rt, P, X) {
-  if (!state.all.length) return { html: usernameCard() + chips(P) + oweAlerts() + `<section class="card">${empty('No transactions yet', 'New bank SMS will appear here within seconds once your phone forwards them.<br><a href="/import">Import your old SMS</a>')}</section>` };
+function spending(rt, P, X) {
+  if (!state.all.length) return { html: spendNav(rt, P) + chips(P) + `<section class="card">${empty('No transactions yet', 'New bank SMS will appear here within seconds once your phone forwards them.<br><a href="/import">Import your old SMS</a>')}</section>` };
   const T = totals(X.cur), d = deltaPct(T.spent, totals(X.prev)), net = T.received - T.spent;
   const prevQs = P.step(-1), nextQs = P.step(1), canPrev = prevQs && P.start > state.earliest;
   let proj = '';
@@ -2205,16 +2306,15 @@ function overview(rt, P, X) {
     proj = `<p class="proj">Projected month-end: <b>${money(Math.round(fixed + (T.spent - fixed) / P.d * P.N))}</b></p>`;
   }
   const hero = `<section class="hero" aria-live="polite"><div class="month-nav">` +
-    `<button type="button" aria-label="Previous period" ${canPrev ? `data-go="#/overview?${prevQs}"` : 'disabled'}>‹</button>` +
+    `<button type="button" aria-label="Previous period" ${canPrev ? `data-go="#/spending?${prevQs}"` : 'disabled'}>‹</button>` +
     `<span>${esc(P.label)}${P.partial ? '<i class="live" title="Updates by itself"></i>' : ''}${P.sofar ? `<small>${esc(P.sofar)}</small>` : ''}</span>` +
-    `<button type="button" aria-label="Next period" ${nextQs ? `data-go="#/overview?${nextQs}"` : 'disabled'}>›</button></div>` +
+    `<button type="button" aria-label="Next period" ${nextQs ? `data-go="#/spending?${nextQs}"` : 'disabled'}>›</button></div>` +
     `<div class="label">Spent</div><div class="total"><small>${esc(state.currency)}</small><span data-count="${T.spent}">${fmt(T.spent)}</span></div>` +
     `<span class="delta">${d === null ? 'new' : Number.isNaN(d) ? `too little in ${esc(P.prevLabel)} to compare` : `${d > 0 ? '▲' : d < 0 ? '▼' : '='} ${Math.abs(d)}% vs ${esc(P.prevLabel)}`}</span>` +
     (T.refunds ? `<div class="refunds">incl. −${fmt(T.refunds)} refunds</div>` : '') +
     `<div class="kpis"><div><span>Received</span><b>${fmt(T.received)}</b></div><div><span>Net</span><b>${fmt(net)}</b></div>` +
     `<div><span>Savings rate</span><b>${T.received ? Math.round(net / T.received * 100) + '%' : '–'}</b></div>` +
     `<div><span>Daily average</span><b>${fmt(Math.round(T.spent / Math.max(1, P.days)))}</b></div></div>${proj}</section>`;
-  const review = state.sum.to_review.length;
   const cats = spendGroups(X.cur, t => t.category), merch = spendGroups(X.cur, t => t.merchant), accts = spendGroups(X.cur, t => t.account);
   const rec = recurring(state.all).filter(r => r.active), large = largeOnes(state.all).filter(l => l.t._d >= P.start && l.t._d <= P.end);
   const cash = totals(X.cur.filter(t => t.category === 'Cash')).spent;
@@ -2228,18 +2328,7 @@ function overview(rt, P, X) {
     `<dl class="stats"><div><dt>Next 7 days</dt><dd>${money(w7.exp)}</dd><dt>likely ${fmt(w7.low)}–${fmt(w7.high)}</dt></div>` +
     `<div><dt>Regular payments, next 14 days</dt><dd>${money(soon.reduce((a, x) => a + x.r.A, 0))}</dd><dt>${plural(soon.length, 'payment')}</dt></div></dl>` +
     (soon.length ? upcomingRows(soon.slice(0, 3)) : ''), '#/forecast') : '';
-  const emis = emisDue().map(({ h, inDays }) => `<a class="banner" href="#/debt"><span>${inDays < 0 ? 'EMI overdue' : inDays ? `EMI due in ${plural(inDays, 'day')}` : 'EMI due today'} · ${esc(h.name)} ${h.currency === 'INR' ? rupees(h.emi_minor) : money(h.emi_minor)}</span>${go1}</a>`).join('');
-  const left = state.plan ? planSteps().filter(s => !s.done).length : 0, got = state.settings?.salary && salaryIn();
-  const sp = got ? split() : null;  // only lines with an amount can be ticked as moved
-  const toMove = got ? [['emis', sp.emis], ['subs', sp.subs], ['living', sp.living], ['extra', chosen()?.sar || 0], ['savings', sp.savings], ...sp.others.map(o => [`o:${o.name}`, +o.amount])]
-    .filter(([k, amt]) => amt > 0 && act('alloc', k)?.status !== 'done').length : 0;
-  const salaryBanner = got && toMove ? `<a class="banner" href="#/plan"><span>Salary arrived · split SAR ${fmt(got._c)}</span>${go1}</a>` : '';
-  const checkin = left ? `<a class="banner" href="#/plan"><span>${esc(monthName(today().slice(0, 7), 'short'))} check-in · ${plural(left, 'step')} left</span>${go1}</a>` : '';
-  const Hh = state.money && health(), hcol = { Good: 'good', Fair: 'warn', 'Needs work': 'bad' };
-  const healthCard = Hh?.score != null ? `<a class="banner health ${hcol[Hh.rating]}" href="#/health"><span>Money health: <b>${Hh.rating}</b> · ${Hh.score}/100 · ${esc(Hh.checks.find(c => c.tone === 'poor')?.label || Hh.checks.find(c => c.tone === 'fair')?.label || 'all checks good')}</span>${go1}</a>` : '';
-  const lalerts = oweAlerts() + liabAlerts().map(a => `<a class="banner" href="#/liabilities"><span>${esc(a)}</span>${go1}</a>`).join('');
-  return { html: usernameCard() + chips(P) + hero + healthCard + salaryBanner + checkin + emis + lalerts + todayCard + coming +
-    (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
+  return { html: spendNav(rt, P) + chips(P) + hero + todayCard + coming +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
     card('Top merchants', '', merch.slice(0, 3).map(e => rk({ href: link('merchant', e.key, {}, P), icon: '🏪', name: merName(e.key), sub: plural(e.n, 'visit'), value: e.spent, pct: share(e.spent) })).join('') || empty('No merchants yet'), merch.length ? `#/merchants?${q}` : '') +
@@ -2249,13 +2338,21 @@ function overview(rt, P, X) {
       ln(`#/recurring?${q}`, 'Recurring payments', `${rec.length} active`, `${fmt(rec.reduce((a, r) => a + r.monthly, 0))}/mo`) +
       ln(`#/large?${q}`, 'Large transactions', 'Far above the usual', String(large.length)) +
       ln(`#/cash?${q}`, 'Cash withdrawals', 'ATM and cash', fmt(cash)) +
-      ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`) +
-      ln('#/debt', 'Net worth', 'Savings minus loans',  state.money ? rupees(state.money.holdings.reduce((a, h) => a + (isDebt(h) ? -1 : 1) * worth(h), 0)) : '') +
-      ln(`#/balances?m=${P.endMonth}`, 'Accounts & cards', 'Balances; rename, add or remove', '') +
-      ln('#/buy', 'Can I buy it?', 'Where to pay from, what it hits, where to cut', '') +
-      ln(`#/trail?${q}`, 'Money trail', 'Between your accounts, on to the loans', '') +
-      ln(`#/liabilities?m=${P.endMonth}`, 'Liabilities', 'Paid, due or missed this month', state.money ? String(liabBoard(P.endMonth).filter(r => r.st === 'late').length || '✓') : '') +
-      ln('#/friends', 'Friends', 'Bought for friends, paid back', fmt(friendBalances().reduce((a, e) => a + Math.max(0, e.owed), 0)))) };
+      ln(`#/daily?m=${P.endMonth}`, 'Daily spending', 'Calendar, day by day', `${fmt(Math.round(T.spent / Math.max(1, P.days)))}/day`)) };
+}
+// Things that want attention, shown on Home: money health, salary to split, the check-in, EMIs due, what you owe.
+function alerts() {
+  const emis = emisDue().map(({ h, inDays }) => `<a class="banner" href="#/debt"><span>${inDays < 0 ? 'EMI overdue' : inDays ? `EMI due in ${plural(inDays, 'day')}` : 'EMI due today'} · ${esc(h.name)} ${h.currency === 'INR' ? rupees(h.emi_minor) : money(h.emi_minor)}</span>${go1}</a>`).join('');
+  const left = state.plan ? planSteps().filter(s => !s.done).length : 0, got = state.settings?.salary && salaryIn();
+  const sp = got ? split() : null;  // only lines with an amount can be ticked as moved
+  const toMove = got ? [['emis', sp.emis], ['subs', sp.subs], ['living', sp.living], ['extra', chosen()?.sar || 0], ['savings', sp.savings], ...sp.others.map(o => [`o:${o.name}`, +o.amount])]
+    .filter(([k, amt]) => amt > 0 && act('alloc', k)?.status !== 'done').length : 0;
+  const salaryBanner = got && toMove ? `<a class="banner" href="#/checkin"><span>Salary arrived · split SAR ${fmt(got._c)}</span>${go1}</a>` : '';
+  const checkin = left ? `<a class="banner" href="#/checkin"><span>${esc(monthName(today().slice(0, 7), 'short'))} check-in · ${plural(left, 'step')} left</span>${go1}</a>` : '';
+  const Hh = state.money && health(), hcol = { Good: 'good', Fair: 'warn', 'Needs work': 'bad' };
+  const healthCard = Hh?.score != null ? `<a class="banner health ${hcol[Hh.rating]}" href="#/health"><span>Money health: <b>${Hh.rating}</b> · ${Hh.score}/100 · ${esc(Hh.checks.find(c => c.tone === 'poor')?.label || Hh.checks.find(c => c.tone === 'fair')?.label || 'all checks good')}</span>${go1}</a>` : '';
+  const lalerts = oweAlerts() + liabAlerts().map(a => `<a class="banner" href="#/liabilities"><span>${esc(a)}</span>${go1}</a>`).join('');
+  return healthCard + salaryBanner + checkin + emis + lalerts;
 }
 function catRows(groups, total, X, P, f = {}) {
   const prev = new Map(spendGroups(X.prev.filter(matches(f)), t => t.category).map(e => [e.key, e]));
@@ -2513,11 +2610,420 @@ function renderResults() {
     : `<p class="filter">“${esc(state.search)}” · ${plural(r.count, 'result')}${r.count > r.results.length ? ` (newest ${r.results.length} shown)` : ''} · ${money(Math.round(r.spent * 100))} spent</p>` +
       (prep(r.results).map(t => row(t, true)).join('') || empty(`No SMS match “${esc(state.search)}”`, "Try one word, a merchant name, an amount or a card's last 4 digits."));
 }
-const PAGES = { overview, categories, merchants, cards, activity,
+/* ---------- v2: the domain model and engine (docs/brain/api.md). Every call degrades to an empty state. ---------- */
+const V2 = {};  // path -> its JSON; undefined while loading; null when it failed (e.g. the server doesn't have it yet)
+function v2(path) {
+  if (path in V2) return V2[path];
+  V2[path] = undefined;
+  fetch('/api/v2/' + path).then(r => { if (r.status === 401) { location.href = '/login'; return null; } return r.ok ? r.json() : null; })
+    .catch(() => null).then(j => { if (!(path in V2)) return; V2[path] = j ?? null; if (!typing()) render(); });
+}
+const v2reset = () => { for (const k in V2) delete V2[k]; };
+async function v2post(path, body) {
+  const r = await post('/api/v2/' + path, body).catch(err => { throw new Error(/^(40[45]|not found)$/.test(String(err.message)) ? 'not available on this server yet' : err.message); });
+  v2reset();
+  return r;
+}
+const C2 = () => state.currency || 'SAR';
+const mv = x => !x || typeof x !== 'object' ? '–' : x.currency === 'INR' ? rupees(x.minor) : `${x.currency || C2()} ${fmt(x.minor)}`;
+const mvs = a => (Array.isArray(a) ? a : [a]).filter(x => x?.minor).map(mv).join(' + ') || '0';
+const mn = x => x?.minor || 0;
+const skel = (n = 3) => `<div class="skel" aria-label="Loading">${'<i></i>'.repeat(n)}</div>`;
+// Loading → skeleton, failed → a quiet empty state, else the body.
+const v2box = (d, fn, none = 'Shows here once the planning engine is on.') => d === undefined ? skel() : d === null ? empty('Not available yet', none) : fn(d);
+const chip = (text, tone = '') => `<span class="st ${tone}">${esc(text)}</span>`;
+const STATUS = { paid: ['Paid', 'good'], due: ['Due', 'warn'], overdue: ['Overdue', 'bad'], upcoming: ['Upcoming', ''], draft: ['Draft', ''], submitted: ['Submitted', 'warn'], partly: ['Part paid', 'warn'] };
+const stChip = s => STATUS[s] ? chip(...STATUS[s]) : '';
+const KINDS = { rent: ['🏠', 'Rent'], bill: ['💡', 'Bills'], subscription: ['📺', 'Subscriptions'], emi: ['🏦', 'EMIs'], insurance: ['🛡️', 'Insurance'],
+  school: ['🎓', 'School'], support: ['👪', 'Family support'], milestone: ['🏗️', 'Milestones'], other: ['🧾', 'Other'] };
+const CYCLES = [['1', 'Monthly'], ['3', 'Every 3 months'], ['6', 'Every 6 months'], ['12', 'Yearly'], ['0', 'One-off']];
+const cycleText = n => (CYCLES.find(([k]) => +k === +n) || [, `Every ${n} months`])[1];
+const PURPOSES = { spend: 'Spending', fee: 'Fee / interest', transfer: 'Own transfer', income: 'Income', support: 'Family support', lend: 'For someone', repaid: 'Paid back to me',
+  borrow: 'Borrowed', repay: 'I paid back', loan_payment: 'EMI', claim: 'Work claim', reimbursement: 'Reimbursement', asset: 'Property / vehicle', saving: 'Saving' };
+const people = () => V2.people || [];
+const personName = id => people().find(p => String(p.id) === String(id))?.name || 'someone';
+const ln2 = (href, ic, name, sub, v = '') => `<a class="ln" href="${href}"><span class="ic2" aria-hidden="true">${ic}</span><span class="nm"><b>${name}</b>${sub ? `<small>${sub}</small>` : ''}</span><span class="v">${v}</span>${go1}</a>`;
+const btnRow = (attrs, ic, name, sub, v = '') => `<button type="button" class="ln" ${attrs}><span class="ic2" aria-hidden="true">${ic}</span><span class="nm"><b>${name}</b>${sub ? `<small>${sub}</small>` : ''}</span><span class="v">${v}</span>${go1}</button>`;
+const ring = p => { p = Math.max(0, Math.min(1, p || 0)); return `<svg viewBox="0 0 36 36" class="ring2" role="img" aria-label="${Math.round(p * 100)}%"><circle r="15.9155" cx="18" cy="18" class="bg"/>` +
+  `<circle r="15.9155" cx="18" cy="18" class="fg" stroke-dasharray="${(p * 100).toFixed(1)} ${(100 - p * 100).toFixed(1)}" stroke-dashoffset="25"/><text x="18" y="21">${Math.round(p * 100)}%</text></svg>`; };
+
+// 12 months ahead: free money per month, above the line or below it (a warning month is marked).
+function aheadBars(months, mini) {
+  const v = months.map(m => mn(m.free)), up = Math.max(0, ...v), dn = Math.max(0, ...v.map(x => -x));
+  if (!up && !dn) return '';
+  return `<div class="ahead${mini ? ' mini' : ''}">` + months.map((m, i) => `<div title="${esc(`${monthName(m.month, 'short')}: free ${fmt(v[i])}${m.warnings?.length ? ' · ' + m.warnings.join(', ') : ''}`)}">` +
+    `<span class="up" style="flex:${up}">${v[i] > 0 ? `<i style="height:${(v[i] / up * 100).toFixed(1)}%"></i>` : ''}</span>` +
+    `<span class="dn" style="flex:${dn}">${v[i] < 0 ? `<i style="height:${(-v[i] / dn * 100).toFixed(1)}%"></i>` : ''}</span>` +
+    (mini ? '' : `<small${m.warnings?.length ? ' class="bad"' : ''}>${esc(mon(m.month)).slice(0, 3)}</small>`) + '</div>').join('') + '</div>';
+}
+
+/* Review: one low-confidence transaction at a time. The engine's list, else the ones without a category. */
+state.rvOut = new Set();  // answered or skipped this session
+const reviewList = () => (v2('review') || state.sum?.to_review || []).filter(t => !state.rvOut.has(t.id));
+const txAmt = t => t._c ?? Math.round((t.amount || 0) * 100);
+const txDay = t => (t.received_at || t.day || '').slice(0, 10);
+const txnById = id => [...state.all, ...(V2.review || []), ...(state.sum?.to_review || []), ...(state.results?.results || [])].find(t => String(t.id) === String(id));
+const topCats = n => { const c = new Map(); for (const t of state.all) if (t._n && t.category !== 'Uncategorized') c.set(t.category, (c.get(t.category) || 0) + 1);
+  const used = [...c].sort((a, b) => b[1] - a[1]).map(([k]) => k); return [...new Set([...used, ...(state.sum?.categories || [])])].filter(k => k !== 'Uncategorized').slice(0, n); };
+function reviewPage() {
+  const all = reviewList(), t = all[0];
+  if (!t) return { title: 'Review', html: `<section class="card">${empty('All sorted 🎉', 'Nothing needs you. When a guess is unsure it waits here, one tap each.')}<a class="more" href="#/overview">Back to Home</a></section>` };
+  const sug = (t.suggestions || []).map((s, i) => s.purpose === 'spend' && (!s.category || s.category === 'Uncategorized') ? '' : `<button type="button" class="pick sug" data-rv="s" data-i="${i}">${esc(s.purpose && s.purpose !== 'spend' ? PURPOSES[s.purpose] || s.purpose : s.category || PURPOSES[s.purpose] || '?')}${s.person_id != null ? ` · ${esc(personName(s.person_id))}` : ''}</button>`).join('');
+  return { title: 'Review', sub: `${all.length} to go · one tap each`, html:
+    `<section class="card rv" data-id="${t.id}"><div class="rv-top"><span class="emoji" aria-hidden="true">${icon(t.category)}</span><div class="who"><b>${esc(merName(t.merchant))}</b>` +
+    `<small>${esc(dayLabel(txDay(t) || today()))} · ${esc(t.account || '')}</small></div><span class="amount ${t.direction}">${t.direction === 'credit' ? '+' : '−'}${esc(t.currency || C2())} ${fmt(txAmt(t))}</span></div>` +
+    (t.body ? `<details class="bal-src"><summary>Show the SMS</summary><pre>${esc(t.body)}</pre></details>` : '') +
+    (sug ? `<h3 class="sec">Best guesses</h3><div class="picks">${sug}</div>` : '') +
+    `<h3 class="sec">Category</h3><div class="picks">${topCats(9).map(c => `<button type="button" class="pick" data-rv="c" data-v="${esc(c)}">${icon(c)} ${esc(c)}</button>`).join('')}</div>` +
+    `<h3 class="sec">Not spending?</h3><div class="picks">${[['transfer', '🔁'], ['claim', '🧾'], ['support', '👪'], ['saving', '🏦'], ['lend', '🎁']].map(([p, ic]) =>
+      `<button type="button" class="pick" data-rv="p" data-v="${p}">${ic} ${PURPOSES[p]}</button>`).join('')}<button type="button" class="pick" data-rv="c" data-v="${IGNORED}">🚫 Ignore</button></div>` +
+    `<label class="check"><input type="checkbox" id="rv-all" checked>${t.merchant ? `Apply to all from ${esc(t.merchant)}` : 'Apply to similar messages'}</label>` +
+    `<div class="rv-nav"><span class="muted small">Swipe or</span><button type="button" class="btn ghost" data-rv="skip">Skip ›</button></div></section>` };
+}
+async function rvAnswer(kind, v) {
+  const el = document.querySelector('.rv'), t = el && txnById(el.dataset.id);
+  if (!t) return;
+  const all = $('rv-all')?.checked;
+  el.classList.add('gone');
+  state.rvOut.add(t.id);
+  setTimeout(render, 180);
+  if (kind === 'skip') return;
+  let ok;
+  if (kind === 's' && t.suggestions[v].purpose === 'lend' && t.suggestions[v].person_id == null) { state.rvOut.delete(t.id); render(); return qaSheet(t.id, 'for'); }
+  if (kind === 's') { const s = t.suggestions[v]; ok = s.purpose && s.purpose !== 'spend' ? await setPurpose(t, s.purpose, s.person_id, all) : await setCategory(t.id, s.category, all); }
+  else if (kind === 'c') ok = await setCategory(t.id, v, all);
+  else if (v === 'lend') { state.rvOut.delete(t.id); render(); return qaSheet(t.id, 'for'); }
+  else ok = await setPurpose(t, v, null, all);
+  if (!ok) { state.rvOut.delete(t.id); render(); }
+}
+// Swipe a review card sideways to skip it.
+let swipe = null;
+document.addEventListener('pointerdown', e => { const c = e.target.closest('.rv'); if (c && !e.target.closest('button, input, summary, pre')) swipe = { c, x: e.clientX }; });
+document.addEventListener('pointermove', e => { if (swipe) swipe.c.style.transform = `translateX(${e.clientX - swipe.x}px) rotate(${(e.clientX - swipe.x) / 40}deg)`; });
+document.addEventListener('pointerup', e => { if (!swipe) return; const dx = e.clientX - swipe.x, c = swipe.c; swipe = null; if (Math.abs(dx) > 90) rvAnswer('skip'); else c.style.transform = ''; });
+document.addEventListener('pointercancel', () => { if (swipe) { swipe.c.style.transform = ''; swipe = null; } });
+
+/* Saving a choice: categories through the existing endpoint (its reply redraws everything), purposes through v2. */
+async function setCategory(id, category, all) {
+  try {
+    const r = await post(`/api/category?currency=${enc(state.currency)}`, { id: Number(id), category, whole_merchant: !!all });
+    v2reset(); applyReply(r); toast(NOT_COUNTED.has(category) ? `${category === IGNORED ? 'Ignored' : 'Own transfer'}, not counted.` : `Saved as ${category}${all ? ', from now on too' : ''}.`);
+    return true;
+  } catch (err) { toast(`Could not save: ${err.message}`); return false; }
+}
+async function setPurpose(t, purpose, person_id, all) {
+  try {
+    await v2post('purpose', { txn_id: t.id, purpose, ...(person_id != null ? { person_id } : {}), all_from_merchant: !!all });
+    toast(`Marked as ${PURPOSES[purpose] || purpose}.`); load(true); return true;
+  } catch (err) {
+    if (purpose === 'transfer') return setCategory(t.id, OWN_TRANSFER, all);  // the old way still works
+    toast(`Could not save: ${err.message}`); return false;
+  }
+}
+
+/* Bottom sheet */
+let sheetCtx = {};
+function openSheet(title, html, ctx = {}) {
+  sheetCtx = ctx;
+  $('sheet-t').textContent = title; $('sheet-b').innerHTML = html;
+  $('sheet').hidden = $('sheet-bg').hidden = false;
+  void $('sheet').offsetWidth;
+  $('sheet').classList.add('open'); $('sheet-bg').classList.add('open');
+  $('sheet').focus({ preventScroll: true });
+}
+function closeSheet() {
+  if ($('sheet').hidden) return;
+  $('sheet').classList.remove('open'); $('sheet-bg').classList.remove('open');
+  setTimeout(() => { if (!$('sheet').classList.contains('open')) $('sheet').hidden = $('sheet-bg').hidden = true; }, 250);
+}
+addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+
+/* Quick actions on a transaction: Split, For someone, Claim, Transfer, Category, Ignore. */
+const QA = [['split', '➗', 'Split'], ['for', '🎁', 'For someone'], ['claim', '🧾', 'Claim'], ['transfer', '🔁', 'Transfer'], ['cat', '🏷️', 'Category'], ['ignore', '🚫', 'Ignore']];
+function qaSheet(id, step) {
+  const t = txnById(id);
+  if (!t) return;
+  const head = `${merName(t.merchant)} · ${t.direction === 'credit' ? '+' : '−'}${fmt(txAmt(t))}`;
+  const all = `<label class="check"><input type="checkbox" id="qa-all">${t.merchant ? `Apply to all from ${esc(t.merchant)}` : 'Apply to similar messages'}</label>`;
+  if (!step) return openSheet(head, `<div class="qa-grid">${QA.map(([k, ic, label]) => `<button type="button" data-qa-do="${k}"><span aria-hidden="true">${ic}</span>${label}</button>`).join('')}</div>${all}`, { id });
+  if (step === 'cat') return openSheet('Category', `<div class="picks">${topCats(40).map(c => `<button type="button" class="pick" data-qa-cat="${esc(c)}">${icon(c)} ${esc(c)}</button>`).join('')}</div>${all}`, { id });
+  if (step === 'split' || step === 'for') {
+    v2('people');
+    const ppl = [...people().map(p => ({ id: p.id, name: p.name, rel: p.relation })), ...friendBalances().filter(f => !people().some(p => p.name.toLowerCase() === f.name.toLowerCase())).map(f => ({ name: f.name, rel: 'friend' }))];
+    const ways = step === 'split' ? `<h3 class="sec">Split</h3><div class="seg" role="group" aria-label="Split" id="qa-ways">${[2, 3, 4].map(n => `<button type="button" data-ways="${n}" aria-pressed="${n === 2}">${n} ways</button>`).join('')}</div>` : '';
+    return openSheet(step === 'split' ? 'Split with' : 'Bought for', ways + `<h3 class="sec">Who</h3><div class="picks">${ppl.map(p => `<button type="button" class="pick" data-pp="${esc(p.id ?? '')}" data-name="${esc(p.name)}">${p.rel === 'family' ? '👪' : '👤'} ${esc(p.name)}</button>`).join('') || '<span class="muted small">No people yet</span>'}</div>` +
+      `<form class="v2 inline" data-pp-new><input name="name" placeholder="Someone new" aria-label="Name" maxlength="40" required><button class="btn">Add</button></form>`, { id, step });
+  }
+  if (step === 'claim') {
+    const CL = v2('claims'), open = claimsOf(CL).filter(c => c.status === 'draft' || c.status === 'submitted');
+    return openSheet('Add to a claim', (CL === undefined ? skel(2) : open.map(c => btnRow(`data-claim-to="${esc(c.id)}"`, '🧾', esc(c.name), `${plural(c.items?.length || 0, 'item')} · ${mv(c.expected)}`)).join('')) +
+      `<form class="v2 inline" data-claim-new><input name="name" value="Work expenses ${esc(monthName(today().slice(0, 7), 'short'))}" aria-label="New claim name" maxlength="60" required><button class="btn">New claim</button></form>` +
+      '<p class="muted small">A claim isn’t your spending: it’s money the company owes you until the reimbursement lands.</p>', { id });
+  }
+}
+const claimsOf = CL => Array.isArray(CL) ? CL : CL?.claims || [];
+async function forSomeone(t, step, pid, name) {
+  const ways = +(document.querySelector('#qa-ways [aria-pressed="true"]')?.dataset.ways || 1), amt = txAmt(t);
+  closeSheet();
+  if (step === 'for' && pid !== '') return setPurpose(t, 'lend', isNaN(pid) ? pid : Number(pid), false);
+  // A friend tag with their share: works on every server.
+  const theirs = step === 'split' ? Math.round(amt * (ways - 1) / ways) / 100 : amt / 100;
+  if (await postAndRedraw('/api/friend', { id: Number(t.id), friend: name, theirs, email: '' })) { toast(step === 'split' ? `Split ${ways} ways with ${name}.` : `Marked as bought for ${name}.`); state.shared = null; loadShared(); }
+}
+document.addEventListener('click', async e => {
+  const qa = e.target.closest('[data-qa]');
+  if (qa) { e.preventDefault(); qaSheet(qa.dataset.qa); return; }
+  if (e.target.closest('#sheet-bg, #sheet-x')) { closeSheet(); return; }
+  const t = sheetCtx.id != null && txnById(sheetCtx.id), all = !!$('qa-all')?.checked;
+  const d = e.target.closest('[data-qa-do]')?.dataset.qaDo;
+  if (d && t) {
+    if (d === 'transfer') { closeSheet(); setPurpose(t, 'transfer', null, all); }
+    else if (d === 'ignore') { closeSheet(); setCategory(t.id, IGNORED, all); }
+    else qaSheet(t.id, d);
+    return;
+  }
+  const c = e.target.closest('[data-qa-cat]')?.dataset.qaCat;
+  if (c && t) { closeSheet(); setCategory(t.id, c, all); return; }
+  const w = e.target.closest('[data-ways]');
+  if (w) { w.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b === w)); return; }
+  const pp = e.target.closest('[data-pp]');
+  if (pp && t) { forSomeone(t, sheetCtx.step, pp.dataset.pp, pp.dataset.name); return; }
+  const to = e.target.closest('[data-claim-to]')?.dataset.claimTo;
+  if (to && t) {
+    const cl = claimsOf(V2.claims).find(x => String(x.id) === to);
+    closeSheet();
+    try { await v2post('claims', { id: cl.id, name: cl.name, status: cl.status, txn_ids: [...(cl.items || []).map(i => i.txn_id), t.id] }); toast(`Added to ${cl.name}.`); load(true); }
+    catch (err) { toast(`Could not save: ${err.message}`); }
+    return;
+  }
+  const rv = e.target.closest('[data-rv]');
+  if (rv) { rvAnswer(rv.dataset.rv, rv.dataset.rv === 's' ? +rv.dataset.i : rv.dataset.v); return; }
+  const cp = e.target.closest('[data-claim-paid]');
+  if (cp) { claimPaidSheet(cp.dataset.claimPaid); return; }
+  const cr = e.target.closest('[data-credit]');
+  if (cr) {
+    closeSheet();
+    try { await v2post('claims/paid', { id: sheetCtx.claim, txn_id: Number(cr.dataset.credit) }); toast('Claim marked paid.'); render(); }
+    catch (err) { toast(`Could not save: ${err.message}`); }
+    return;
+  }
+  const f = e.target.closest('[data-form]');
+  if (f) { FORMS[f.dataset.form](f.dataset.ref); return; }
+  const ad = e.target.closest('[data-add-detect]');
+  if (ad) {
+    const s = V2['commitments/detect'][+ad.dataset.addDetect]; ad.disabled = true;
+    try { await v2post('commitments', { name: s.name, kind: s.kind, amount: mn(s.amount) / 100, currency: s.amount?.currency || C2(), cycle_months: s.cycle_months, next_due: s.next_due, match: s.match }); toast(`Added ${s.name}.`); render(); }
+    catch (err) { ad.disabled = false; toast(`Could not save: ${err.message}`); }
+    return;
+  }
+  const del = e.target.closest('[data-v2del]');
+  if (del && confirm('Delete this?')) {
+    try { await v2post(del.dataset.v2del, { id: sheetCtx.ref }); closeSheet(); toast('Deleted.'); render(); } catch (err) { toast(`Could not delete: ${err.message}`); }
+  }
+});
+document.addEventListener('submit', async e => {
+  const f = e.target;
+  if (f.matches('[data-pp-new]')) {
+    e.preventDefault();
+    const t = txnById(sheetCtx.id);
+    if (t) forSomeone(t, sheetCtx.step, '', f.name.value.trim());
+    return;
+  }
+  if (f.matches('[data-claim-new]')) {
+    e.preventDefault(); closeSheet();
+    try { await v2post('claims', { name: f.name.value.trim(), status: 'draft', txn_ids: [sheetCtx.id] }); toast('Claim started.'); load(true); }
+    catch (err) { toast(`Could not save: ${err.message}`); }
+    return;
+  }
+  if (f.matches('form.whatif')) {
+    e.preventDefault();
+    const amount = f.amount.value.replace(/[^\d.]/g, '');
+    if (!amount) { f.amount.focus(); return; }
+    state.whatif = { amount, pay: f.pay.value, r: undefined }; render();
+    try { const r = await fetch(`/api/v2/whatif?amount=${enc(amount)}&currency=${enc(C2())}&pay=${enc(f.pay.value)}`); state.whatif.r = r.ok ? await r.json() : null; }
+    catch { state.whatif.r = null; }
+    render(); return;
+  }
+  if (!f.matches('form.v2sheet')) return;
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(f)), spec = FORMSPEC[f.dataset.spec];
+  if (sheetCtx.ref != null && sheetCtx.ref !== '') data.id = sheetCtx.ref;
+  f.querySelector('button').disabled = true;
+  try { await v2post(spec.path, spec.shape ? spec.shape(data) : data); closeSheet(); toast('Saved.'); render(); }
+  catch (err) { f.querySelector('button').disabled = false; toast(`Could not save: ${err.message}`); }
+});
+function claimPaidSheet(id) {
+  const since = fromNum(dayNum(today()) - 120), credits = state.all.filter(t => t.direction === 'credit' && t._d >= since).slice(0, 25);
+  openSheet('Which credit paid it?', credits.map(t => btnRow(`data-credit="${t.id}"`, '💰', esc(merName(t.merchant)), `${esc(dayLabel(t._d))} · ${esc(t.account)}`, `+${fmt(t._c)}`)).join('') ||
+    empty('No credits in the last 4 months', 'When the reimbursement lands it matches by itself.'), { claim: id });
+}
+
+/* Add / edit sheets for v2 things: one spec each; fields are [name, label, type, value, options]. */
+const opts = o => Object.entries(o).map(([k, v]) => [k, Array.isArray(v) ? v.join(' ') : v]);
+const CURS = [['SAR', 'SAR'], ['INR', 'INR']];
+const FORMSPEC = {
+  commitment: { path: 'commitments', title: 'Commitment', del: 'commitments/delete', fields: c => [['name', 'Name', 'text', c.name, null, 'e.g. Flat rent, Netflix, Mum'], ['kind', 'Kind', 'select', c.kind || 'bill', opts(KINDS)],
+    ['amount', 'Amount', 'money', c.amount ? mn(c.amount) / 100 : ''], ['currency', 'Currency', 'select', c.amount?.currency || C2(), CURS], ['cycle_months', 'Repeats', 'select', String(c.cycle_months ?? 1), CYCLES],
+    ['next_due', 'Next due', 'date', c.next_due || today()], ['match', 'Words in the SMS that pay it (optional)', 'text', c.match || '', null, 'e.g. NETFLIX or the loan’s last 4 digits']] },
+  fund: { path: 'funds', title: 'Fund', del: 'funds/delete', fields: f => [['name', 'What it’s for', 'text', f.name, null, 'e.g. Flight home, next rent'], ['target', 'Target', 'money', f.target ? mn(f.target) / 100 : ''],
+    ['currency', 'Currency', 'select', f.target?.currency || C2(), CURS], ['due', 'Needed by', 'date', f.due || addM(today().slice(0, 7), 6) + '-01'], ['saved', 'Saved so far', 'money', f.saved ? mn(f.saved) / 100 : '']] },
+  contribute: { path: 'funds/contribute', title: 'Put money in', fields: () => [['amount', 'Amount', 'money', '']] },
+  person: { path: 'people', title: 'Person', del: 'people/delete', fields: p => [['name', 'Name', 'text', p.name], ['relation', 'Who', 'select', p.relation || 'family', [['family', 'Family'], ['friend', 'Friend'], ['colleague', 'Colleague'], ['other', 'Other']]],
+    ['email', 'Email (optional, links them if they use the app)', 'email', p.email || ''], ['support_amount', 'Monthly support (optional)', 'money', p.support_plan ? mn(p.support_plan) / 100 : ''],
+    ['support_currency', 'Support currency', 'select', p.support_plan?.currency || 'INR', CURS]] },
+  asset: { path: 'assets', title: 'Asset', del: 'assets/delete', fields: a => [['kind', 'Kind', 'select', a.kind || 'property', [['property', '🏠 Property'], ['vehicle', '🚗 Vehicle'], ['investment', '📈 Investment']]],
+    ['name', 'Name', 'text', a.name, null, 'e.g. Kochi flat, Camry, HDFC FD'], ['currency', 'Currency', 'select', a.currency || 'INR', CURS], ['cost', 'Total cost', 'money', a.cost ? mn(a.cost) / 100 : ''],
+    ['value', 'Worth now (optional)', 'money', a.value ? mn(a.value) / 100 : ''], ['paid_cash', 'Paid in cash so far', 'money', a.paid_cash ? mn(a.paid_cash) / 100 : ''],
+    ['m_name', 'Next payment milestone (optional)', 'text', a.next_milestone?.name || '', null, 'e.g. Slab 5, handover'], ['m_due', 'Milestone due', 'date', a.next_milestone?.due || ''],
+    ['m_amount', 'Milestone amount', 'money', a.next_milestone ? mn(a.next_milestone.amount) / 100 : '']],
+    shape: ({ m_name, m_due, m_amount, ...d }) => ({ ...d, ...(m_name ? { milestones: [{ name: m_name, due: m_due, amount: m_amount }] } : {}) }) },
+  settings: { path: 'settings', title: 'Salary & preferences', fields: s => [['salary', 'Monthly salary', 'money', typeof s.salary === 'object' && s.salary ? mn(s.salary) / 100 : s.salary ?? ''],
+    ['salary_currency', 'Salary currency', 'select', s.salary_currency || 'SAR', CURS], ['salary_day', 'Salary day (1-31)', 'number', s.salary_day ?? 27],
+    ['home_currency', 'Home currency', 'select', s.home_currency || 'INR', CURS], ['emergency_months', 'Emergency fund, months of spending', 'number', s.emergency_months ?? 6]] },
+};
+const fieldHtml = ([name, label, type, value = '', options, ph = '']) => `<label>${esc(label)}${type === 'select'
+  ? `<select name="${name}">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(value) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`
+  : `<input name="${name}" type="${type === 'money' ? 'text' : type}"${type === 'money' ? ' inputmode="decimal" pattern="[0-9.,]*"' : ''} value="${esc(value ?? '')}" placeholder="${esc(ph)}"${name === 'name' ? ' required maxlength="60"' : ''}>`}</label>`;
+function formSheet(key, item = {}, ref = item.id) {
+  const s = FORMSPEC[key], editing = ref != null && ref !== '';
+  openSheet(`${editing && key !== 'contribute' && key !== 'settings' ? 'Edit' : key === 'settings' || key === 'contribute' ? '' : 'Add'} ${s.title}`.trim(),
+    `<form class="v2 v2sheet" data-spec="${key}">${s.fields(item).map(fieldHtml).join('')}<div class="actions"><button class="btn">Save</button>` +
+    (editing && s.del ? `<button type="button" class="link danger" data-v2del="${s.del}">Delete</button>` : '') + '</div></form>', { ref });
+}
+const find2 = (path, id) => (V2[path] || []).find(x => String(x.id) === String(id)) || {};
+const FORMS = {
+  commitment: id => formSheet('commitment', find2('commitments', id)), fund: id => formSheet('fund', find2('funds', id)), contribute: id => formSheet('contribute', {}, id),
+  person: id => formSheet('person', find2('people', id)), asset: id => formSheet('asset', find2('assets', id)),
+  settings: () => formSheet('settings', V2.settings || {}, ''),
+};
+
+/* ---------- Home ---------- */
+function home(rt, P) {
+  const C = C2(), mo = today().slice(0, 7);
+  const M = v2(`month?month=${mo}&currency=${C}`), L = v2(`lookahead?months=12&currency=${C}`), CM = v2('commitments');
+  const R = reviewList().length, local = totals(state.all.filter(t => t._m === mo));
+  let hero;
+  if (M) {
+    const inc = mn(M.income), sp = mn(M.spent), cm = mn(M.committed_due) + mn(M.committed_paid) + mn(M.other_out), sa = mn(M.set_aside), free = mn(M.free);
+    const seg = (v, cls, label) => v > 0 ? `<i class="${cls}" style="flex:${v}" title="${label} ${fmt(v)}"></i>` : '';
+    hero = `<section class="hero"><div class="label">Free money · ${esc(monthName(mo))}</div><div class="total${free < 0 ? ' neg' : ''}"><small>${esc(C)}</small><span data-count="${free}">${fmt(free)}</span></div>` +
+      `<div class="stack" role="img" aria-label="Of ${fmt(inc)} income: spent ${fmt(sp)}, committed ${fmt(cm)}, set aside ${fmt(sa)}, free ${fmt(Math.max(0, free))}">` +
+      seg(sp, 's-spent', 'Spent') + seg(cm, 's-comm', 'Committed') + seg(sa, 's-fund', 'Set aside') + seg(Math.max(0, free), 's-free', 'Free') + '</div>' +
+      `<div class="kpis"><div><span><i class="dot s-free"></i>Income</span><b>${fmt(inc)}</b></div><div><span><i class="dot s-spent"></i>Spent</span><b>${fmt(sp)}</b></div>` +
+      `<div><span><i class="dot s-comm"></i>Committed</span><b>${fmt(cm)}</b></div><div><span><i class="dot s-fund"></i>Set aside</span><b>${fmt(sa)}</b></div></div>` +
+      (M.rate?.SAR_INR ? `<p class="proj">1 SAR = ₹${(+M.rate.SAR_INR).toFixed(2)}</p>` : '') + '</section>';
+  } else {
+    hero = `<section class="hero"><div class="label">Spent · ${esc(monthName(mo))}</div><div class="total"><small>${esc(C)}</small><span data-count="${local.spent}">${fmt(local.spent)}</span></div>` +
+      `<div class="kpis"><div><span>Received</span><b>${fmt(local.received)}</b></div><div><span>Net</span><b>${fmt(local.received - local.spent)}</b></div></div>` +
+      `<p class="proj">${M === undefined ? '<span class="skel-line"></span>' : 'Free money, dues and the look-ahead appear when the planning engine is on.'}</p></section>`;
+  }
+  const owed = M ? `<section class="card duo"><a href="#/debt"><span>You owe</span><b class="bad-ink">${mv(M.owed_by_you?.total)}</b><small>loans, cards, pay-later, people</small></a>` +
+    `<a href="#/people"><span>Owed to you</span><b class="good-ink">${mv(M.owed_to_you?.total)}</b><small>people and claims</small></a></section>` : '';
+  const df = L?.debt_free, burn = L?.interest_per_month || M?.interest_this_month;
+  const debt = L ? card('Debt-free', '', `<div class="big"><b>${df?.months === 0 ? 'No debt 🎉' : df?.month ? esc(monthName(df.month)) : df?.months === 0 ? 'No debt 🎉' : 'Not at these payments'}</b>${df?.months ? `<span class="pill">${plural(df.months, 'month')}</span>` : ''}</div>` +
+    (mn(burn) ? `<p class="muted small">Interest burn: <b class="bad-ink">${mv(burn)}</b> a month</p>` : ''), '#/debt') : '';
+  const dues = CM === undefined ? skel(3) : (CM || []).filter(c => c.status_this_cycle !== 'paid' && c.next_due).sort((a, b) => a.next_due < b.next_due ? -1 : 1).slice(0, 5)
+    .map(c => btnRow(`data-form="commitment" data-ref="${esc(c.id)}"`, (KINDS[c.kind] || KINDS.other)[0], esc(c.name), `${esc(shortDay(c.next_due))} ${stChip(c.status_this_cycle)}`, mv(c.amount))).join('');
+  return { cols: true, html: usernameCard() +
+    (R ? `<a class="banner review" href="#/review"><span class="rv-n">${R > 99 ? '99+' : R}</span><span>To review · one tap each</span>${go1}</a>` : '') +
+    hero + alerts() + owed + debt +
+    (CM !== null ? card('Next dues', '', dues || empty('Nothing due', 'All paid for now.'), '#/plan') : '') +
+    (L ? card('Next 12 months', 'free money', aheadBars(L.months || [], true) + ((L.months || []).some(m => m.warnings?.length) ? `<p class="small bad">⚠ ${esc(L.months.find(m => m.warnings?.length).warnings[0])}</p>` : ''), '#/plan') : L === undefined ? card('Next 12 months', '', skel(2)) : '') +
+    card('This month’s spending', esc(C), `<a class="ln" href="#/spending"><span class="nm"><b>${money(local.spent)}</b><small>${plural(local.n, 'purchase')} · received ${fmt(local.received)}</small></span>${go1}</a>` + monthBars(state.all, mo, P, { mini: true, href: false })) };
+}
+
+/* ---------- People ---------- */
+function peoplePage() {
+  const PP = v2('people'), CM = v2('commitments'), CL = v2('claims');
+  const fam = (PP || []).filter(p => p.relation === 'family');
+  const family = card('Family', 'support, plan vs this month', v2box(PP, () => fam.map(p => {
+    const plan = mn(p.support_plan), got = mn(p.support_this_month), pc = plan ? Math.min(1, got / plan) : 0;
+    return `<button type="button" class="pp" data-form="person" data-ref="${esc(p.id ?? '')}"><span class="ic2">👪</span><span class="nm"><b>${esc(p.name)}</b><small>${plan ? `${mv(p.support_this_month)} of ${mv(p.support_plan)}` : `${mv(p.support_this_month)} this month`}</small>` +
+      (plan ? `<span class="bar"><i class="${got >= plan ? 'ok' : ''}" style="width:${(pc * 100).toFixed(0)}%"></i></span>` : '') + `</span>${go1}</button>`;
+  }).join('') || empty('No family added', 'Add who you support and how much a month.'), 'Family support tracking needs the planning engine.') +
+    (PP !== null ? '<button type="button" class="btn ghost wide" data-form="person">+ Add a person</button>' : ''));
+  const fb = friendBalances(), owedMe = fb.reduce((a, e) => a + Math.max(0, e.owed), 0), N = sharedNet();
+  const friends = card('Friends', esc(state.currency), (fb.length ? `<div class="big"><span class="muted">Owed to you</span><b>${money(owedMe)}</b></div>` : '') +
+    fb.slice(0, 5).map(e => rk({ href: `#/friend/${enc(e.name)}`, icon: '👤', name: e.name, sub: e.owed < 0 ? 'you owe them' : e.owed ? 'owes you' : 'all square', value: e.owed })).join('') +
+    (N.some(n => n.owe > 0) ? `<p class="small bad">You owe ${N.filter(n => n.owe > 0).map(n => esc(whoIs(n.email))).join(', ')}</p>` : '') +
+    (fb.length ? '' : (PP || []).filter(p => p.relation !== 'family').map(p => rk({ icon: '👤', name: p.name, sub: (p.you_owe || []).some(mn) ? `you owe ${mvs(p.you_owe)}` : 'owes you',
+      valueText: mvs(p.owes_you) })).join('') || empty('No friends tagged yet', 'Use ⋯ on any transaction → Split or For someone.')), '#/friends');
+  const shared = (CM || []).filter(c => c.sharers?.length);
+  const subs = card('Shared subscriptions', '', v2box(CM, () => shared.map(c => `<div class="shr"><div class="shr-h"><b>${(KINDS[c.kind] || KINDS.other)[0]} ${esc(c.name)}</b><span>${mv(c.amount)}</span></div>` +
+    `<div class="picks">${c.sharers.map(s => chip(`${personName(s.person_id)} · ${fmt(s.share_minor || 0)} ${s.paid_this_cycle ? '✓ paid' : 'unpaid'}`, s.paid_this_cycle ? 'good' : 'warn')).join('')}</div></div>`).join('')
+    || empty('Nothing shared yet', 'Open a subscription on Plan and add who shares it.')));
+  const cl = claimsOf(CL), pend = CL?.pending_total;
+  const claims = card('Claims', pend ? `pending ${mvs(pend)}` : '', v2box(CL, () => cl.map(c => `<div class="shr"><div class="shr-h"><b>🧾 ${esc(c.name)}</b><span>${mv(c.expected)}</span></div>` +
+    `<p class="muted small">${stChip(c.status)} ${plural(c.items?.length || 0, 'item')} · ${c.age_days != null ? plural(c.age_days, 'day') + ' old' : ''}${mn(c.received) ? ` · received ${mv(c.received)}` : ''}</p>` +
+    (c.status !== 'paid' ? `<button type="button" class="btn small" data-claim-paid="${esc(c.id)}">Mark paid</button>` : '') + '</div>').join('')
+    || empty('No claims', 'Use ⋯ on a work expense → Claim. It stops counting as your spending.'), 'Company claims need the planning engine.'));
+  return { cols: true, html: family + friends + subs + claims };
+}
+
+/* ---------- Plan ---------- */
+function planHub() {
+  const C = C2(), CM = v2('commitments'), DT = v2('commitments/detect'), FU = v2('funds'), L = v2(`lookahead?months=12&currency=${C}`), AD = v2(`advice?currency=${C}`);
+  const groups = Object.keys(KINDS).map(k => [k, (CM || []).filter(c => (KINDS[c.kind] ? c.kind : 'other') === k)]).filter(([, l]) => l.length);
+  const commits = card('Commitments', CM ? `${plural(CM.length, 'item')}` : '', v2box(CM, () => groups.map(([k, l]) => `<h3 class="sec">${KINDS[k][0]} ${KINDS[k][1]}</h3>` +
+    l.map(c => btnRow(`data-form="commitment" data-ref="${esc(c.id)}"`, '', esc(c.name), `${esc(cycleText(c.cycle_months))}${c.next_due ? ' · next ' + esc(shortDay(c.next_due)) : ''} ${stChip(c.status_this_cycle)}`, mv(c.amount))).join('')).join('')
+    || empty('No commitments yet', 'Rent, bills, subscriptions, EMIs and family support. Add one, or take the ones we found.'), 'Commitments need the planning engine.') +
+    (CM !== null ? '<button type="button" class="btn ghost wide" data-form="commitment">+ Add a commitment</button>' : ''));
+  const found = (DT || []).filter(s => !(CM || []).some(c => c.name.toLowerCase() === String(s.name).toLowerCase()));
+  const detect = found.length ? card('We found these — add?', 'from your payments', found.map(s => `<div class="found"><span class="ic2">${(KINDS[s.kind] || KINDS.other)[0]}</span><span class="nm"><b>${esc(s.name)}</b><small>${mv(s.amount)} · ${esc(cycleText(s.cycle_months))}${s.next_due ? ' · next ' + esc(shortDay(s.next_due)) : ''}</small></span>` +
+    `<button type="button" class="btn small" data-add-detect="${DT.indexOf(s)}">Add</button></div>`).join('')) : '';
+  const funds = card('Funds', 'money set aside for what’s coming', v2box(FU, () => (FU.map(f => `<div class="fund">${ring(mn(f.target) ? mn(f.saved) / mn(f.target) : 0)}<span class="nm"><b>${esc(f.name)}</b>` +
+    `<small>${mv(f.saved)} of ${mv(f.target)}${f.due ? ' · by ' + esc(shortDay(f.due)) : ''}</small><small>${mv(f.monthly)}/month ${f.on_track === false ? chip('Behind', 'bad') : f.on_track ? chip('On track', 'good') : ''}</small></span>` +
+    `<span class="fund-b"><button type="button" class="btn small" data-form="contribute" data-ref="${esc(f.id)}">+ Add</button><button type="button" class="link small" data-form="fund" data-ref="${esc(f.id)}">Edit</button></span></div>`).join('')
+    || empty('No funds yet', 'Rent every 6 months or a flight home: a fund spreads it across the months.')) + '<button type="button" class="btn ghost wide" data-form="fund">+ Add a fund</button>', 'Funds need the planning engine.'));
+  const ahead = card('Next 12 months', esc(C), v2box(L, () => aheadBars(L.months || []) +
+    `<div class="tbl"><table class="plan"><tr><th>Month</th><th>In</th><th>Due</th><th>Funds</th><th>Living</th><th>Free</th></tr>${(L.months || []).map(m =>
+      `<tr${mn(m.free) < 0 ? ' class="neg"' : ''}><td>${esc(mon(m.month))}${m.warnings?.length ? ' ⚠' : ''}</td><td>${short(mn(m.income))}</td><td>${short(mn(m.commitments))}</td><td>${short(mn(m.funds))}</td><td>${short(mn(m.everyday))}</td><td><b>${short(mn(m.free))}</b></td></tr>`).join('')}</table></div>`,
+    'The look-ahead needs the planning engine.'));
+  const W = state.whatif, VD = { ok: ['✅', 'Yes, you can', 'good'], tight: ['⚠️', 'Tight', 'warn'], no: ['⛔', 'Not now', 'bad'] };
+  const verdict = !W ? '' : W.r === undefined ? skel(2) : W.r === null ? empty('Couldn’t check', 'This needs the planning engine. Meanwhile try <a href="#/buy">Can I buy it?</a>') :
+    `<div class="verdict ${(VD[W.r.verdict] || VD.tight)[2]}"><span>${(VD[W.r.verdict] || VD.tight)[0]}</span><b>${(VD[W.r.verdict] || VD.tight)[1]}</b><p>${esc(W.r.why || '')}</p></div>` +
+    `<dl class="stats"><div><dt>Free this month after</dt><dd>${mv(W.r.month_free_after)}</dd></div><div><dt>Debt-free</dt><dd>${W.r.delay_months == null ? 'never at this rate' : W.r.delay_months ? `+${plural(W.r.delay_months, 'month')} later` : 'no change'}</dd></div>` +
+    `<div><dt>Extra interest</dt><dd>${mv(W.r.extra_interest)}</dd></div><div><dt>Debt-free date</dt><dd>${W.r.debt_free_after?.months === 0 ? 'no debt' : W.r.debt_free_after?.month ? esc(monthName(W.r.debt_free_after.month, 'short')) : 'never at this rate'}</dd></div></dl>`;
+  const afford = card('Can I afford it?', '', `<form class="v2 whatif"><input name="amount" inputmode="decimal" placeholder="How much? (${esc(C)})" aria-label="Amount" value="${esc(W?.amount || '')}">` +
+    `<select name="pay" aria-label="Pay with"><option value="cash" ${W?.pay === 'card' ? '' : 'selected'}>From cash</option><option value="card" ${W?.pay === 'card' ? 'selected' : ''}>On a card</option></select><button class="btn">Check</button></form>${verdict}`);
+  const advice = card('Where to put money', 'rules of thumb, not financial advice', v2box(AD, () => (AD.emergency_fund ? (E => `<p class="small">Emergency fund: <b>${(+E.months_covered || 0).toFixed(1)}</b> of ${E.target.minor !== undefined ? `${esc(V2.settings?.emergency_months || 6)} months · target ${mv(E.target)}` : `${esc(E.target)} months`}</p>` +
+    `<span class="bar"><i style="width:${Math.min(100, (E.months_covered || 0) / (+(E.target.minor !== undefined ? V2.settings?.emergency_months || 6 : E.target) || 1) * 100).toFixed(0)}%"></i></span>`)(AD.emergency_fund) : '') +
+    `<ol class="steps">${(AD.steps || []).map(s => `<li><b>${esc(s.title)}</b>${mn(s.amount) ? ` <span class="pill">${mv(s.amount)}</span>` : ''}<small>${esc(s.why || '')}</small></li>`).join('')}</ol>`, 'Advice needs the planning engine.'));
+  const tools = card('Debts & tools', '', ln2('#/debt', '🏦', 'Debt & payoff', 'Loans, cards, savings and the payoff plan') + ln2('#/checkin', '✅', 'Monthly check-in', 'Split the salary, step by step') +
+    ln2('#/liabilities', '📋', 'Liabilities', 'Paid, due or missed this month') + ln2('#/buy', '🛍️', 'Can I buy it?', 'Where to pay from, what to cut') +
+    ln2('#/forecast', '📅', 'Forecast', 'Next 30 days from your patterns') + ln2('#/health', '❤️', 'Money health', 'A score with what to fix') + ln2('#/trail', '🔀', 'Money trail', 'Between your accounts'));
+  return { cols: true, html: afford + detect + commits + funds + ahead + advice + tools };
+}
+
+/* ---------- More ---------- */
+function morePage() {
+  const AS = v2('assets'), ST = v2('settings');
+  const sec = (kind, ic, title, body) => { const l = (AS || []).filter(a => a.kind === kind); return l.length ? `<h3 class="sec">${ic} ${title}</h3>` + l.map(body).join('') : ''; };
+  const pct = (v, of) => of ? (Math.max(0, v) / of * 100).toFixed(1) : 0;
+  const assets = card('Property, vehicles & investments', '', v2box(AS, () => (
+    sec('property', '🏠', 'Property', a => { const cost = mn(a.cost) || mn(a.paid_cash) + mn(a.financed) + mn(a.remaining);
+      return `<button type="button" class="asset" data-form="asset" data-ref="${esc(a.id)}"><b>${esc(a.name)}</b><small>${mv(a.cost)} total</small>` +
+        `<span class="stack light"><i class="s-free" style="flex:${mn(a.paid_cash)}"></i><i class="s-comm" style="flex:${mn(a.financed)}"></i><i class="s-rest" style="flex:${mn(a.remaining)}"></i></span>` +
+        `<span class="kv"><span><i class="dot s-free"></i>Paid ${mv(a.paid_cash)}</span><span><i class="dot s-comm"></i>Financed ${mv(a.financed)}</span><span><i class="dot s-rest"></i>To pay ${mv(a.remaining)}</span></span>` +
+        (a.next_milestone ? `<small>Next: <b>${esc(a.next_milestone.name)}</b> · ${mv(a.next_milestone.amount)}${a.next_milestone.due ? ' · ' + esc(shortDay(a.next_milestone.due)) : ''}</small>` : '') + '</button>'; }) +
+    sec('vehicle', '🚗', 'Vehicles', a => `<button type="button" class="asset" data-form="asset" data-ref="${esc(a.id)}"><b>${esc(a.name)}</b><span class="kv"><span>Costs <b>${mv(a.monthly_cost)}</b>/mo</span><span>Your share <b>${mv(a.your_monthly_cost)}</b>/mo</span></span>` +
+      `<span class="picks">${Object.entries(a.costs_by_type || {}).filter(([, m]) => mn(m)).map(([k, m]) => chip(`${k} ${mv(m)}`)).join('')}</span></button>`) +
+    sec('investment', '📈', 'Investments', a => `<button type="button" class="asset" data-form="asset" data-ref="${esc(a.id)}"><b>${esc(a.name)}</b><span class="kv"><span>Worth <b>${mv(a.value)}</b></span>${mn(a.cost) ? `<span>Put in ${mv(a.cost)}</span>` : ''}</span></button>`)
+    || empty('Nothing added yet', 'A flat being built, a car, an FD: see what’s paid and what’s left.')) + '<button type="button" class="btn ghost wide" data-form="asset">+ Add property, vehicle or investment</button>', 'Assets need the planning engine.'));
+  const sal = ST ? `${typeof ST.salary === 'object' && ST.salary ? mv(ST.salary) : ST.salary ? `${esc(ST.salary_currency || '')} ${esc(ST.salary)}` : 'not set'}` : '';
+  return { cols: true, html:
+    card('Money', '', ln2('#/balances', '🏦', 'Accounts & balances', 'Banks, wallets, cards; rename, add or remove') + ln2('#/cards', '💳', 'Spending by card', '') + ln2('#/debt', '📉', 'Loans & savings', 'Net worth and payoff')) +
+    assets +
+    card('Set up', '', (ST !== null ? btnRow('data-form="settings"', '💼', 'Salary & preferences', ST === undefined ? 'Loading…' : `Salary ${sal}`) : '') +
+      ln2('/import', '📄', 'Import statements', 'PDF, Excel or CSV from your banks; old SMS') + ln2('/setup', '📱', 'Connect a phone', 'Android app, iPhone one-tap setup, each phone') +
+      ln2('#/settings', '✨', 'Connect Claude', 'Ask Claude or ChatGPT about your money') + ln2('#/settings', '⚙️', 'Account & settings', 'Password, install, animations, sign out')) +
+    `<p class="version">Version ${esc(state.sum?.version || 'unknown')}</p>` };
+}
+const PAGES = { overview: home, spending, people: peoplePage, more: morePage, review: reviewPage, checkin: planPage, categories, merchants, cards, activity,
   category: (r, P, X) => drill(r, P, X, 'category'), merchant: (r, P, X) => drill(r, P, X, 'merchant'), card: (r, P, X) => drill(r, P, X, 'card'),
   month: (r, P, X) => drill(r, P, X, 'month'), day: (r, P, X) => drill(r, P, X, 'day'), cash: (r, P, X) => drill(r, P, X, 'cash'),
-  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planPage, analysis: planPage, health: healthPage, trail: trailPage, liabilities: liabPage, buy: buyPage, balances: balancesPage };
-const TITLES = { ...Object.fromEntries(TABS.map(([k, label]) => [k, label])), merchants: 'Spending', cards: 'Spending' };
+  trends, income, recurring: recurringPage, large: largePage, search: searchPage, settings, friends: friendsPage, friend: friendsPage, daily, forecast: forecastPage, money: moneyPage, debt: moneyPage, plan: planHub, analysis: planPage, health: healthPage, trail: trailPage, liabilities: liabPage, buy: buyPage, balances: balancesPage };
+const TITLES = { ...Object.fromEntries(TABS.map(([k, label]) => [k, label])), categories: 'Spending', merchants: 'Spending', cards: 'Spending', activity: 'Spending' };
 
 function render() {
   const rt = parseRoute(), P = period(rt.q, rt), isTab = rt.name in TITLES;
@@ -2525,11 +3031,12 @@ function render() {
   // Currency switch: SAR first.
   const currencies = [...new Set(['SAR', ...(state.sum?.currencies || []), state.currency].filter(Boolean))];
   $('currency').innerHTML = currencies.map(c => `<button type="button" aria-pressed="${c === state.currency}" data-c="${esc(c)}">${esc(c)}</button>`).join('');
-  const up = isTab ? rt.name : PARENT[rt.name] || 'overview', parent = SUBTABS[up] || up;
-  const review = state.sum?.to_review.length || 0;
+  const parent = TABS.some(([k]) => k === rt.name) ? rt.name : TAB_OF[rt.name] || 'overview';
+  const review = state.sum ? reviewList().length : 0;
   $('tabs').innerHTML = TABS.map(([k, label, svg]) => `<a href="#/${k}?${P.qs}" data-replace ${k === rt.name ? 'aria-current="page"' : ''} class="${k === parent ? 'on' : ''}">` +
     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${svg}</svg>${label}` +
-    (k === 'activity' && review ? `<span class="badge" aria-label="${review} need a category">${review > 99 ? '99+' : review}</span>` : '') + '</a>').join('');
+    (k === 'overview' && review ? `<span class="badge" aria-label="${review} to review">${review > 99 ? '99+' : review}</span>` : '') + '</a>').join('');
+  if (changed) closeSheet();
   if (rt.name === 'search' && $('search') && !changed) { renderResults(); return; }  // keep the box (and keyboard) while typing
   let page;
   if (!state.sum) page = { html: `<section class="card">${state.failed ? empty("Couldn't load your data", 'Check your connection, then pull down to try again.') : empty('Loading…')}</section>` };
@@ -2545,6 +3052,7 @@ function render() {
   $('sub').hidden = !page.sub; $('sub').textContent = page.sub || '';
   document.title = `${$('title').textContent} · Expenses`;
   $('view').innerHTML = page.html;
+  $('view').classList.toggle('cols', !!page.cols);
   document.documentElement.style.setProperty('--clock', (-(performance.now() / 1000)).toFixed(2) + 's');
   const ti = TABS.findIndex(([k]) => k === parent);
   $('tabs').style.setProperty('--t', ti); $('tabs').classList.toggle('notab', ti < 0);
@@ -2634,7 +3142,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('#back')) {
     const rt = parseRoute();
     if (depth > 0) history.back();
-    else go(`#/${PARENT[rt.name] || 'overview'}?${period(rt.q, rt).qs}`, true);  // opened from a link: go up instead of leaving
+    else go(`#/${PARENT[rt.name] || TAB_OF[rt.name] || 'overview'}?${period(rt.q, rt).qs}`, true);  // opened from a link: go up instead of leaving
     return;
   }
   const sort = e.target.closest('[data-sort]')?.dataset.sort;
@@ -2705,7 +3213,7 @@ document.addEventListener('submit', async e => {
 
 // Redraw from a save's reply (it carries the whole updated dashboard), keeping an open row open.
 function applyReply(reply, open) {
-  pending = null;
+  pending = null; v2reset();
   cache.set('s|' + reply.summary.currency, JSON.stringify(reply.summary)); cache.set('t|' + reply.summary.currency, JSON.stringify(reply.all));
   setData(reply.summary, reply.all);
   render();
@@ -2896,5 +3404,6 @@ document.addEventListener('change', e => {
 history.replaceState({ d: 0 }, '');
 load();
 </script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
 </body>
 </html>
