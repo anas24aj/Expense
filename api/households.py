@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from api import auth, emailer, valid
 from api.app import ApiError, route
-from api.db import new_id, now
+from api.db import Scoped, new_id, now
 
 RELATIONS = {'self', 'spouse', 'parent', 'child', 'sibling', 'other'}
 ROLES = {'admin', 'member', 'viewer'}  # 'owner' is only the household's creator
@@ -314,6 +314,26 @@ def get_people(req):
 
 def device_view(d):
     return {k: d[k] for k in ('id', 'name', 'platform', 'member_id', 'created_at', 'last_seen')}
+
+
+@route('GET', '/api/shared', auth='user')
+def shared_with_me(req):
+    """What other households recorded with me as their contact (matched by my sign-in email): the balance and the
+    unsettled split lines, from my side. Read-only; each side settles in its own household."""
+    items = []
+    for c in req.db.run('SELECT c.id, c.household_id, h.name FROM contacts c JOIN households h ON h.id = c.household_id '
+                        'WHERE c.email = :e AND c.removed_at IS NULL', e=req.user['email']):
+        hh = Scoped(req.db, c['household_id'])
+        bal = balances(hh)[('contact', c['id'])]
+        lines = hh.run('SELECT t.day, t.merchant, t.merchant_raw, t.direction, t.currency, s.share_minor FROM splits s JOIN transactions t ON t.id = s.txn_id '
+                       'WHERE s.household_id = :hid AND t.household_id = :hid AND s.contact_id = :c AND s.settled_at IS NULL AND t.deleted_at IS NULL '
+                       'ORDER BY t.day DESC', c=c['id'])
+        items.append({'household': c['name'], 'you_owe': [valid.money(v, k) for k, v in sorted(bal.items()) if v > 0],
+                      'owed_to_you': [valid.money(-v, k) for k, v in sorted(bal.items()) if v < 0],
+                      'lines': [{'day': r['day'], 'what': r['merchant'] or r['merchant_raw'],
+                                 'your_share': valid.money(r['share_minor'] if r['direction'] == 'debit' else -r['share_minor'], r['currency'])}
+                                for r in lines]})
+    return {'items': items}
 
 
 @route('GET', '/api/devices')

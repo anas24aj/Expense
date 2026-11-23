@@ -135,9 +135,29 @@ function Friends({ people }: { people: Person[] }) {
           </List>
         ) : <EmptyState icon="people" title="No friends yet" text="Split a bill from Activity and they’ll show up here." />}
       </Section>
+      <SharedWithMe />
       <SettleSheet person={open} onClose={() => setOpen(null)} />
       <AddContactSheet open={adding} onClose={() => setAdding(false)} />
     </>
+  );
+}
+
+type SharedItem = { household: string; you_owe: M[]; owed_to_you: M[]; lines: { day: string; what: string; your_share: M }[] };
+
+// Splits other households recorded with you (as their contact with your email): appears once you join the app.
+function SharedWithMe() {
+  const q = useApi<{ items: SharedItem[] }>('/shared');
+  const items = q.data?.items.filter(i => i.lines.length || i.you_owe.length || i.owed_to_you.length) ?? [];
+  if (!items.length) return null;
+  return (
+    <>{items.map(i => (
+      <Section key={i.household} title={`Shared with you by ${i.household}`}>
+        <List>
+          {i.lines.slice(0, 20).map((l, n) => <ListRow key={n} icon={<Icon name="people" size={22} />} title={l.what || 'Shared expense'} sub={shortDate(l.day)} end={<Money m={l.your_share} />} chevron={false} />)}
+        </List>
+        <p className="caption">{i.you_owe.length ? <>You owe <Monies items={i.you_owe} /></> : i.owed_to_you.length ? <>They owe you <Monies items={i.owed_to_you} /></> : 'Settled'}</p>
+      </Section>
+    ))}</>
   );
 }
 

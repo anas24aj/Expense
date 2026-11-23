@@ -304,6 +304,16 @@ class IngestTest(Base):
 
 
 class LedgerTest(Base):
+    def test_contact_who_joins_sees_shared_splits(self):
+        owner = signup('own@x.com')
+        harish = owner.ok('POST', '/api/contacts', {'name': 'Harish', 'email': 'harish@x.com'})
+        t = owner.ok('POST', '/api/transactions', {'day': '2026-11-02', 'amount_minor': 4000, 'currency': 'SAR', 'direction': 'debit', 'merchant': 'Rent'})
+        owner.ok('POST', f"/api/transactions/{t['id']}/split", {'shares': [{'contact_id': harish['id'], 'share_minor': 2000}]})
+        h = signup('harish@x.com', name='Harish')
+        got = h.ok('GET', '/api/shared')['items']
+        self.assertEqual((len(got), got[0]['you_owe'], got[0]['lines'][0]['your_share']), (1, [{'minor': 2000, 'currency': 'SAR'}], {'minor': 2000, 'currency': 'SAR'}))
+        self.assertEqual(owner.ok('GET', '/api/shared')['items'], [])
+
     def test_manual_split_link_delete_pagination_categories(self):
         c = signup('led@x.com')
         bank = c.ok('POST', '/api/accounts', {'kind': 'bank', 'name': 'SNB', 'currency': 'SAR', 'opening_balance_minor': 10000, 'opening_as_of': '2026-11-01'})

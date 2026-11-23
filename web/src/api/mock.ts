@@ -282,6 +282,7 @@ on('POST', '/invites/{id}/resend', m => invites.find(x => x.id === m[1]));
 on('DELETE', '/invites/{id}', m => { invites.splice(invites.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('POST', '/contacts', (_m, b) => { const c = { id: id(), name: b.name, email: b.email || null, phone: b.phone || null, on_app: false }; contacts.push(c); return c; });
 on('GET', '/people', () => ({ items: people() }));
+on('GET', '/shared', () => ({ items: [] }));
 on('GET', '/devices', () => ({ items: devices }));
 on('POST', '/devices', (_m, b) => { const d: Device = { id: id(), name: b.name, platform: b.platform, member_id: 'm1', created_at: new Date().toISOString(), last_seen: null };
   devices.push(d); const key = 'dk_' + Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 14);

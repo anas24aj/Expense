@@ -33,6 +33,7 @@ Conventions
 | POST | /invites/{id}/resend, DELETE /invites/{id} | (admin) → Invite with `link` |
 | GET | /invites/{token}/preview | public → `{household_name, invited_by, email}` |
 | POST | /contacts, PATCH/DELETE /contacts/{id} | `{name, email?, phone?}` → Contact (`on_app`: bool) |
+| GET | /shared | (any signed-in user) splits other households recorded with you as their contact, matched by your email → `{items: [{household, you_owe: [Money], owed_to_you: [Money], lines: [{day, what, your_share}]}]}` |
 | GET | /people | → `{items: [{kind: member|contact, id, name, relation, role, on_app, owes_you: [Money], you_owe: [Money], support_month: Money|null, support_plan: Money|null}]}` |
 | GET | /devices | → `{items: [{id, name, platform, member_id, created_at, last_seen}]}` |
 | POST | /devices | `{name, platform: iphone|android|other}` → `{device, key, sms_url, setup: "<json string {url,key}>", shortcut_url}` (key shown once) |
