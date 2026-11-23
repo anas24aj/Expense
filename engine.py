@@ -24,12 +24,18 @@ def money(minor, currency):
     return {'minor': int(round(minor)), 'currency': currency}
 
 
+# Units of each currency per US dollar (official pegs).
+USD_PEGS = {'USD': 1, 'SAR': 3.75, 'QAR': 3.64, 'AED': 3.6725, 'BHD': 0.376, 'OMR': 0.3845, 'KWD': 0.307}
+
+
 def conv(minor, cur, to, rate):
-    """Convert at `rate` (INR per SAR); USD via the SAR peg."""
+    """Convert at `rate` (INR per SAR); USD-pegged Gulf currencies through their fixed pegs."""
     if cur == to or not minor:
         return minor
-    in_sar = minor if cur == 'SAR' else minor * USD_SAR if cur == 'USD' else minor / rate
-    return in_sar if to == 'SAR' else in_sar / USD_SAR if to == 'USD' else in_sar * rate
+    sar_per = {'SAR': 1, 'INR': 1 / rate, **{c: USD_SAR / p for c, p in USD_PEGS.items()}}
+    if cur not in sar_per or to not in sar_per:
+        raise ValueError(f'no exchange rate for {cur} to {to}')
+    return minor * sar_per[cur] / sar_per[to]
 
 
 def add_months(day, n):
