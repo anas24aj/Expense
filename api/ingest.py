@@ -212,6 +212,10 @@ def import_statement(req):
         raise ApiError(422, str(e))
     except (ValueError, KeyError, IndexError, TypeError):
         raise ApiError(422, "couldn't read this file: download the statement again as PDF, Excel or CSV")
+    if parts := sorted({r['account'] for r in rows if r.get('account')}):  # a combined statement: only this account's section
+        if account['last4'] not in parts:
+            raise ApiError(422, f"this statement covers accounts ending {', '.join(parts)}: import it into one of those")
+        rows = [r for r in rows if r.get('account') == account['last4']]
     first, last = span(rows)
     with req.db.tx():
         st = hh.insert('statements', account_id=account['id'], file_name=name, period_from=first or '', period_to=last or '', rows=len(rows), imported_at=now())

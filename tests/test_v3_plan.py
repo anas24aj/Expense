@@ -309,6 +309,19 @@ class PlanTest(unittest.TestCase):
         bad = self.call('POST', '/api/claims/import', {'file_name': 'x.xlsx', 'data_base64': base64.b64encode(b'not excel').decode()})
         self.assertEqual(bad[0], 422)
 
+    def test_claim_layouts_with_currency_in_cells(self):
+        from api.plan import _claim_rows
+        summary = [['Summary'], ['Date', 'Total', 'Claimed']]  # a header with nothing under it: not the claim
+        cards = [['MON 02 MAR 2026 — two bills'], [], ['✔ Compliant — dinner'], [None, 'Vendor', 'Some Cafe'],
+                 [None, 'Receipt total', 'QAR 50.00'], [None, 'Claimed', 'QAR 40.00  =  SAR 41.20'],
+                 [None, '03 Mar 2026 (booked 1 Mar) — flight'], [None, 'What / amount', 'Flight home'], [None, 'Claimed', 'SAR 900.00']]
+        rows = _claim_rows([summary, cards])
+        self.assertEqual([(r['day'], r['description'], r['amount_minor'], r['claimed_minor'], r['currency']) for r in rows],
+                         [('2026-03-02', 'Some Cafe', 5000, 4000, 'QAR'), ('2026-03-03', 'Flight home', 90000, 90000, 'SAR')])
+        pack = [['Date', 'Vendor / item', 'What / amount', 'Claimed'], ['9 Aug 2026', 'Airline', 'Return ticket, 2 bags', 'SAR 1765.80']]
+        food = [['Day', 'Vendor', 'Receipt total (QAR)', 'Claimed (QAR)'], ['Sun 09 Aug 2026', 'Grocer', 31.5, 31.5]]
+        self.assertEqual([(r['amount_minor'], r['currency']) for r in _claim_rows([pack, food])], [(176580, 'SAR'), (3150, None)])
+
     # ---- MCP ----
 
     def mcp(self, msg, key=None):
