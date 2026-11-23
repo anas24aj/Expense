@@ -839,9 +839,52 @@ HEADS = [('claimed', r'claim|approv|reimburs'), ('date', r'date|\bday\b'), ('cur
          ('amount', r'amount|amt|total|value|cost|price'), ('description', r'desc|detail|merchant|particular|item|narrat|vendor|expense|purpose|remark')]
 
 
-def _claim_rows(grids):
-    """Rows under the first header that names a date and an amount; header words are matched loosely."""
+CASH = re.compile(r'\b(%s)\s*([\d,]+(?:\.\d+)?)' % '|'.join(['INR', *engine.USD_PEGS]))  # only codes we can convert
+
+
+def _money(v):
+    """(minor, currency) from a cell; 'QAR 200.00 = SAR 216.00' is the first amount and its currency."""
     import statement
+    m = CASH.search(v) if isinstance(v, str) else None
+    if m:
+        return statement.minor_of(m.group(2)), m.group(1)
+    if isinstance(v, str) and re.search(r'[a-z]{3}', v, re.I):  # words ('Return flight — QR 117'), not an amount
+        return None, None
+    return statement.minor_of(v), None
+
+
+def _claim_cards(grids):
+    """The per-day 'manager view' layout: label | value rows ('Vendor', 'Claimed | QAR x = SAR y') in blocks,
+    dated by the last heading line above them (the sheet's day, or a flight or stay heading)."""
+    import statement
+    out = []
+    for grid in grids:
+        day, desc, receipt = None, '', (None, None)
+        for n, r in enumerate(grid, 1):
+            cells = [(j, c) for j, c in enumerate(r) if c not in (None, '')]
+            if len(cells) == 1:
+                day = statement.day_of(cells[0][1]) or day
+                desc, receipt = '', (None, None)
+            elif len(cells) >= 2:
+                label, value = str(cells[0][1]).strip().lower(), cells[1][1]
+                if label in ('vendor', 'what / amount') and not desc:
+                    desc = str(value).strip()[:200]
+                elif label == 'receipt total':
+                    receipt = _money(value)
+                elif label == 'claimed' and day:
+                    claimed, cur = _money(value)
+                    amount = receipt[0] if receipt[0] and receipt[1] == cur else claimed  # the bill is what the card paid
+                    if amount:
+                        out.append({'row': n, 'day': day, 'description': desc, 'amount_minor': abs(amount),
+                                    'claimed_minor': abs(claimed or amount), 'currency': cur})
+    return out
+
+
+def _claim_rows(grids):
+    """Rows under the first header of each sheet that names a date and an amount; header words are matched loosely.
+    Without such a header, the per-day card layout."""
+    import statement
+    found = []
     for grid in grids:
         for i, row in enumerate(grid[:20]):
             cols = {}
@@ -856,13 +899,17 @@ def _claim_rows(grids):
             for n, r in enumerate(grid[i + 1:], i + 2):
                 cell = lambda k: r[cols[k]] if k in cols and cols[k] < len(r) else None
                 day = statement.day_of(cell('date'))
-                amount, claimed = statement.minor_of(cell('amount')), statement.minor_of(cell('claimed'))
+                (amount, c1), (claimed, c2) = _money(cell('amount')), _money(cell('claimed'))
                 if not day or not (amount or claimed):
                     continue  # totals, notes and blank lines
-                cur = str(cell('currency') or '').strip().upper()[:3]
+                cur = str(cell('currency') or (c1 if amount else c2) or '').strip().upper()[:3]
                 out.append({'row': n, 'day': day, 'description': str(cell('description') or '').strip()[:200], 'amount_minor': abs(amount or claimed),
                             'claimed_minor': abs(claimed) if claimed is not None else None, 'currency': cur if cur.isalpha() and len(cur) == 3 else None})
-            return out
+            found += out  # a header with nothing under it is a summary sheet
+            break
+    found = found or _claim_cards(grids)
+    if found:
+        return found
     raise ApiError(422, 'could not find the date and amount columns in that file')
 
 
@@ -899,7 +946,10 @@ def claims_import(req):
             if t['id'] in used:
                 continue
             days = abs((date.fromisoformat(t['day']) - date.fromisoformat(r['day'])).days)
-            diff = abs(engine.conv(t['amount_minor'], t['currency'], cur, ctx['r']) - r['amount_minor'])
+            try:
+                diff = abs(engine.conv(t['amount_minor'], t['currency'], cur, ctx['r']) - r['amount_minor'])
+            except ValueError:  # a currency we have no rate for: that row stays unmatched
+                continue
             tol = max(100, r['amount_minor'] * (0.01 if t['currency'] == cur else 0.03))  # FX moves a little between card and claim
             if days <= 3 and diff <= tol and (best is None or (days, diff) < best[0]):
                 best = ((days, diff), t)
