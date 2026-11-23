@@ -391,7 +391,10 @@ def home(req, ctx):
     commits = sorted((plan.commitment_json(c, ctx) for c in ctx['commits']), key=lambda c: c['next_due'])
     alerts = [{'level': 'warn', 'text': f"{c['name']} is overdue ({c['next_due']})", 'link': f"/plan/commitments/{c['id']}"}
               for c in commits if c['status'] == 'overdue']
-    alerts += [{'level': 'warn', 'text': f"{r['month']}: {w}", 'link': '/plan/lookahead'} for r in la['months'] for w in r['warnings'] if w.startswith('Short')]
+    short = [(r['month'], w) for r in la['months'] for w in r['warnings'] if w.startswith('Short')]
+    if short:  # one alert, not one per month
+        more = f" (and {len(short) - 1} more month{'s' if len(short) > 2 else ''})" if len(short) > 1 else ''
+        alerts.append({'level': 'warn', 'text': f"{short[0][0]}: {short[0][1]}{more}", 'link': '/plan/lookahead'})
     alerts += [{'level': 'info', 'text': f"Claim {c['name']} pending for {c['age_days']} days", 'link': f"/plan/claims/{c['id']}"}
                for c in plan.claim_rows(ctx) if c['status'] not in ('paid', 'rejected') and c['age_days'] > 30]
     alerts += loan_alerts(ctx)

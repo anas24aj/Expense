@@ -50,7 +50,7 @@ MAX_NAME = 60
 FEE = re.compile(r'\binterest\b(?![- ]?free)|\bfinance charges?\b|\b(?:late(?: payment)?|annual|joining|processing|over-?limit|renewal|'
                  r'cash advance|forex|markup) fees?\b|\bcharges\b|\bgst on charges\b|\bvat on fees?\b|\bservice charges?\b|فوائد|رسوم', re.I)
 CARD_PAY = re.compile(r'\b(?:credit ?card|cc|card) ?(?:bill )?payment\b|\bpayment\b[^.\n]{0,40}\bto (?:your )?credit ?card\b|'
-                      r'\bpayment (?:received|thank)|\btop ?-?up\b|سداد بطاقة', re.I)
+                      r'\bpayment (?:received|thank)|\btop ?-?up\b|سداد بطاقة|\bcredit cards? transactions? t', re.I)  # Al Rajhi: "Debit - Credit Cards Transactions T…" pays the card
 LOAN = re.compile(r'\b(?:emi|loan|instal+ments?)\b|قسط', re.I)
 CK_PURPOSE = {'emi': 'loan_payment', 'support': 'support', 'milestone': 'asset'}
 

@@ -233,7 +233,7 @@ function HomeBody({ h, setup, accounts, homeCur, payday, trips }: { h: Home; set
           <div className="caption" style={{ marginBottom: 8 }}>Free money each month</div>
           <AreaChart data={h.lookahead.months.map(x => ({ month: x.month, value: x.free.minor / 100 }))} />
           {h.lookahead.months.some(x => x.warnings.length) && (
-            <p className="caption" style={{ marginTop: 8 }}><Icon name="info" size={14} /> {h.lookahead.months.filter(x => x.warnings.length).map(x => `${monthLabel(x.month)}: ${x.warnings[0]}`).join(' · ')}</p>
+            <p className="caption" style={{ marginTop: 8 }}><Icon name="info" size={14} /> {(w => `${monthLabel(w[0].month)}: ${w[0].warnings[0]}${w.length > 1 ? ` (and ${w.length - 1} more)` : ''}`)(h.lookahead.months.filter(x => x.warnings.length))}</p>
           )}
         </div>
       </Section>}
