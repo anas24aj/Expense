@@ -1,67 +1,85 @@
-import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
-import type { Claim, Trip, TripDetail, TripStatus } from '../api/types';
+import type { Claim, Money as M, Trip, TripDetail, TripExpense, TripStatus } from '../api/types';
 import { fmt, shortDate, today } from '../lib/format';
 import { Chip, CategoryTile, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Page, PageSkeleton, Section, Segmented, Sheet, Tile, useToast } from '../ui';
 import { ImportClaimSheet } from './People';
 
-const ST: Record<TripStatus, { label: string; color: string; badge: string }> = {
-  claimed: { label: 'Claimed', color: 'var(--green-fill)', badge: 'green' },
-  personal: { label: 'Personal', color: '#8e8e93', badge: '' },
-  missed: { label: 'Missed', color: 'var(--red-fill)', badge: 'red' },
-  unreviewed: { label: 'To sort', color: 'var(--orange-fill)', badge: 'orange' },
+const ST: Record<TripStatus, { label: string; badge: string }> = {
+  claimed: { label: 'Claimed', badge: 'green' },
+  personal: { label: 'Personal', badge: '' },
+  missed: { label: 'Missed claim', badge: 'red' },
+  unreviewed: { label: 'To review', badge: 'orange' },
 };
-const ORDER: TripStatus[] = ['claimed', 'personal', 'missed', 'unreviewed'];
 const range = (t: Trip) => `${shortDate(t.start_on).replace(/,? \d{4}$/, '')} – ${shortDate(t.end_on)}`;
-const nights = (t: Trip) => Math.round((new Date(t.end_on).getTime() - new Date(t.start_on).getTime()) / 864e5);
+const md = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' });
+/** "Nov 8 – 12" or "Oct 30 – Nov 2": the list groups by year. */
+const shortRange = (t: Trip) => t.start_on.slice(0, 7) === t.end_on.slice(0, 7) ? `${md(t.start_on)} – ${Number(t.end_on.slice(8))}` : `${md(t.start_on)} – ${md(t.end_on)}`;
+const nights =(t: Trip) => Math.round((new Date(t.end_on).getTime() - new Date(t.start_on).getTime()) / 864e5);
+const sub = (a: M, b: M): M => ({ minor: a.minor - b.minor, currency: a.currency });
 
-/** Donut split by trip status. */
-function StatusRing({ t, size = 120 }: { t: Trip; size?: number }) {
-  const stroke = 12, r = (size - stroke) / 2, c = 2 * Math.PI * r;
-  const total = Math.max(1, t.totals.total.minor);
-  let off = 0;
+/** Spent = claimed + your cost + still to review (missed claims are your cost until claimed). */
+const parts = (t: Trip) => [
+  { k: 'Claimed', v: t.totals.claimed, c: 'var(--green-fill)' },
+  { k: 'Your cost', v: sub(t.totals.burden, t.totals.unreviewed), c: 'var(--tint-fill)' },
+  { k: 'To review', v: t.totals.unreviewed, c: 'var(--orange-fill)' },
+];
+function SplitBar({ t, thin }: { t: Trip; thin?: boolean }) {
   return (
-    <span className="ring-wrap" style={{ width: size, height: size }} role="img" aria-label={ORDER.map(s => `${ST[s].label} ${fmt(t.totals[s])}`).join(', ')}>
-      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--fill)" strokeWidth={stroke} />
-        {ORDER.map(s => {
-          const len = (t.totals[s].minor / total) * c;
-          const el = len > 0 && <circle key={s} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={ST[s].color} strokeWidth={stroke} strokeDasharray={`${Math.max(0, len - 3)} ${c}`} strokeDashoffset={-off} strokeLinecap="butt" />;
-          off += len;
-          return el;
-        })}
-      </svg>
-      <span className="ring-label" style={{ textAlign: 'center', lineHeight: 1.15 }}>
-        <span style={{ fontSize: 18 }}>{Math.round((t.totals.claimed.minor / total) * 100)}%</span><br /><span className="footnote">claimed</span>
-      </span>
-    </span>
+    <div className={`stackbar${thin ? ' thin' : ''}`} role="img" aria-label={parts(t).map(p => `${p.k} ${fmt(p.v)}`).join(', ')}>
+      {parts(t).map(p => p.v.minor > 0 && <span key={p.k} style={{ flexGrow: p.v.minor, background: p.c }} />)}
+    </div>
+  );
+}
+
+function TripRow({ t }: { t: Trip }) {
+  const now = t.start_on <= today() && today() <= t.end_on;
+  const { unreviewed, missed } = t.totals;
+  return (
+    <Link to={`/more/trips/${t.id}`} className="list-row" style={{ flexWrap: 'wrap', rowGap: 10 }}>
+      <Tile icon="plane" color={t.kind === 'business' ? '#32ade6' : '#ff9f0a'} />
+      <div className="body"><div className="title">{t.name}</div><div className="sub">{t.city} · {shortRange(t)}</div></div>
+      <div className="end">
+        <span className="amt"><Money m={t.totals.spent} /></span>
+        {now ? <span className="badge blue">Now</span> : missed.minor ? <span className="badge red">Missed claim</span>
+          : unreviewed.minor ? <span className="badge orange">To review</span> : t.count ? <span className="badge green">Done</span> : null}
+      </div>
+      {t.count > 0 && (
+        <div style={{ flexBasis: '100%', paddingLeft: 50 }} className="stack-sm">
+          <SplitBar t={t} thin />
+          <span className="caption">{parts(t).filter(p => p.v.minor > 0).slice(0, 2).map((p, i) => <span key={p.k}>{i ? ' · ' : ''}{p.k} <Money m={p.v} /></span>)}</span>
+        </div>
+      )}
+    </Link>
   );
 }
 
 export function TripsPage() {
   const q = useApi<{ items: Trip[] }>('/trips');
   const [adding, setAdding] = useState(false);
+  const items = [...(q.data?.items || [])].sort((a, b) => b.start_on.localeCompare(a.start_on));
+  const years = [...new Set(items.map(t => t.start_on.slice(0, 4)))];
   return (
     <Page title="Trips" back="/more" subtitle="Everything you spend between the dates lands in the trip. Claim what’s work."
       trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="New trip"><Icon name="plus" /></button>}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !q.data!.items.length
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !items.length
         ? <EmptyState icon="plane" title="No trips yet" text="Add one before you fly — expenses file themselves." action={<button className="btn small" onClick={() => setAdding(true)}>New trip</button>} />
-        : (
-          <List>{q.data!.items.map(t => {
-            const now = t.start_on <= today() && today() <= t.end_on;
-            return (
-              <ListRow key={t.id} to={`/more/trips/${t.id}`} icon={<Tile icon="plane" color={t.kind === 'business' ? '#32ade6' : '#ff9f0a'} />}
-                title={t.name} sub={`${t.city} · ${range(t)}`}
-                end={<Money m={t.totals.total} />}
-                endSub={now ? <span className="badge blue">Now</span> : t.totals.unreviewed.minor || t.totals.missed.minor ? <span className="badge orange">{fmt({ ...t.totals.missed, minor: t.totals.missed.minor + t.totals.unreviewed.minor })} open</span> : <span className="badge green">Done</span>} />
-            );
-          })}</List>
-        )}
+        : years.map(y => (
+          <Section key={y} title={y}>
+            <List>{items.filter(t => t.start_on.startsWith(y)).map(t => <TripRow key={t.id} t={t} />)}</List>
+          </Section>
+        ))}
       <NewTripSheet open={adding} onClose={() => setAdding(false)} />
     </Page>
   );
 }
+
+const dayHead = (t: Trip, day: string) => {
+  const n = Math.round((new Date(day).getTime() - new Date(t.start_on).getTime()) / 864e5) + 1;
+  const label = new Date(day + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'short' });
+  return n >= 1 && day <= t.end_on ? `Day ${n} · ${label}` : label;
+};
 
 export function TripPage() {
   const { id } = useParams();
@@ -74,29 +92,34 @@ export function TripPage() {
   const toast = useToast();
   const nav = useNavigate();
   const t = q.data;
+  const days = useMemo(() => {
+    const g = new Map<string, TripExpense[]>();
+    for (const x of [...(t?.expenses || [])].sort((a, b) => a.day.localeCompare(b.day))) g.set(x.day, [...(g.get(x.day) || []), x]);
+    return [...g.entries()];
+  }, [t]);
   const setStatus = async (ids: string[], status: TripStatus) => {
     await tag.mutateAsync({ txn_ids: ids, status });
     toast(ids.length > 1 ? `${ids.length} marked ${ST[status].label.toLowerCase()}` : `Marked ${ST[status].label.toLowerCase()}`);
     setSel([]); setSelecting(false);
   };
   const open = t ? t.totals.missed.minor + t.totals.unreviewed.minor : 0;
+  const spent = t ? fmt(t.totals.spent) : '';
+  const code = t?.totals.spent.currency || '';
   return (
     <Page title={t?.name || 'Trip'} back="/more/trips"
       trail={t && <button className="icon-btn" aria-label={selecting ? 'Done selecting' : 'Select expenses'} onClick={() => { setSelecting(!selecting); setSel([]); }}><Icon name={selecting ? 'close' : 'check'} /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : t && (
         <div className="grid-desktop stack">
-          <section className="glass hero span-2">
-            <div className="row-flex" style={{ gap: 18, alignItems: 'center' }}>
-              <StatusRing t={t} />
-              <div className="stack-sm" style={{ flex: 1, minWidth: 0 }}>
-                <span className="caption"><Icon name="globe" size={13} /> {t.city} · {range(t)} · {nights(t)} nights</span>
-                <span style={{ font: '700 30px var(--font-display)', letterSpacing: '-.03em' }} className="num">{fmt(t.totals.total)}</span>
-                <span className="caption">{t.count} expenses{t.totals_base && t.currency !== t.totals_base.total.currency ? <> · ≈ <Money m={t.totals_base.total} /></> : null}</span>
-              </div>
+          <section className="glass hero span-2" aria-label="Trip totals">
+            <span className="caption"><Icon name="globe" size={13} /> {t.city} · {range(t)} · {nights(t)} night{nights(t) === 1 ? '' : 's'}</span>
+            <div className="hero-label" style={{ marginTop: 12 }}>Spent</div>
+            <div className="hero-amount">{spent.startsWith(code + ' ') ? <><span className="cur">{code}</span>{spent.slice(code.length + 1)}</> : spent}</div>
+            <p className="caption">{t.count} expense{t.count === 1 ? '' : 's'}{t.totals_base && t.currency !== t.totals_base.spent.currency ? <> · ≈ <Money m={t.totals_base.spent} /></> : null}</p>
+            <SplitBar t={t} />
+            <div className="legend three">
+              {parts(t).map(p => <div key={p.k} className="stat"><span className="k"><i className="dot" style={{ background: p.c }} />{p.k}</span><span className="v"><Money m={p.v} /></span></div>)}
             </div>
-            <div className="legend" style={{ marginTop: 16 }}>
-              {ORDER.map(s => <div key={s} className="stat"><span className="k"><i className="dot" style={{ background: ST[s].color }} />{ST[s].label}</span><span className="v" style={{ fontSize: 17 }}><Money m={t.totals[s]} /></span></div>)}
-            </div>
+            {t.totals.missed.minor > 0 && <p className="caption" style={{ marginTop: 12 }}><span className="neg">{fmt(t.totals.missed)} not claimed yet</span> — counted in your cost until you claim it.</p>}
             {t.kind === 'business' && (
               <div className="grid-2" style={{ marginTop: 16 }}>
                 <button className="btn" style={{ fontSize: 15, padding: '0 12px', whiteSpace: 'nowrap' }} disabled={!open} onClick={() => setClaiming(true)}><Icon name="briefcase" size={18} />Claim {open ? fmt({ ...t.totals.missed, minor: open }) : ''}</button>
@@ -105,31 +128,50 @@ export function TripPage() {
             )}
           </section>
 
-          <Section title="Expenses" action={<button onClick={() => { setSelecting(!selecting); setSel([]); }}>{selecting ? 'Cancel' : 'Select'}</button>}>
-            <List>
-              {t.expenses.map(x => {
-                const on = sel.includes(x.id);
-                return (
-                  <div key={x.id} className="list-row" style={{ flexWrap: 'wrap', rowGap: 8 }}>
-                    {selecting
-                      ? <button type="button" className="icon-tile" aria-pressed={on} aria-label={`Select ${x.merchant}`} onClick={() => setSel(on ? sel.filter(i => i !== x.id) : [...sel, x.id])}
-                          style={{ background: on ? 'var(--tint-fill)' : 'var(--fill)', border: 0, borderRadius: '50%', color: '#fff' }}>{on && <Icon name="check" />}</button>
-                      : <CategoryTile category={x.category} merchant={x.merchant} />}
-                    <div className="body"><div className="title">{x.merchant}</div><div className="sub">{shortDate(x.day)} · {x.account_name}</div></div>
-                    <div className="end"><span className="amt"><Money m={x.amount} /></span><span className={`badge ${ST[x.trip_status].badge}`}>{ST[x.trip_status].label}</span></div>
-                    {!selecting && x.trip_status !== 'claimed' && (
-                      <div className="chips" style={{ flexBasis: '100%', paddingLeft: 50, paddingBottom: 0 }} role="group" aria-label={`Status of ${x.merchant}`}>
-                        {(['personal', 'missed', 'claimed'] as TripStatus[]).map(s => (
-                          <button key={s} type="button" className="chip" aria-pressed={x.trip_status === s} onClick={() => setStatus([x.id], s)} style={{ minHeight: 32, fontSize: 13 }}>
-                            {s === 'missed' ? 'Claim it' : s === 'claimed' ? 'Claimed' : 'Personal'}
-                          </button>
-                        ))}
+          {t.by_category.length > 0 && (
+            <Section title="By category">
+              <List>{t.by_category.map(c => (
+                <ListRow key={c.category} icon={<CategoryTile category={c.category} />} title={c.category}
+                  sub={c.claimed.minor ? <>Claimed <Money m={c.claimed} /></> : 'Not claimed'}
+                  end={<Money m={c.spent} />} endSub={c.claimed.minor > 0 && c.burden.minor > 0 && <>you pay <Money m={c.burden} /></>} />
+              ))}</List>
+            </Section>
+          )}
+
+          <Section title="Expenses" action={t.expenses.length > 0 && <button onClick={() => { setSelecting(!selecting); setSel([]); }}>{selecting ? 'Cancel' : 'Select'}</button>}>
+            {!days.length && <EmptyState icon="receipt" title="Nothing spent yet" text="Card payments between the trip dates show up here." />}
+            {days.map(([day, xs]) => {
+              const d = t.by_day.find(b => b.day === day);
+              return (
+                <section key={day} aria-label={dayHead(t, day)}>
+                  <h3 className="day-head sticky"><span>{dayHead(t, day)}</span>{d && <span className="num">{fmt(d.spent)}{d.burden.minor > 0 && <span className="day-you"> · you {fmt(d.burden)}</span>}</span>}</h3>
+                  <List>{xs.map(x => {
+                    const on = sel.includes(x.id);
+                    const partial = x.trip_status === 'claimed' && x.burden.minor > 0;
+                    return (
+                      <div key={x.id} className="list-row" style={{ flexWrap: 'wrap', rowGap: 8 }}>
+                        {selecting
+                          ? <button type="button" className="icon-tile" aria-pressed={on} aria-label={`Select ${x.merchant}`} onClick={() => setSel(on ? sel.filter(i => i !== x.id) : [...sel, x.id])}
+                              style={{ background: on ? 'var(--tint-fill)' : 'var(--fill)', border: 0, borderRadius: '50%', color: '#fff' }}>{on && <Icon name="check" />}</button>
+                          : <CategoryTile category={x.category} merchant={x.merchant} />}
+                        <div className="body"><div className="title">{x.merchant}</div><div className="sub">{[x.category, x.account_name].filter(Boolean).join(' · ')}</div></div>
+                        <div className="end"><span className="amt"><Money m={x.amount} /></span><span className={`badge ${ST[x.trip_status].badge}`}>{ST[x.trip_status].label}</span></div>
+                        {partial && <div className="caption" style={{ flexBasis: '100%', paddingLeft: 50 }}>Claimed <b className="pos"><Money m={x.claimed} /></b> · You pay <b><Money m={x.burden} /></b></div>}
+                        {!selecting && x.trip_status !== 'claimed' && (
+                          <div className="chips" style={{ flexBasis: '100%', paddingLeft: 50, paddingBottom: 0 }} role="group" aria-label={`Status of ${x.merchant}`}>
+                            {(['personal', 'missed', 'claimed'] as TripStatus[]).map(s => (
+                              <button key={s} type="button" className="chip" aria-pressed={x.trip_status === s} onClick={() => setStatus([x.id], s)} style={{ minHeight: 32, fontSize: 13 }}>
+                                {s === 'missed' ? 'Claim it' : s === 'claimed' ? 'Claimed' : 'Personal'}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </List>
+                    );
+                  })}</List>
+                </section>
+              );
+            })}
           </Section>
 
           {t.claims.length > 0 && (

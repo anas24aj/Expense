@@ -95,30 +95,71 @@ const txns: Txn[] = [
   T(-33, 'Hyper Panda', SAR(301), 'a1', 'Groceries'),
   T(-36, 'Nando’s', SAR(142), 'a2', 'Dining'),
 ];
-// Trips: a finished Dubai business trip and the Jeddah visit happening now (so Home shows "Current trip").
+// Trips: the Doha project trip (QAR; the hotel and a client dinner only partly claimed), a finished Dubai workshop,
+// the Jeddah visit happening now (so Home shows "Current trip") and last year's family trip home.
 const AED = (v: number): Money => ({ minor: Math.round(v * 100), currency: 'AED' });
+const QAR = (v: number): Money => ({ minor: Math.round(v * 100), currency: 'QAR' });
+const SAR_PER: Record<string, number> = { SAR: 1, QAR: 3.75 / 3.64, AED: 3.75 / 3.6725, INR: 1 / 24.9 };
+const conv = (minor: number, from: string, to: string) => minor * SAR_PER[from] / SAR_PER[to];
 const tripStatus: Record<string, TripStatus> = {};
-const dubai: [string, string, number, string, TripStatus][] = [
-  ['2026-10-12', 'Emirates — RUH to DXB', 1450, 'Travel', 'claimed'], ['2026-10-12', 'Careem DXB airport', 96, 'Transport', 'claimed'],
-  ['2026-10-13', 'Address Downtown — 4 nights', 3820, 'Travel', 'claimed'], ['2026-10-13', 'Client lunch — Zuma', 640, 'Dining', 'claimed'],
-  ['2026-10-14', 'RTA Metro Nol top-up', 50, 'Transport', 'missed'], ['2026-10-14', 'Dubai Mall — Bath & Body Works', 285, 'Shopping', 'personal'],
-  ['2026-10-15', 'Careem — DIFC office', 72, 'Transport', 'missed'], ['2026-10-15', 'Team dinner — Ravi Restaurant', 210, 'Dining', 'claimed'],
-  ['2026-10-16', 'Dubai Duty Free', 168, 'Shopping', 'unreviewed'],
-];
-for (const [d, merchant, v, cat, st] of dubai) {
-  const t = T(0, merchant, AED(v), 'a2', cat, st === 'claimed' ? 'claim' : 'spend', { day: d, occurred_at: d + 'T12:00:00Z', claim_id: st === 'claimed' ? 'cl3' : null });
-  txns.push(t); tripStatus[t.id] = st;
-}
-const trips: Trip[] = [
-  { id: 't1', name: 'Dubai — client workshop', city: 'Dubai', country: 'AE', start_on: '2026-10-12', end_on: '2026-10-16', kind: 'business', claim_ids: ['cl3'], currency: 'AED', totals: null!, count: 0 },
-  { id: 't2', name: 'Jeddah site visit', city: 'Jeddah', country: 'SA', start_on: day(-4), end_on: day(1), kind: 'business', claim_ids: ['cl1'], currency: 'SAR', totals: null!, count: 0 },
-];
-const tripTxns = (t: Trip) => txns.filter(x => x.day >= t.start_on && x.day <= t.end_on && (t.id !== 't2' || (x.account_id === 'a2' && !x.commitment_id)));
+const claimPart: Record<string, number> = {}; // txn id -> claimed minor, when the claim covers only part of the bill
+const tripOwn: Record<string, string[]> = {};
+type TripRow = [string, string, Money, string, TripStatus, number?];
+const addTrip = (trip: string, claim: string, account: string, rows: TripRow[]) => {
+  for (const [d, merchant, amt, cat, st, part] of rows) {
+    const t = T(0, merchant, amt, account, cat, st === 'claimed' ? 'claim' : 'spend', { day: d, occurred_at: d + 'T12:00:00Z', claim_id: st === 'claimed' ? claim : null });
+    txns.push(t); tripStatus[t.id] = st; (tripOwn[trip] ||= []).push(t.id);
+    if (part !== undefined) claimPart[t.id] = Math.round(part * 100);
+  }
+};
+addTrip('t3', 'cl4', 'a2', [
+  ['2026-11-08', 'Qatar Airways — RUH to DOH', SAR(1265), 'Travel', 'claimed'], ['2026-11-08', 'Karwa taxi — airport', QAR(68), 'Transport', 'claimed'],
+  ['2026-11-08', 'Marriott Marquis West Bay — 4 nights', QAR(2960), 'Travel', 'claimed', 2600],
+  ['2026-11-09', 'Starbucks — Lusail', QAR(31), 'Dining', 'personal'], ['2026-11-09', 'Uber — Lusail site', QAR(42), 'Transport', 'claimed'],
+  ['2026-11-10', 'Client dinner — Nobu Doha', QAR(412), 'Dining', 'claimed', 380], ['2026-11-10', 'Ooredoo — travel SIM', QAR(100), 'Telecom & Internet', 'missed'],
+  ['2026-11-11', 'Villaggio — Zara', QAR(389), 'Shopping', 'personal'], ['2026-11-11', 'Talabat', QAR(58), 'Dining', 'unreviewed'],
+  ['2026-11-12', 'Uber — Hamad airport', QAR(47), 'Transport', 'claimed'], ['2026-11-12', 'Qatar Duty Free', QAR(145), 'Shopping', 'unreviewed'],
+]);
+addTrip('t1', 'cl3', 'a2', [
+  ['2026-10-12', 'Emirates — RUH to DXB', AED(1450), 'Travel', 'claimed'], ['2026-10-12', 'Careem DXB airport', AED(96), 'Transport', 'claimed'],
+  ['2026-10-13', 'Address Downtown — 4 nights', AED(3820), 'Travel', 'claimed', 3400], ['2026-10-13', 'Client lunch — Zuma', AED(640), 'Dining', 'claimed'],
+  ['2026-10-14', 'RTA Metro Nol top-up', AED(50), 'Transport', 'missed'], ['2026-10-14', 'Dubai Mall — Bath & Body Works', AED(285), 'Shopping', 'personal'],
+  ['2026-10-15', 'Careem — DIFC office', AED(72), 'Transport', 'missed'], ['2026-10-15', 'Team dinner — Ravi Restaurant', AED(210), 'Dining', 'claimed'],
+  ['2026-10-16', 'Dubai Duty Free', AED(168), 'Shopping', 'unreviewed'],
+]);
+addTrip('t4', '', 'a6', [
+  ['2025-08-30', 'Air India Express — DMM to COK', INR(18450), 'Travel', 'personal'], ['2025-09-01', 'Lulu Mall Kochi', INR(6820), 'Shopping', 'personal'],
+  ['2025-09-03', 'Uber', INR(640), 'Transport', 'personal'], ['2025-09-05', 'Zomato', INR(1180), 'Dining', 'personal'],
+]);
+const trips: Trip[] = ([
+  { id: 't3', name: 'Doha — Lusail project', city: 'Doha', country: 'QA', start_on: '2026-11-08', end_on: '2026-11-12', kind: 'business', claim_ids: ['cl4'], currency: 'QAR' },
+  { id: 't1', name: 'Dubai — client workshop', city: 'Dubai', country: 'AE', start_on: '2026-10-12', end_on: '2026-10-16', kind: 'business', claim_ids: ['cl3'], currency: 'AED' },
+  { id: 't2', name: 'Jeddah site visit', city: 'Jeddah', country: 'SA', start_on: day(-4), end_on: day(1), kind: 'business', claim_ids: ['cl1'], currency: 'SAR' },
+  { id: 't4', name: 'Kochi — Onam at home', city: 'Kochi', country: 'IN', start_on: '2025-08-30', end_on: '2025-09-07', kind: 'personal', claim_ids: [], currency: 'INR' },
+] as Omit<Trip, 'totals' | 'count' | 'by_category' | 'by_day'>[]).map(t => ({ ...t, totals: null!, count: 0, by_category: [], by_day: [] }));
+const tripTxns = (t: Trip) => txns.filter(x => tripOwn[t.id] ? tripOwn[t.id].includes(x.id)
+  : x.day >= t.start_on && x.day <= t.end_on && (t.id !== 't2' || (x.account_id === 'a2' && !x.commitment_id)));
 const statusOf = (x: Txn): TripStatus => tripStatus[x.id] || (x.claim_id ? 'claimed' : 'unreviewed');
+const claimedOf = (x: Txn) => statusOf(x) === 'claimed' ? claimPart[x.id] ?? x.amount.minor : 0;
 const tripOut = (t: Trip): Trip => {
-  const xs = tripTxns(t), cur = t.currency;
-  const sum = (s?: TripStatus) => ({ minor: xs.filter(x => !s || statusOf(x) === s).reduce((a, x) => a + x.amount.minor, 0), currency: cur });
-  return { ...t, count: xs.length, totals: { total: sum(), claimed: sum('claimed'), personal: sum('personal'), missed: sum('missed'), unreviewed: sum('unreviewed') } };
+  const xs = tripTxns(t), cur = t.currency, m = (v: number): Money => ({ minor: Math.round(v), currency: cur });
+  const tot = { total: 0, spent: 0, claimed: 0, burden: 0, personal: 0, missed: 0, unreviewed: 0 };
+  const cats = new Map<string, number[]>(), days = new Map<string, number[]>();
+  for (const x of xs) {
+    const st = statusOf(x), a = conv(x.amount.minor, x.amount.currency, cur), p = conv(claimedOf(x), x.amount.currency, cur);
+    tot.total += a; tot.spent += a; tot.claimed += p; tot.burden += a - p;
+    if (st !== 'claimed') tot[st] += a;
+    for (const [g, k] of [[cats, x.category || 'Uncategorized'], [days, x.day]] as const) { const v = g.get(k) || [0, 0, 0]; g.set(k, [v[0] + a, v[1] + p, v[2] + a - p]); }
+  }
+  const trio = (v: number[]) => ({ spent: m(v[0]), claimed: m(v[1]), burden: m(v[2]) });
+  return { ...t, count: xs.length, totals: Object.fromEntries(Object.entries(tot).map(([k, v]) => [k, m(v)])) as Trip['totals'],
+    by_category: [...cats].sort((a, b) => b[1][0] - a[1][0]).map(([category, v]) => ({ category, ...trio(v) })),
+    by_day: [...days].sort((a, b) => a[0].localeCompare(b[0])).map(([day, v]) => ({ day, ...trio(v) })) };
+};
+const tripExpense = (t: Trip, x: Txn) => {
+  const c = claimedOf(x), cur = t.currency, m = (v: number): Money => ({ minor: Math.round(v), currency: cur });
+  return { ...x, trip_status: statusOf(x), claimed: { minor: c, currency: x.amount.currency }, burden: { minor: x.amount.minor - c, currency: x.amount.currency },
+    claimed_trip: m(conv(c, x.amount.currency, cur)), burden_trip: m(conv(x.amount.minor - c, x.amount.currency, cur)) };
 };
 
 const review = (): ReviewTxn[] => txns.filter(t => t.confidence < 0.7).map(t => ({
@@ -212,8 +253,10 @@ assets[0].next_milestone = assets[0].milestones.find(m => !m.paid) || null;
 const claims: Claim[] = [
   { id: 'cl1', name: 'Jeddah site visit', payer: 'Company', status: 'submitted', member_id: 'm1', items: txns.filter(t => t.claim_id === 'cl1'),
     expected: SAR(2912), received: SAR(0), age_days: 3, submitted_on: day(-2) },
+  { id: 'cl4', name: 'Doha — Lusail project', payer: 'Company', status: 'submitted', member_id: 'm1', items: txns.filter(t => t.claim_id === 'cl4'),
+    expected: QAR(4364.89), received: QAR(0), age_days: 9, submitted_on: '2026-11-14' },
   { id: 'cl3', name: 'Dubai workshop — Oct', payer: 'Company', status: 'paid', member_id: 'm1', items: txns.filter(t => t.claim_id === 'cl3'),
-    expected: AED(6216), received: AED(6216), age_days: 36, submitted_on: '2026-10-18' },
+    expected: AED(5796), received: AED(5796), age_days: 36, submitted_on: '2026-10-18' },
   { id: 'cl2', name: 'Client dinner — Oct', payer: 'Company', status: 'paid', member_id: 'm1', items: [], expected: SAR(640), received: SAR(640), age_days: 34, submitted_on: day(-34) },
 ];
 
@@ -349,7 +392,7 @@ on('POST', '/claims/{id}/items', (m, b) => { const c = claims.find(x => x.id ===
 on('PATCH', '/claims/{id}', (m, b) => Object.assign(claims.find(x => x.id === m[1])!, b));
 on('GET', '/trips', () => ({ items: trips.map(tripOut).sort((a, b) => b.start_on.localeCompare(a.start_on)) }));
 on('GET', '/trips/{id}', m => { const t = trips.find(x => x.id === m[1]); if (!t) throw new Err(404, 'not found');
-  return { ...tripOut(t), expenses: tripTxns(t).map(x => ({ ...x, trip_status: statusOf(x) })), claims: claims.filter(c => t.claim_ids.includes(c.id)) }; });
+  return { ...tripOut(t), expenses: tripTxns(t).sort((a, b) => a.day.localeCompare(b.day)).map(x => tripExpense(t, x)), claims: claims.filter(c => t.claim_ids.includes(c.id)) }; });
 on('POST', '/trips', (_m, b) => { const t: Trip = { id: id(), claim_ids: [], totals: null!, count: 0, kind: 'business', currency: b.country === 'IN' ? 'INR' : b.country === 'AE' ? 'AED' : 'SAR', ...b }; trips.push(t); return tripOut(t); });
 on('PATCH', '/trips/{id}', (m, b) => tripOut(Object.assign(trips.find(x => x.id === m[1])!, b)));
 on('DELETE', '/trips/{id}', m => { trips.splice(trips.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });

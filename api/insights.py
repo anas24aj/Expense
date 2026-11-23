@@ -68,7 +68,16 @@ def load(req):
     me = (getattr(req, 'member', None) or {}).get('id')
     rows = [t for t in hh.run(TXN_SQL) if not (t['visibility'] == 'private' and t['owner_member_id'] != me)]
     by_id = {t['id']: t for t in rows}
-    claimed = {c['txn_id']: c['claim_id'] for c in hh.run('SELECT claim_id, txn_id FROM claim_items WHERE household_id = :hid')}
+    items = hh.run('SELECT claim_id, txn_id, claimed_minor, claimed_currency FROM claim_items WHERE household_id = :hid')
+    claimed = {c['txn_id']: c['claim_id'] for c in items}
+    claim_part = {}  # txn id -> the part a claim covers (in the txn's currency) when it is not the whole amount
+    for c in items:
+        t = by_id.get(c['txn_id'])
+        if t and c['claimed_minor'] is not None:
+            try:
+                claim_part[t['id']] = min(t['amount_minor'], round(engine.conv(c['claimed_minor'], c['claimed_currency'] or t['currency'], t['currency'], r)))
+            except ValueError:  # no rate for that currency: treat it as the whole amount
+                pass
     theirs = defaultdict(int)
     for s in hh.run('SELECT txn_id, member_id, share_minor FROM splits WHERE household_id = :hid'):
         t = by_id.get(s['txn_id'])
@@ -127,9 +136,12 @@ def load(req):
     eng_txns = []  # an EMI's interest part is spending (a fee); the rest pays the loan down
     for e in txns:
         i = interest.get(e['id'], 0)
+        own = e['amount_minor'] - claim_part[e['id']] if e['purpose'] == 'claim' and e['id'] in claim_part else 0
         if i and e['purpose'] == 'loan_payment':
             eng_txns += [{**e, 'id': e['id'] + ':interest', 'amount_minor': i, 'purpose': 'fee', 'category': 'Fees & interest'},
                          {**e, 'amount_minor': e['amount_minor'] - i}]
+        elif own:  # the part of a bill the claim doesn't cover is your spending
+            eng_txns += [{**e, 'id': e['id'] + ':own', 'amount_minor': own, 'purpose': 'spend'}, {**e, 'amount_minor': e['amount_minor'] - own}]
         else:
             eng_txns.append(e)
 
@@ -172,7 +184,7 @@ def load(req):
     return {'hh': hh, 'cur': cur, 'rate': rate, 'r': r, 'today': today, 'house': house, 'rows': rows, 'by_id': by_id, 'txns': eng_txns,
             'raw_txns': txns, 'status_txns': status_txns, 'liabs': liabs, 'commits': eng_commits, 'status': status, 'shares': shares,
             'payments': pays, 'funds': funds, 'loans': loans, 'assets': assets, 'costs': costs, 'asset_sharers': sharers,
-            'settings': s, 'eng_settings': eng_settings, 'claimed': claimed,
+            'settings': s, 'eng_settings': eng_settings, 'claimed': claimed, 'claim_part': claim_part,
             'trips': hh.run('SELECT * FROM trips WHERE household_id = :hid ORDER BY start_on DESC, id'), 'trip_tags': trip_tags,
             'claim_table': hh.run('SELECT * FROM claims WHERE household_id = :hid ORDER BY created_at DESC, id'),
             'milestones': hh.run('SELECT * FROM asset_milestones WHERE household_id = :hid ORDER BY due_on, id'),

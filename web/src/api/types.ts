@@ -80,14 +80,18 @@ export interface Home { month: MonthInsight; next_dues: Commitment[]; lookahead:
 export interface Statement { id: string; account_id: string; file_name: string; period_from: string; period_to: string; rows: number; imported_at: string }
 export interface Items<T> { items: T[] }
 
-// Trips (api-v3.md "Trips"). totals are in the trip's currency; the contract also mentions base — not modelled yet.
+// Trips (api-v3.md "Trips"). totals/by_* are in the trip's currency, totals_base in the base currency.
+// claimed = what claims cover; burden = what you pay (spent − claimed): personal, missed, unreviewed and unclaimed parts.
 export type TripStatus = 'claimed' | 'personal' | 'missed' | 'unreviewed';
+export type TripSplit = { spent: Money; claimed: Money; burden: Money };
 export interface Trip {
   id: string; name: string; city: string; country: string; start_on: string; end_on: string; kind: 'business' | 'personal'; claim_ids: string[];
   currency: string; totals: TripTotals; totals_base?: TripTotals; count: number;
+  by_category: (TripSplit & { category: string })[]; by_day: (TripSplit & { day: string })[];
 }
-export type TripTotals = { total: Money; claimed: Money; personal: Money; missed: Money; unreviewed: Money };
-export interface TripDetail extends Trip { expenses: (Txn & { trip_status: TripStatus })[]; claims: Claim[] }
+export type TripTotals = TripSplit & { total: Money; personal: Money; missed: Money; unreviewed: Money };
+export type TripExpense = Txn & { trip_status: TripStatus; claimed: Money; burden: Money; claimed_trip: Money; burden_trip: Money };
+export interface TripDetail extends Trip { expenses: TripExpense[]; claims: Claim[] }
 export interface FlowNode { id: string; name: string; kind: 'inflow' | 'account' | 'spending' | 'outflow' }
 export interface Flows { from: string; to: string; currency: string; nodes: FlowNode[]; links: { source: string; target: string; amount: Money }[] }
 export interface Coverage {

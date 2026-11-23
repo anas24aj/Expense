@@ -598,7 +598,7 @@ def claim_rows(ctx):
     for c in ctx['claim_table']:
         its = sorted(items[c['id']], key=lambda t: t['day'])
         cur = its[0]['currency'] if its else ctx['cur']
-        expected = sum(engine.conv(t['amount_minor'], t['currency'], cur, ctx['r']) for t in its)
+        expected = sum(engine.conv(ctx['claim_part'].get(t['id'], t['amount_minor']), t['currency'], cur, ctx['r']) for t in its)
         got = [t for t in ctx['raw_txns'] if t['claim_id'] == c['id'] and t['direction'] == 'credit']
         received = sum(engine.conv(t['amount_minor'], t['currency'], cur, ctx['r']) for t in got)
         status = c['status'] if not received else 'paid' if received >= expected - 1 else 'partly'
@@ -626,13 +626,16 @@ def _one_claim(req, id):
     return c
 
 
-def _add_items(req, cid, ids):
+def _add_items(req, cid, ids, parts=None):
+    """`parts`: txn id -> claimed Money when the claim covers only part of it (the imported sheet's claimed column)."""
     if not isinstance(ids, list):
         raise ApiError(400, 'txn_ids must be a list')
     for tid in ids:
         _txn(req.hh, tid)
+        part = (parts or {}).get(tid) or {}
         if not req.hh.one('SELECT txn_id FROM claim_items WHERE txn_id = :t AND household_id = :hid', t=tid):
-            req.db.run('INSERT INTO claim_items (claim_id, household_id, txn_id) VALUES (:c, :h, :t)', c=cid, h=req.hh.hid, t=tid)
+            req.db.run('INSERT INTO claim_items (claim_id, household_id, txn_id, claimed_minor, claimed_currency) VALUES (:c, :h, :t, :m, :cur)',
+                       c=cid, h=req.hh.hid, t=tid, m=part.get('minor'), cur=part.get('currency'))
         set_meta(req.hh, tid, purpose='claim', claim_id=cid, set_by='user', confidence=1.0)
 
 
@@ -660,7 +663,7 @@ def claim_add(req):
         cols['submitted_on'] = insights.today_in(None)
     with req.db.tx():
         row = req.hh.insert('claims', created_at=now(), member_id=cols.pop('member_id', None) or (req.member or {}).get('id'), **cols)
-        _add_items(req, row['id'], b.get('txn_ids') or [])
+        _add_items(req, row['id'], b.get('txn_ids') or [], getattr(req, 'claim_parts', None))
     return 201, _one_claim(req, row['id'])
 
 
@@ -739,21 +742,41 @@ def trip_expenses(trip, ctx):
 
 
 def trip_json(trip, ctx, full=False):
+    """Totals: total = spent; claimed = what the claims cover; burden = the rest (personal, missed, unreviewed and the
+    unclaimed part of claimed bills); personal/missed/unreviewed = those expenses' amounts. Full adds per-expense splits."""
     cur, base = trip_currency(trip) or ctx['cur'], ctx['cur']
-    exp = trip_expenses(trip, ctx)
+    exp = sorted(trip_expenses(trip, ctx), key=lambda x: (x[0]['day'], x[0]['id']))
     sums, sums_base = defaultdict(float), defaultdict(float)
+    groups = {'category': defaultdict(lambda: defaultdict(float)), 'day': defaultdict(lambda: defaultdict(float))}
+    splits = []
     for t, st in exp:
+        amt = t['amount_minor']
+        part = ctx['claim_part'].get(t['id'], amt) if st == 'claimed' else 0
         for d, c in ((sums, cur), (sums_base, base)):
-            v = engine.conv(t['amount_minor'], t['currency'], c, ctx['r'])
-            d[st] += v
-            d['total'] += v
-    keys = ('total', 'claimed', 'personal', 'missed', 'unreviewed')
+            a, p = (engine.conv(x, t['currency'], c, ctx['r']) for x in (amt, part))
+            d['total'] += a
+            d['spent'] += a
+            d['burden'] += a - p
+            d[st] += p if st == 'claimed' else a
+            if d is sums:
+                splits.append((part, a, p))
+                for g in (groups['category'][t['category']], groups['day'][t['day']]):
+                    g['spent'] += a
+                    g['claimed'] += p
+                    g['burden'] += a - p
+    keys = ('total', 'spent', 'claimed', 'burden', 'personal', 'missed', 'unreviewed')
+    trio = lambda g: {k: M(g[k], cur) for k in ('spent', 'claimed', 'burden')}
     claim_ids = sorted({ctx['claimed'][t['id']] for t, _ in exp if t['id'] in ctx['claimed']})
     out = {'id': trip['id'], 'name': trip['name'], 'city': trip['city'], 'country': trip['country'], 'start_on': trip['start_on'],
            'end_on': trip['end_on'], 'kind': trip['kind'], 'currency': cur, 'claim_ids': claim_ids,
-           'totals': {k: M(sums[k], cur) for k in keys}, 'totals_base': {k: M(sums_base[k], base) for k in keys}, 'count': len(exp)}
+           'totals': {k: M(sums[k], cur) for k in keys}, 'totals_base': {k: M(sums_base[k], base) for k in keys}, 'count': len(exp),
+           'by_category': [{'category': k, **trio(g)} for k, g in sorted(groups['category'].items(), key=lambda kv: -kv[1]['spent'])],
+           'by_day': [{'day': k, **trio(g)} for k, g in sorted(groups['day'].items())]}
     if full:
-        out['expenses'] = [{**v, 'trip_status': st} for v, (_, st) in zip(txn_views(ctx, [ctx['by_id'][t['id']] for t, _ in exp]), exp)]
+        views = txn_views(ctx, [ctx['by_id'][t['id']] for t, _ in exp])
+        out['expenses'] = [{**v, 'trip_status': st, 'claimed': M(part, t['currency']), 'burden': M(t['amount_minor'] - part, t['currency']),
+                            'claimed_trip': M(p, cur), 'burden_trip': M(a - p, cur)}
+                           for v, (t, st), (part, a, p) in zip(views, exp, splits)]
         out['claims'] = [c for c in claim_rows(ctx) if c['id'] in claim_ids]
     return out
 
@@ -964,6 +987,7 @@ def claims_import(req):
     if matched:
         stem = re.sub(r'\.[^.]+$', '', name).strip()
         req._json = {'name': (trip['name'] if trip else stem or 'Imported claim')[:200], 'txn_ids': [m['txn_id'] for m in matched]}
+        req.claim_parts = {m['txn_id']: m['claimed'] for m in matched if m['claimed']}
         claim = claim_add(req)[1]
     return (201 if claim else 200), {'claim': claim, 'matched': matched, 'unmatched': unmatched}
 

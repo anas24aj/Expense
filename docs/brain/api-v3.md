@@ -92,9 +92,9 @@ JSON-RPC 2.0 over POST (`initialize`, `tools/list`, `tools/call`, `ping`). Tools
 A trip is a date window and a place. Every transaction in the window (and, when known, in that place/currency) belongs
 to it automatically. A trip's expenses are each `claimed` (in a claim), `personal` (not claimable), `missed` (should
 have been claimed) or `unreviewed`. A business trip with a claim shows what isn't claimed yet so nothing is lost.
-| GET | /trips | `{items: [Trip]}` Trip: `{id, name, city, country, start_on, end_on, kind: business|personal, claim_ids: [], totals: {total, claimed, personal, missed, unreviewed} (Money in trip currency + base), count}` |
+| GET | /trips | `{items: [Trip]}` Trip: `{id, name, city, country, start_on, end_on, kind: business|personal, claim_ids: [], totals: {total, spent, claimed, burden, personal, missed, unreviewed} (Money in trip currency + base), count, by_category: [{category, spent, claimed, burden}], by_day: [{day, spent, claimed, burden}]}` |
 | POST/PATCH/DELETE | /trips[/{id}] | `{name, city, country, start_on, end_on, kind}` |
-| GET | /trips/{id} | Trip + `expenses: [Txn + trip_status]`, `claims: [Claim]` |
+| GET | /trips/{id} | Trip + `expenses: [Txn + {trip_status, claimed, burden, claimed_trip, burden_trip}]` (by day, oldest first), `claims: [Claim]` |
 | POST | /trips/{id}/tag | `{txn_ids, status: personal|missed|claimed|unreviewed}` |
 | POST | /trips/{id}/claim | `{name, txn_ids?}` create a claim from the trip (default: all unreviewed + missed business expenses) |
 | POST | /claims/import | `{file_name, data_base64, trip_id?}` the company claim Excel: rows (date, description, amount, currency, claimed amount) → claim + items matched to transactions (amount ± FX tolerance, date ± 3 days); unmatched rows returned as `unmatched` |
@@ -174,9 +174,15 @@ turns v3 rows into engine shapes once per request.
   tags (any txn can be tagged in). Being in a claim always wins (`claimed`). `missed` and tagged `claimed` expenses are excluded
   from spending but are not added to `owed_to_you.claims` (only real claims are). `POST /trips/{id}/claim` → 201 Claim; 400 when
   nothing is left. Migration: `004_trips.sql`.
+- **Partial claims** (2026-11-23, migration `005_claim_amounts.sql`): `claim_items.claimed_minor` + `claimed_currency` (NULL = the whole
+  transaction). The claim import stores each matched row's claimed amount; manual adds keep NULL. The covered part is converted to the
+  txn's currency and capped at its amount. Trip `totals.claimed` = what claims cover; `burden` = spent − claimed (personal, missed,
+  unreviewed and the unclaimed part of claimed bills); `personal/missed/unreviewed` = those expenses' amounts; `total` = `spent`.
+  Per expense `claimed`/`burden` are in the txn's currency, `*_trip` in the trip's. A claim's `expected` sums the covered parts, and
+  the uncovered part of a claimed bill counts as spending (`spend`) in insights.
 - **Claim import** → `{claim: Claim|null, matched: [{row, day, description, amount, claimed, txn_id}], unmatched: [same without
   txn_id]}`; 201 when a claim was made, else 200; 422 unreadable/no header. Also takes `.xls` and `.csv`. Header row found in the
   first 20 rows by words (date/day, desc/detail/merchant…, curr/ccy, amount/total/cost…, claim/approved/reimburs); the claimed
-  column is informational. With `trip_id` only that trip's expenses are candidates; matched txns already in a claim are skipped.
+  column is stored per item (see Partial claims). With `trip_id` only that trip's expenses are candidates; matched txns already in a claim are skipped.
 - **MCP** tools call the same route handlers in-process as the key's member (`admin` routes still checked);
   `search_transactions` = `GET /transactions?q=`.

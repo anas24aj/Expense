@@ -439,3 +439,14 @@ table.look td { text-align: right; padding: 10px 6px; border-top: .5px solid var
 .country-card { text-align: left; border: 0; font: inherit; color: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .country-card.on { outline: 2px solid var(--blue, #0a84ff); }
 .brand-tile { font-weight: 800; letter-spacing: -0.02em; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,.12); line-height: 1; }
+
+/* trips */
+.stackbar.thin { height: 6px; margin: 0; gap: 1.5px; }
+.legend.three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.legend.three .stat .v { font-size: 16px; }
+.day-head.sticky {
+  position: sticky; top: calc(52px + var(--safe-t)); z-index: 5; margin: 10px -4px 6px; padding: 8px; border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+}
+.day-head .day-you { color: var(--text-3); }
+@media (min-width: 960px) { .day-head.sticky { top: 64px; } }

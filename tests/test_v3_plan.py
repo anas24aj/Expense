@@ -313,6 +313,40 @@ class PlanTest(unittest.TestCase):
         bad = self.call('POST', '/api/claims/import', {'file_name': 'x.xlsx', 'data_base64': base64.b64encode(b'not excel').decode()})
         self.assertEqual(bad[0], 422)
 
+    def test_partial_claim_burden_and_trip_breakdown(self):
+        import base64
+        from openpyxl import Workbook
+        trip, ids, month = self.trip_setup()
+        self.ok('POST', f'/trips/{trip["id"]}/tag', {'txn_ids': [ids['gift']], 'status': 'personal'})
+        wb = Workbook()
+        wb.active.append(['Date', 'Description', 'Currency', 'Amount', 'Claimed'])
+        wb.active.append([month + '-05', 'Hotel', 'INR', 5000, 4600])  # the company pays part of the hotel
+        wb.active.append([month + '-06', 'Taxi', 'INR', 1000, 1005])  # claimed more than the bill: capped at the bill
+        buf = io.BytesIO()
+        wb.save(buf)
+        out = self.ok('POST', '/claims/import', {'file_name': 'c.xlsx', 'data_base64': base64.b64encode(buf.getvalue()).decode(), 'trip_id': trip['id']})
+        self.assertEqual(out['claim']['expected'], M(5600_00, 'INR'))
+        t = self.ok('GET', f'/trips/{trip["id"]}')
+        by = {e['id']: e for e in t['expenses']}
+        self.assertEqual([e['day'] for e in t['expenses']], sorted(e['day'] for e in t['expenses']))
+        self.assertEqual((by[ids['hotel']]['trip_status'], by[ids['hotel']]['claimed'], by[ids['hotel']]['burden']),
+                         ('claimed', M(4600_00, 'INR'), M(400_00, 'INR')))
+        self.assertEqual((by[ids['taxi']]['claimed'], by[ids['taxi']]['burden']), (M(1000_00, 'INR'), M(0, 'INR')))
+        self.assertEqual((by[ids['gift']]['claimed_trip'], by[ids['gift']]['burden_trip']), (M(0, 'INR'), M(500_00, 'INR')))
+        self.assertEqual({k: t['totals'][k]['minor'] for k in ('spent', 'claimed', 'burden', 'personal', 'missed', 'unreviewed')},
+                         {'spent': 6500_00, 'claimed': 5600_00, 'burden': 900_00, 'personal': 500_00, 'missed': 0, 'unreviewed': 0})
+        self.assertEqual(t['totals_base']['burden'], M(36_00))
+        self.assertEqual([(d['day'][-2:], d['spent']['minor'], d['claimed']['minor'], d['burden']['minor']) for d in t['by_day']],
+                         [('05', 5000_00, 4600_00, 400_00), ('06', 1000_00, 1000_00, 0), ('07', 500_00, 0, 500_00)])
+        self.assertEqual([sum(c[k]['minor'] for c in t['by_category']) for k in ('spent', 'claimed', 'burden')], [6500_00, 5600_00, 900_00])
+        self.assertEqual(t['by_category'], sorted(t['by_category'], key=lambda c: -c['spent']['minor']))  # biggest first
+        listed = self.ok('GET', '/trips')['items'][0]
+        self.assertEqual((listed['totals']['burden'], 'expenses' in listed), (M(900_00, 'INR'), False))
+        # spending counts only your part: hotel 400 INR (16) + gift 20 + coffee 20 + later 12
+        self.assertEqual(self.ok('GET', '/insights/month', query='month=' + month)['spent']['minor'], 68_00)
+        c = self.ok('POST', '/claims', {'name': 'Manual', 'txn_ids': [ids['later']]})  # by hand: the whole amount
+        self.assertEqual(c['expected'], M(300_00, 'INR'))
+
     def test_claim_layouts_with_currency_in_cells(self):
         from api.plan import _claim_rows
         summary = [['Summary'], ['Date', 'Total', 'Claimed']]  # a header with nothing under it: not the claim
