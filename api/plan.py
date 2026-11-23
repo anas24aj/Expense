@@ -1135,6 +1135,8 @@ COUNTRY_CUR = {'sa': 'SAR', 'saudi arabia': 'SAR', 'ksa': 'SAR', 'in': 'INR', 'i
                'united kingdom': 'GBP', 'qa': 'QAR', 'qatar': 'QAR', 'bh': 'BHD', 'bahrain': 'BHD', 'kw': 'KWD', 'kuwait': 'KWD',
                'om': 'OMR', 'oman': 'OMR', 'eg': 'EGP', 'egypt': 'EGP'}
 NOT_EXPENSE = {'transfer', 'income', 'ignore', 'loan_payment', 'saving', 'asset', 'repaid', 'reimbursement', 'borrow', 'repay', 'lend'}
+HOME_BILLS = {'Rent', 'Rent & EMI', 'Utilities', 'Bills & Utilities'}  # paid while away, but for home: not trip spending
+FEE_CATEGORIES = {'Fees & interest', 'Government & fees'}
 
 
 def trip_currency(trip):
@@ -1144,13 +1146,15 @@ def trip_currency(trip):
 def trip_expenses(trip, ctx):
     """[(txn, status)]: debits in the trip's window (in its country's currency; on a trip abroad also in the base currency, so
     flights and hotels billed in SAR count, while on a trip home, base-currency spending back in Saudi does not) plus anything tagged to it.
+    Home bills paid in the window (a commitment's payment, rent and utilities) are left out unless tagged; `excluded` takes one off.
     In a claim → claimed; else the tag; else unreviewed."""
     cur, home = trip_currency(trip), ctx['house'].get('home_currency') or 'INR'
     tags = {r['txn_id']: r['status'] for r in ctx['trip_tags'] if r['trip_id'] == trip['id']}
     out = []
     for t in ctx['raw_txns']:
         inside = (t['direction'] == 'debit' and trip['start_on'] <= t['day'] <= trip['end_on'] and t['purpose'] not in NOT_EXPENSE
-                  and (not cur or t['currency'] == cur or (t['currency'] == ctx['cur'] and cur != home)))
+                  and (not cur or t['currency'] == cur or (t['currency'] == ctx['cur'] and cur != home))
+                  and not t['commitment_id'] and t['category'] not in HOME_BILLS)
         if tags.get(t['id']) == 'excluded':
             continue
         if inside or t['id'] in tags:
@@ -1160,7 +1164,8 @@ def trip_expenses(trip, ctx):
 
 def trip_json(trip, ctx, full=False):
     """Totals: total = spent; claimed = what the claims cover; burden = the rest (personal, missed, unreviewed and the
-    unclaimed part of claimed bills); personal/missed/unreviewed = those expenses' amounts. Full adds per-expense splits."""
+    unclaimed part of claimed bills); personal/missed/unreviewed = those expenses' amounts; fees = the part of spent that
+    is bank charges (FX markup and the VAT on it). Full adds per-expense splits."""
     cur, base = trip_currency(trip) or ctx['cur'], ctx['cur']
     exp = sorted(trip_expenses(trip, ctx), key=lambda x: (x[0]['day'], x[0]['id']))
     sums, sums_base = defaultdict(float), defaultdict(float)
@@ -1175,13 +1180,15 @@ def trip_json(trip, ctx, full=False):
             d['spent'] += a
             d['burden'] += a - p
             d[st] += p if st == 'claimed' else a
+            if t['purpose'] == 'fee' or t['category'] in FEE_CATEGORIES:  # FX markup, VAT on it, card charges: shown on their own line
+                d['fees'] += a
             if d is sums:
                 splits.append((part, a, p))
                 for g in (groups['category'][t['category']], groups['day'][t['day']]):
                     g['spent'] += a
                     g['claimed'] += p
                     g['burden'] += a - p
-    keys = ('total', 'spent', 'claimed', 'burden', 'personal', 'missed', 'unreviewed')
+    keys = ('total', 'spent', 'claimed', 'burden', 'personal', 'missed', 'unreviewed', 'fees')
     trio = lambda g: {k: M(g[k], cur) for k in ('spent', 'claimed', 'burden')}
     claim_ids = sorted({ctx['claimed'][t['id']] for t, _ in exp if t['id'] in ctx['claimed']})
     out = {'id': trip['id'], 'name': trip['name'], 'city': trip['city'], 'country': trip['country'], 'start_on': trip['start_on'],
