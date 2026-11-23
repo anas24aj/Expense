@@ -60,7 +60,9 @@ commitments(id, household_id, name, kind, amount_minor, currency, cycle_months, 
             match_pattern, account_id NULL, liability_id NULL, asset_id NULL)
 commitment_shares(commitment_id, member_id|contact_id, share_minor)
 commitment_payments(commitment_id, cycle_start, txn_id NULL, paid_by_member_id, amount_minor)
-funds(id, household_id, name, target_minor, currency, due_on, commitment_id NULL)
+funds(id, household_id, name, target_minor, currency, due_on, commitment_id NULL, tenant_contact_id NULL, rent_minor, rent_from, match_pattern)  -- a tenant: a rent pot
+fund_shares(fund_id, member_id|contact_id, share_pct)  -- a pot's co-owners besides the household
+fund_waivers(fund_id, month)  -- rent months let off
 fund_moves(fund_id, on_day, amount_minor, txn_id NULL)
 assets(id, household_id, kind property|vehicle|investment, name, currency, cost_minor, value_minor, value_as_of)
 asset_milestones(asset_id, name, due_on, amount_minor, paid_txn_id NULL, paid_on, liability_id NULL, disbursed_on)  -- tranche: 006

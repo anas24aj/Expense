@@ -166,6 +166,7 @@ function EditContactSheet({ contact, onClose }: { contact: Contact | null; onClo
   const toast = useToast();
   const save = useWrite<Record<string, unknown>>('PATCH', () => `/contacts/${contact!.id}`);
   const del = useWrite('DELETE', () => `/contacts/${contact!.id}`);
+  const invite = useWrite<undefined, { email: string; link: string; sent: boolean }>('POST', () => `/contacts/${contact!.id}/invite`);
   if (!contact) return null;
   return (
     <Sheet open onClose={onClose} title={`Edit ${contact.name}`}>
@@ -176,6 +177,10 @@ function EditContactSheet({ contact, onClose }: { contact: Contact | null; onClo
         <button className="btn block" disabled={!name.trim() || save.isPending} onClick={async () => {
           await save.mutateAsync({ name: name.trim(), email: email.trim(), phone: phone.trim() }); toast(`${name.trim()} saved`); onClose();
         }}>Save</button>
+        {contact.email && !contact.on_app && <button className="btn block secondary" disabled={invite.isPending} onClick={async () => {
+          const r = await invite.mutateAsync(undefined);
+          if (r.sent) toast(`Invite sent to ${r.email}`); else await copy(r.link, toast, 'Mail is off — sign-up link copied');
+        }}><Icon name="mail" size={16} />Invite to the app</button>}
         {(save.error || del.error) && <p className="error" role="alert">{(save.error || del.error)!.message}</p>}
         <button className="btn block danger" disabled={del.isPending} onClick={async () => {
           if (!confirm(`Remove ${contact.name}? Past splits with them stay.`)) return;
@@ -212,7 +217,8 @@ function Friends({ people }: { people: Person[] }) {
         {friends.length ? (
           <List>
             {friends.map(p => (
-              <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.on_app ? 'On the app — splits sync' : p.relation || 'friend'}
+              <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name}
+                sub={p.rent_due ? <span className="warn">Rent due {fmt(p.rent_due)}</span> : p.on_app ? 'On the app — splits sync' : p.relation || 'friend'}
                 end={p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span> : p.you_owe.length ? <span className="neg"><Monies items={p.you_owe} /></span> : <span className="caption">Settled</span>}
                 endSub={p.owes_you.length ? 'owes you' : p.you_owe.length ? 'you owe' : undefined} onClick={() => setOpen(p)} />
             ))}

@@ -102,6 +102,9 @@ def load(req):
     debt_rows = [l for l in liabs if l['kind'] not in ('credit_card',) and not l['closed_at']]
     commit_share = {c['id']: sum(s['share_minor'] for s in shares[c['id']]) for c in commits}
 
+    pot_pct = defaultdict(int)  # fund id -> % of it the co-owners hold
+    for s in hh.run('SELECT fund_id, share_pct FROM fund_shares WHERE household_id = :hid'):
+        pot_pct[s['fund_id']] += s['share_pct']
     trip_tags = hh.run('SELECT * FROM trip_txns WHERE household_id = :hid')
     expected = {r['txn_id'] for r in trip_tags if r['status'] in ('missed', 'claimed')}  # money expected back: not spending
     txns = []
@@ -126,6 +129,11 @@ def load(req):
                 e['commitment_id'] = _match(commits, t)
         if e['commitment_id'] and commit_share.get(e['commitment_id']) and debit:
             e['theirs_minor'] = max(e['theirs_minor'], min(t['amount_minor'], commit_share[e['commitment_id']]))
+        if t['fund_id'] in pot_pct:  # a shared pot: only the household's part of its rent and groceries is ours
+            if debit:
+                e['theirs_minor'] = max(e['theirs_minor'], round(t['amount_minor'] * pot_pct[t['fund_id']] / 100))
+            else:
+                e['amount_minor'] -= round(t['amount_minor'] * pot_pct[t['fund_id']] / 100)
         if asset_share[t['id']]:
             e['theirs_minor'] = max(e['theirs_minor'], round(t['amount_minor'] * min(100, asset_share[t['id']]) / 100))
         txns.append(e)
@@ -263,6 +271,10 @@ def people_totals(ctx, hh):
         t = ctx['by_id'].get(s['txn_id'])
         if t and t['direction'] == 'debit' and (s['member_id'] or s['contact_id']) != t['member_id']:
             owes[s['member_id'] or s['contact_id']] += to_cur(s['share_minor'], t['currency'], ctx)
+    from api import plan
+    for p in plan.pots(hh, ctx['today']):  # a co-owner's part of an overspent pot (+), or what the household owes them back (-)
+        for pid, v in p['owes'].items():
+            (owes if v > 0 else owed)[pid] += to_cur(abs(v), p['fund']['currency'], ctx)
     return sum(v for v in owes.values() if v > 0), sum(v for v in owed.values() if v > 0)
 
 

@@ -382,7 +382,7 @@ def commitment_paid(req):
 
 # ---------- funds ----------
 
-def fund_json(f, ctx):
+def fund_json(f, ctx, pot=None):
     cur, now_ = f['currency'], ctx['today']
     monthly = engine.fund_projection(f, now_[:7], 1)[0]
     left = engine.months_between(now_, f['due'])
@@ -391,7 +391,8 @@ def fund_json(f, ctx):
     else:
         on_track = f['saved_minor'] >= f['target_minor'] or f['saved_minor'] >= f['target_minor'] - monthly * (max(0, left) + 1) - 1
     return {'id': f['id'], 'name': f['name'], 'target': M(f['target_minor'], cur), 'due_on': f['due'], 'saved': M(f['saved_minor'], cur),
-            'monthly': M(monthly, cur), 'on_track': bool(on_track), 'commitment_id': f['commitment_id']}
+            'monthly': M(monthly, cur), 'on_track': bool(on_track), 'commitment_id': f['commitment_id'],
+            'pot': pot_json(pot, _people(ctx['hh'])) if pot else None, **({'saved': M(pot['calc']['balance'], cur)} if pot else {})}
 
 
 def _one_fund(req, id):
@@ -399,13 +400,14 @@ def _one_fund(req, id):
     f = next((f for f in ctx['funds'] if f['id'] == id), None)
     if not f:
         raise ApiError(404, 'no such fund')
-    return fund_json(f, ctx)
+    return fund_json(f, ctx, next((p for p in pots(req.hh, ctx['today']) if p['fund']['id'] == id), None))
 
 
 @route('GET', '/api/funds')
 def funds(req):
     ctx = insights.load(req)
-    items = [fund_json(f, ctx) for f in ctx['funds']]
+    by_id = {p['fund']['id']: p for p in pots(req.hh, ctx['today'])}
+    items = [fund_json(f, ctx, by_id.get(f['id'])) for f in ctx['funds']]
     return {'items': items, 'monthly_total': M(sum(insights.to_cur(f['monthly']['minor'], f['monthly']['currency'], ctx) for f in items), ctx['cur'])}
 
 
@@ -416,14 +418,27 @@ def fund(req):
 
 @route('POST', '/api/funds')
 def fund_add(req):
-    row = req.hh.insert('funds', created_at=now(), **clean(req.hh, 'funds', req.json, True))
+    b = req.json
+    if isinstance(b.get('rent'), dict):  # a pot has no target or due date of its own
+        b = {'target_minor': 0, 'due_on': b['rent'].get('from'), **b}
+    with req.db.tx():
+        row = req.hh.insert('funds', created_at=now(), **clean(req.hh, 'funds', b, True))
+        if 'rent' in b:
+            _save_rent(req, row['id'], b['rent'])
+    if 'rent' in b:
+        reclassify(req.hh)  # past rent credits that match get tagged to the pot
     return 201, _one_fund(req, row['id'])
 
 
 @route('PATCH', '/api/funds/{id}')
 def fund_edit(req):
     _get(req.hh, 'funds', req.params['id'], 'fund')
-    req.hh.update('funds', req.params['id'], **clean(req.hh, 'funds', req.json, False))
+    with req.db.tx():
+        req.hh.update('funds', req.params['id'], **clean(req.hh, 'funds', req.json, False))
+        if 'rent' in req.json:
+            _save_rent(req, req.params['id'], req.json['rent'])
+    if 'rent' in req.json:
+        reclassify(req.hh)
     return _one_fund(req, req.params['id'])
 
 
@@ -446,6 +461,124 @@ def fund_move(req):
     ctx_day = insights.today_in((req.db.one('SELECT timezone FROM households WHERE id = :id', id=req.hh.hid) or {}).get('timezone'))
     req.hh.insert('fund_moves', fund_id=req.params['id'], on_day=day or ctx_day, amount_minor=amount, txn_id=txn_id)
     return _one_fund(req, req.params['id'])
+
+
+# ---------- rent pots: a fund fed by a tenant's rent and shared with co-owners (docs/brain/api-v3.md, "Rent pots") ----------
+
+def _save_rent(req, fid, r):
+    """Set a fund's rent arrangement: {tenant: {contact_id} | {name, email?, phone?}, amount_minor, from, match_pattern?,
+    shares: [{member_id | contact_id, share_pct}]} (shares are the co-owners besides the household)."""
+    from api import households
+    if not isinstance(r, dict):
+        raise ApiError(400, 'rent must be an object')
+    t, amount = r.get('tenant'), r.get('amount_minor')
+    if not isinstance(t, dict):
+        raise ApiError(400, 'rent.tenant must be {contact_id} or {name, email}')
+    if not isinstance(amount, int) or isinstance(amount, bool) or not 0 < amount <= 10 ** 12:
+        raise ApiError(400, 'rent.amount_minor must be a whole number above 0')
+    if not r.get('from'):
+        raise ApiError(400, 'rent.from is required')
+    start = clean(req.hh, 'funds', {'due_on': r['from']}, False)['due_on']
+    if t.get('contact_id'):
+        tenant = households._contact(req, t['contact_id'])
+    else:
+        tenant = req.hh.insert('contacts', created_at=now(), **{'email': '', 'phone': '', **households._contact_fields(t)})
+    pattern = clean(req.hh, 'commitments', {'match_pattern': r.get('match_pattern') or tenant['name']}, False)['match_pattern']
+    shares = r.get('shares') or []
+    if not isinstance(shares, list) or len(shares) > 10:
+        raise ApiError(400, 'rent.shares must be a list')
+    rows = []
+    for s in shares:
+        pct = s.get('share_pct') if isinstance(s, dict) else None
+        if not isinstance(pct, int) or isinstance(pct, bool) or not 0 < pct < 100 or bool(s.get('member_id')) == bool(s.get('contact_id')):
+            raise ApiError(400, 'each share needs member_id or contact_id and share_pct 1-99')
+        rows.append({'member_id': households._member(req, s['member_id'])['id'] if s.get('member_id') else None,
+                     'contact_id': households._contact(req, s['contact_id'])['id'] if s.get('contact_id') else None, 'share_pct': pct})
+    if sum(x['share_pct'] for x in rows) >= 100:
+        raise ApiError(400, 'the co-owners\' shares must leave the household a part')
+    if any(x['contact_id'] == tenant['id'] for x in rows):
+        raise ApiError(400, 'the tenant cannot also own the rent')
+    req.hh.update('funds', fid, tenant_contact_id=tenant['id'], rent_minor=amount, rent_from=start, match_pattern=pattern)
+    req.hh.run('DELETE FROM fund_shares WHERE household_id = :hid AND fund_id = :f', f=fid)
+    for x in rows:
+        req.hh.insert('fund_shares', fund_id=fid, **x)
+
+
+def _rent_months(f, today):
+    """Months rent was due, from rent_from up to today (a month is due once its day of the month has come)."""
+    out, m, dd = [], f['rent_from'][:7], f['rent_from'][8:10]
+    while f['rent_from'] and f'{m}-{dd}' <= today and len(out) < 600:
+        out.append(m)
+        m = engine.add_months(m, 1)
+    return out
+
+
+def pot_key(fid, pid):
+    return f'settled.pot.{fid}.{pid}'
+
+
+def pots(hh, today):
+    """Every open pot: {fund, shares, waived, calc (engine.pot), owes {person id: + they owe the household, - it owes them,
+    since the last settle-up with them}}."""
+    funds = hh.run('SELECT * FROM funds WHERE household_id = :hid AND closed_at IS NULL AND tenant_contact_id IS NOT NULL ORDER BY created_at, id')
+    if not funds:
+        return []
+    shares, lines, waived = defaultdict(list), defaultdict(list), defaultdict(set)
+    for s in hh.run('SELECT * FROM fund_shares WHERE household_id = :hid ORDER BY id'):
+        shares[s['fund_id']].append(s)
+    for m in hh.run('SELECT fund_id, on_day, amount_minor FROM fund_moves WHERE household_id = :hid AND txn_id IS NULL'):
+        lines[m['fund_id']].append((m['on_day'], m['amount_minor']))
+    for t in hh.run("SELECT m.fund_id, t.day, t.amount_minor, t.direction FROM txn_meta m JOIN transactions t ON t.id = m.txn_id "
+                    "JOIN funds f ON f.id = m.fund_id AND f.household_id = m.household_id "
+                    "WHERE m.household_id = :hid AND t.household_id = :hid AND t.deleted_at IS NULL AND t.currency = f.currency"):
+        lines[t['fund_id']].append((t['day'], t['amount_minor'] if t['direction'] == 'credit' else -t['amount_minor']))
+    for w in hh.run('SELECT fund_id, month FROM fund_waivers WHERE household_id = :hid'):
+        waived[w['fund_id']].add(w['month'])
+    snaps = {r['key']: int(r['value']) for r in hh.run("SELECT key, value FROM settings WHERE household_id = :hid AND key LIKE 'settled.pot.%'")}
+    out = []
+    for f in funds:
+        pct = {s['member_id'] or s['contact_id']: s['share_pct'] for s in shares[f['id']]}
+        calc = engine.pot(lines[f['id']], pct, [m for m in _rent_months(f, today) if m not in waived[f['id']]])
+        out.append({'fund': f, 'shares': shares[f['id']], 'waived': sorted(waived[f['id']]), 'calc': calc,
+                    'owes': {p: v - snaps.get(pot_key(f['id'], p), 0) for p, v in calc['owed'].items()}})
+    return out
+
+
+def pot_json(p, names):
+    f, c, cur = p['fund'], p['calc'], p['fund']['currency']
+    others = sum(s['share_pct'] for s in p['shares'])
+    return {'tenant': {'id': f['tenant_contact_id'], 'name': names.get(f['tenant_contact_id'], '')}, 'rent': M(f['rent_minor'], cur),
+            'rent_from': f['rent_from'], 'match_pattern': f['match_pattern'],
+            'received': M(c['in'], cur), 'spent': M(c['out'], cur), 'balance': M(c['balance'], cur), 'from_pocket': M(c['short'], cur),
+            'mine': {'share_pct': 100 - others, 'part': M(c['my_part'], cur)},
+            'shares': [{'member_id': s['member_id'], 'contact_id': s['contact_id'], 'name': names.get(s['member_id'] or s['contact_id'], ''),
+                        'share_pct': s['share_pct'], 'part': M(c['parts'][s['member_id'] or s['contact_id']], cur),
+                        'owes_you': M(p['owes'][s['member_id'] or s['contact_id']], cur)} for s in p['shares']],
+            'pending_months': c['missing'], 'rent_due': M(len(c['missing']) * f['rent_minor'], cur), 'waived_months': p['waived']}
+
+
+@route('POST', '/api/funds/{id}/months')
+def pot_month(req):
+    """Mark a month of rent: received (credited to the pot without a bank line), waived, or due again (undoes both)."""
+    f = _get(req.hh, 'funds', req.params['id'], 'fund')
+    if not f['tenant_contact_id']:
+        raise ApiError(400, 'this fund has no rent arrangement')
+    b = req.json
+    month, status = b.get('month'), b.get('status')
+    if not isinstance(month, str) or not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', month):
+        raise ApiError(400, 'month must be YYYY-MM')
+    if status not in ('received', 'waived', 'due'):
+        raise ApiError(400, 'status must be one of received, waived, due')
+    day = engine.add_months(f['rent_from'], engine.months_between(f['rent_from'], month))
+    with req.db.tx():
+        req.hh.run('DELETE FROM fund_waivers WHERE household_id = :hid AND fund_id = :f AND month = :m', f=f['id'], m=month)
+        req.hh.run('DELETE FROM fund_moves WHERE household_id = :hid AND fund_id = :f AND txn_id IS NULL AND on_day = :d AND amount_minor = :a',
+                   f=f['id'], d=day, a=f['rent_minor'])  # a month marked received before
+        if status == 'waived':
+            req.db.run('INSERT INTO fund_waivers (household_id, fund_id, month) VALUES (:h, :f, :m)', h=req.hh.hid, f=f['id'], m=month)
+        elif status == 'received':
+            req.hh.insert('fund_moves', fund_id=f['id'], on_day=day, amount_minor=f['rent_minor'], txn_id=None)
+    return _one_fund(req, f['id'])
 
 
 # ---------- assets ----------

@@ -337,7 +337,7 @@ on('DELETE', '/devices/{id}', m => { devices.splice(devices.findIndex(x => x.id 
 on('GET', '/mcp-key', () => ({ url: location.origin + '/mcp/mk_7f3a9c21d84e4b0a' }));
 on('POST', '/mcp-key', () => ({ url: location.origin + '/mcp/mk_' + Math.random().toString(16).slice(2, 18) }));
 
-on('GET', '/accounts', () => ({ items: accounts }));
+on('GET', '/accounts', () => ({ items: accounts, recent_ids: [...new Set(txns.map(t => t.account_id).filter(Boolean))] }));
 on('POST', '/accounts', (_m, b) => { const a = acct(id(), b.kind, b.institution, b.name || b.institution, b.currency, b.country || 'SA', b.last4 || null, { minor: 0, currency: b.currency }); accounts.push(a); return a; });
 on('PATCH', '/accounts/{id}', (m, b) => Object.assign(accounts.find(x => x.id === m[1])!, b));
 on('GET', '/transactions', (_m, _b, q) => {
@@ -355,6 +355,7 @@ on('PATCH', '/transactions/{id}', (m, b) => { const t = txns.find(x => x.id === 
   const targets = b.apply_to_merchant ? txns.filter(x => x.merchant === t.merchant) : [t];
   for (const x of targets) { if (b.category !== undefined) x.category = b.category; if (b.purpose) x.purpose = b.purpose; if (b.note !== undefined) x.note = b.note;
     if (b.person) x.person = { ...b.person, name: [...members.map(p => ({ id: p.id, name: p.display_name })), ...contacts].find(p => p.id === b.person.id)?.name || '' };
+    if (b.fund_id !== undefined) x.fund_id = b.fund_id;
     if (b.liability_id !== undefined) { x.liability_id = b.liability_id; if (b.liability_id && !b.purpose) x.purpose = 'loan_payment'; } x.confidence = 1; }
   return t; });
 on('POST', '/transactions/{id}/split', (m, b) => { const t = txns.find(x => x.id === m[1])!; const others = b.shares.reduce((s: number, x: any) => s + x.share_minor, 0);
@@ -401,7 +402,23 @@ on('DELETE', '/commitments/{id}', m => { commitments.splice(commitments.findInde
 on('POST', '/commitments/{id}/paid', (m, b) => { const c = commitments.find(x => x.id === m[1])!;
   if (b.payer) { const s = c.shares.find(s => (s.contact_id || s.member_id) === b.payer.id); if (s) s.paid_this_cycle = true; } else c.status = 'paid'; return c; });
 on('GET', '/funds', () => ({ items: funds }));
-on('POST', '/funds', (_m, b) => { const f: Fund = { id: id(), name: b.name, target: { minor: b.target_minor, currency: b.currency }, due_on: b.due_on, saved: { minor: 0, currency: b.currency },
+on('GET', '/funds/{id}', m => funds.find(x => x.id === m[1]));
+on('POST', '/funds/{id}/months', (m, b) => { const p = funds.find(x => x.id === m[1])!.pot!;
+  p.pending_months = p.pending_months.filter(x => x !== b.month); p.waived_months = p.waived_months.filter(x => x !== b.month);
+  if (b.status === 'waived') p.waived_months.push(b.month); if (b.status === 'due') p.pending_months.push(b.month);
+  p.rent_due = { ...p.rent, minor: p.rent.minor * p.pending_months.length }; return funds.find(x => x.id === m[1]); });
+on('POST', '/contacts/{id}/invite', m => ({ email: contacts.find(c => c.id === m[1])?.email, link: location.origin + '/signup', sent: false }));
+on('POST', '/funds', (_m, b) => { if (b.rent) {  // a rent pot: empty until rent and groceries are tagged
+    const r = b.rent, z = { minor: 0, currency: b.currency }, rent = { minor: r.amount_minor, currency: b.currency };
+    const t = r.tenant.contact_id ? contacts.find(c => c.id === r.tenant.contact_id)! : (contacts.push({ id: id(), name: r.tenant.name, email: r.tenant.email || null, phone: null, on_app: false }), contacts[contacts.length - 1]);
+    const named = (x: any) => [...members.map(p => ({ id: p.id, name: p.display_name })), ...contacts].find(p => p.id === (x.member_id || x.contact_id))?.name || '';
+    const f: Fund = { id: id(), name: b.name, target: z, due_on: r.from, saved: z, monthly: z, on_track: true, commitment_id: null, pot: {
+      tenant: { id: t.id, name: t.name }, rent, rent_from: r.from, match_pattern: r.match_pattern || t.name, received: z, spent: z, balance: z, from_pocket: z,
+      mine: { share_pct: 100 - r.shares.reduce((a: number, x: any) => a + x.share_pct, 0), part: z },
+      shares: r.shares.map((x: any) => ({ member_id: x.member_id || null, contact_id: x.contact_id || null, name: named(x), share_pct: x.share_pct, part: z, owes_you: z })),
+      pending_months: [r.from.slice(0, 7)], rent_due: rent, waived_months: [] } };
+    funds.push(f); return f; }
+  const f: Fund = { id: id(), name: b.name, target: { minor: b.target_minor, currency: b.currency }, due_on: b.due_on, saved: { minor: 0, currency: b.currency },
   monthly: { minor: Math.round(b.target_minor / 6), currency: b.currency }, on_track: true, commitment_id: null }; funds.push(f); return f; });
 on('POST', '/funds/{id}/move', (m, b) => { const f = funds.find(x => x.id === m[1])!; f.saved = { ...f.saved, minor: f.saved.minor + b.amount_minor }; return f; });
 on('GET', '/assets', () => ({ items: assets }));

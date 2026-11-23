@@ -47,8 +47,8 @@ Member: `{id, display_name, relation, role, user_id|null, email|null}`. Contact:
 | POST/PATCH/DELETE | /accounts, /accounts/{id} | create/update/archive |
 | GET | /transactions | query `month, account_id, category, purpose, member_id, q, review=1, limit, before` → `{items: [Txn], next_before}` |
 | GET | /transactions/{id} | → Txn + `{raw: sender/body|null, links: [...], splits: [...], claim|null}` |
-| POST | /transactions | manual `{account_id?, day, amount_minor, currency, direction, merchant, category?, purpose?, note?}` |
-| PATCH | /transactions/{id} | `{category?, purpose?, person: {kind, id}?, note?, liability_id?: id|null (link to a loan; implies purpose loan_payment), apply_to_merchant?: bool}` → Txn (writes merchant_rules when apply_to_merchant) |
+| POST | /transactions | manual `{account_id?, day, amount_minor, currency, direction, merchant, category?, purpose?, note?}`. No `account_id` key: the member's last-used account in that currency, else the first bank/card/wallet; `account_id: null` is an explicit cash entry |
+| PATCH | /transactions/{id} | `{category?, purpose?, person: {kind, id}?, note?, liability_id?: id|null (link to a loan; implies purpose loan_payment), apply_to_merchant?: bool, fund_id?: id|null (into or out of a rent pot; same currency)}` → Txn (writes merchant_rules when apply_to_merchant). Txn carries `fund_id` |
 | POST | /transactions/{id}/split | `{shares: [{member_id|contact_id, share_minor}]}` → Txn |
 | POST | /transactions/{id}/link | `{to_txn_id, kind: transfer|refund|repayment}` / DELETE /transactions/{id}/link/{link_id} |
 | DELETE | /transactions/{id} | soft delete |
@@ -214,3 +214,19 @@ SalaryEntry: `{id, member_id, member_name, from_month, amount: Money, kind, note
   `cost_total`, `sharer_totals: [{member_id, contact_id, name, amount}]` (each sharer's share_pct of matching types, `'*'` all),
   `my_cost_total`; milestones add `liability_id`, `disbursed_on` (`paid` is true for a disbursed one; `next_milestone` skips them).
 - Accounts: the web add sheet now sends an explicit `country`; edit/archive use the existing PATCH.
+
+## Rent pots (added 2026-11-23; migration 007_rent_pot.sql, `api/plan.py`, math in `engine.pot`)
+A fund with a tenant: rent from a tenant (a contact) fills it, groceries tagged to it draw it down, and it is shared with co-owners.
+| Method | Path | Shape |
+|---|---|---|
+| POST/PATCH | /funds[/{id}] | add `rent: {tenant: {contact_id} | {name, email?, phone?}, amount_minor, from: day, match_pattern? (default the tenant's name), shares: [{member_id|contact_id, share_pct 1-99}]}`; target/due default to 0/from. Re-runs the classifier so matching past credits are tagged |
+| GET | /funds[/{id}] | Fund gains `pot: {tenant: {id, name}, rent, rent_from, match_pattern, received, spent, balance, from_pocket, mine: {share_pct, part}, shares: [{member_id, contact_id, name, share_pct, part, owes_you}], pending_months: [YYYY-MM], rent_due, waived_months}` (Money values; `owes_you` + they owe you, - you owe them); `saved` = balance |
+| POST | /funds/{id}/months | `{month: YYYY-MM, status: received|waived|due}` → Fund. received adds a fund move of one month's rent; due undoes either |
+| POST | /contacts/{id}/invite | emails a sign-up link (own household; they see shared balances under /shared by this email) → `{email, link, sent}` |
+| GET | /accounts | also `recent_ids`: accounts this member used, most recent first |
+
+- Money in: credits tagged `txn_meta.fund_id` (the classifier tags credits whose text has `match_pattern`, same currency) plus manual fund moves. Out: tagged debits.
+- Month by month: a month's money in pays that month's groceries, surplus carries on; a shortfall was paid by the household, so each co-owner owes `share_pct` of it and the pot restarts at 0.
+- That owed amount is added to `balances()` (People, /shared, settle) and `people_totals`; nothing is written as splits, so it is counted once. Settling up stores what was owed then (`settings` key `settled.pot.{fund}.{person}`); later changes show as the difference, either way.
+- A month from `rent_from` (once its day has come) with no money in and not waived is pending; `rent_due` = pending × rent, also on the tenant in /people (`rent_due`).
+- Month insights count only the household's part: co-owners' pct of a tagged spend is `theirs_minor`, and of tagged rent is taken off the income.

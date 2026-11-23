@@ -6,7 +6,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from api import classify, households, valid
+from api import classify, households, plan, valid
 from api.app import ApiError, route
 from api.db import new_id, now
 
@@ -15,7 +15,7 @@ PURPOSES = {'spend', 'fee', 'transfer', 'income', 'support', 'lend', 'repaid', '
             'reimbursement', 'asset', 'saving', 'refund', 'ignore'}
 LINK_KINDS = {'transfer', 'refund', 'repayment'}
 MAX_PAGE = 200
-TXN_SELECT = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id, m.person_contact_id, m.claim_id, m.commitment_id, m.liability_id, '
+TXN_SELECT = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id, m.person_contact_id, m.claim_id, m.commitment_id, m.liability_id, m.fund_id, '
               'a.name AS account_name FROM transactions t '
               'LEFT JOIN txn_meta m ON m.txn_id = t.id AND m.household_id = t.household_id '
               'LEFT JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id ')
@@ -49,7 +49,8 @@ def txn_views(hh, rows):
                     'account_id': r['account_id'], 'account_name': r['account_name'], 'member_id': r['member_id'], 'note': r['note'],
                     'source': r['source'], 'person': person,
                     'split_mine': valid.money(r['amount_minor'] - shared[r['id']], r['currency']) if r['id'] in shared else None,
-                    'claim_id': r['claim_id'], 'commitment_id': r['commitment_id'], 'liability_id': r['liability_id']})
+                    'claim_id': r['claim_id'], 'commitment_id': r['commitment_id'], 'liability_id': r['liability_id'],
+                    'fund_id': r.get('fund_id')})
     return out
 
 
@@ -142,9 +143,30 @@ def _account_fields(req, b, partial):
     return cols
 
 
+SPEND_KINDS = ('bank', 'credit_card', 'debit_card', 'wallet')  # in the order a default is picked
+
+
+def recent_account_ids(hh, member_id):
+    """Open accounts this member's transactions used, most recent first (cash is rare: a new expense defaults to these)."""
+    rows = hh.run("SELECT t.account_id, MAX(t.created_at) AS at FROM transactions t JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id "
+                  "WHERE t.household_id = :hid AND t.member_id = :me AND t.deleted_at IS NULL AND a.archived_at IS NULL AND a.kind != 'loan' "
+                  "AND (a.visibility = 'household' OR a.owner_member_id = :me) GROUP BY t.account_id ORDER BY at DESC", me=member_id or '')
+    return [r['account_id'] for r in rows]
+
+
+def default_account(hh, member_id, currency):
+    """The account a new transaction goes on when none is named: the last one used in that currency, else the first
+    bank account, card or wallet (own ones first)."""
+    accts = [a for a in account_rows(hh, member_id) if a['currency'] == currency and a['kind'] in SPEND_KINDS]
+    by_id = {a['id']: a for a in accts}
+    used = next((by_id[i] for i in recent_account_ids(hh, member_id) if i in by_id), None)
+    return used or min(accts, key=lambda a: (a['owner_member_id'] != member_id, SPEND_KINDS.index(a['kind'])), default=None)
+
+
 @route('GET', '/api/accounts')
 def list_accounts(req):
-    return {'items': account_views(req.hh, req.member['id'], archived=req.query.get('archived') == '1')}
+    return {'items': account_views(req.hh, req.member['id'], archived=req.query.get('archived') == '1'),
+            'recent_ids': recent_account_ids(req.hh, req.member['id'])}
 
 
 @route('POST', '/api/accounts')
@@ -238,7 +260,9 @@ def get_transaction(req):
 @route('POST', '/api/transactions')
 def add_transaction(req):
     b = req.json
-    account = get_account(req.hh, req.member['id'], b['account_id']) if b.get('account_id') else None
+    # no account_id: the usual account; account_id null (or '') is an explicit cash entry
+    account = (get_account(req.hh, req.member['id'], b['account_id']) if b.get('account_id') else
+               None if 'account_id' in b else default_account(req.hh, req.member['id'], valid.currency(b.get('currency'))))
     d = valid.day(b.get('day'))
     cols = {'account_id': account and account['id'], 'member_id': req.member['id'], 'occurred_at': d + 'T12:00:00+00:00', 'day': d,
             'amount_minor': valid.minor(b.get('amount_minor'), 'amount_minor', positive=True), 'currency': valid.currency(b.get('currency')),
@@ -278,11 +302,22 @@ def patch_transaction(req):
             changed['purpose'] = 'loan_payment'
     if 'note' in b:
         req.hh.update('transactions', row['id'], note=valid.text(b['note'], 'note', 500, required=False))
+    fund = None
+    if 'fund_id' in b:  # into or out of a pot (rent in, groceries out); null takes it out
+        fund = b['fund_id'] and req.hh.one('SELECT id, currency FROM funds WHERE id = :f AND household_id = :hid AND closed_at IS NULL',
+                                           f=valid.ident(b['fund_id'], 'fund_id'))
+        if b['fund_id'] and not fund:
+            raise ApiError(400, 'unknown fund_id')
+        if fund and fund['currency'] != row['currency']:
+            raise ApiError(400, f"this fund keeps {fund['currency']}; the transaction is in {row['currency']}")
+        changed.setdefault('purpose', meta['purpose'])
     if changed:
         classify.save_meta(req.hh, row['id'], {**meta, **changed, 'confidence': 1.0}, 'user')
         if b.get('apply_to_merchant') and row['merchant']:
             classify.apply_rule(req.hh, row['merchant'], changed.get('category', ''), changed.get('purpose', ''),
                                 changed.get('person_member_id'), changed.get('person_contact_id'))
+    if 'fund_id' in b:  # save_meta keeps an attached fund, so set (or clear) it here
+        req.hh.run('UPDATE txn_meta SET fund_id = :f WHERE txn_id = :t AND household_id = :hid', f=fund and fund['id'], t=row['id'])
     return _view(req, row['id'])
 
 
@@ -450,5 +485,9 @@ def settle(req):
                    t=now(), st=b.get('txn_id') if isinstance(b.get('txn_id'), str) else None, p=pid, c=cur)
         req.hh.run('INSERT INTO settings (household_id, key, value) VALUES (:hid, :k, :v) ON CONFLICT (household_id, key) DO UPDATE SET value = :v',
                    k=households.settle_key(kind, pid, cur), v=now())
+        for p in households._pots(req.hh):  # what they owed from shared pots is settled too: remember how much it was
+            if pid in p['calc']['owed'] and p['fund']['currency'] == cur:
+                req.hh.run('INSERT INTO settings (household_id, key, value) VALUES (:hid, :k, :v) ON CONFLICT (household_id, key) DO UPDATE SET value = :v',
+                           k=plan.pot_key(p['fund']['id'], pid), v=str(p['calc']['owed'][pid]))
     item = next(p for p in households.people(req.hh, req.db) if p['kind'] == kind and p['id'] == pid)
     return {'ok': True, 'person': item}
