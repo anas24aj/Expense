@@ -18,7 +18,7 @@
   p { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
   label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
   .field { position: relative; }
-  input[type=email] { width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+  #email { width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
   .hint { margin: 6px 0 16px; font-size: 12px; }
   input[type=password], input[type=text] { width: 100%; font: inherit; padding: 12px 64px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
   input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -34,8 +34,8 @@
   <h1>Expenses</h1>
   <p>Sign in to see your spending.</p>
   <form method="post" action="/login">
-    <label for="email">Email</label>
-    <input id="email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="you@example.com" autofocus>
+    <label for="email">Email or username</label>
+    <input id="email" name="email" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="you@example.com or your username" autofocus>
     <p class="hint">The site owner can leave this empty and use the site password.</p>
     <label for="password">Password</label>
     <div class="field">

@@ -880,6 +880,39 @@ class AppTest(unittest.TestCase):
         finally:
             os.environ.pop('ADMIN_PASSWORD', None)
 
+    def test_username_password_change_and_a_year_signed_in(self):
+        db = server.DB()
+        try:
+            server.new_user(db, 'hari@example.com', 'hari-pass-1')
+            server.new_user(db, 'wife@example.com', 'wife-pass-1')
+        finally:
+            db.close()
+        def login(who, pw):
+            self.call('POST', '/login', urlencode({'email': who, 'password': pw}).encode(), auth='', content_type='application/x-www-form-urlencoded')
+            return self.headers.get('Set-Cookie', '')
+        first = login('hari@example.com', 'hari-pass-1')
+        self.assertIn(f'Max-Age={365 * 86400}', first)
+        hari = dict(auth='', cookie=first.split(';')[0])
+        post = lambda path, body, who: self.call('POST', path, json.dumps(body).encode(), **who)
+        self.assertIsNone(json.loads(self.call('GET', '/api/me', **hari)[1])['username'])  # the app asks for one
+        self.assertEqual(json.loads(post('/api/me/username', {'username': ' Hari.M '}, hari)[1]), {'username': 'hari.m'})
+        self.assertEqual(json.loads(self.call('GET', '/api/me', **hari)[1])['username'], 'hari.m')
+        wife = dict(auth='', cookie=login('wife@example.com', 'wife-pass-1').split(';')[0])
+        self.assertEqual(post('/api/me/username', {'username': 'HARI.M'}, wife)[0], 400)   # taken, whatever the capitals
+        self.assertEqual(post('/api/me/username', {'username': 'x@y.com'}, wife)[0], 400)  # never looks like an email
+        self.assertIn('session=', login('Hari.M', 'hari-pass-1'))                        # username or email both sign in
+        # A new password: the old one and other devices stop working; this device stays signed in.
+        other = dict(auth='', cookie=login('hari.m', 'hari-pass-1').split(';')[0])
+        self.assertEqual(post('/api/me/password', {'current': 'wrong-one', 'new': 'new-pass-123'}, hari)[0], 400)
+        self.assertEqual(post('/api/me/password', {'current': 'hari-pass-1', 'new': 'short'}, hari)[0], 400)
+        status, _ = post('/api/me/password', {'current': 'hari-pass-1', 'new': 'new-pass-123'}, hari)
+        self.assertEqual(status, 200)
+        hari = dict(auth='', cookie=self.headers['Set-Cookie'].split(';')[0])
+        self.assertEqual(self.call('GET', '/api/latest', **hari)[0], 200)
+        self.assertEqual(self.call('GET', '/api/latest', **other)[0], 401)
+        self.assertEqual(login('hari.m', 'hari-pass-1'), '')
+        self.assertIn('session=', login('hari.m', 'new-pass-123'))
+
     def test_no_one_sees_anyone_elses_data(self):
         db = server.DB()
         try:

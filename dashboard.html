@@ -189,6 +189,9 @@
   .owe-h { display: flex; justify-content: space-between; gap: 12px; } .owe-h b { overflow-wrap: anywhere; } .owe-h span { font-weight: 700; color: var(--bad, #b42318); white-space: nowrap; }
   .owe ul { list-style: none; margin: 6px 0 10px; padding: 0; font-size: 13px; color: var(--text-2); }
   .owe li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  form.account { display: grid; gap: 10px; margin-top: 12px; } form.account label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
+  form.account input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; max-width: 100%; }
+  form.account .btn { justify-self: start; }
   form.contact { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } form.contact label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
   form.contact input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-width: 0; max-width: 100%; }
   .fix.friend .friend-email input { width: 100%; }
@@ -971,6 +974,7 @@ function setData(sum, all) {
   state.earliest = state.all.reduce((a, t) => t._d < a ? t._d : a, today());
   friendNames();
   if (!state.shared && !state.err.shared) loadShared();
+  if (!state.me && !state.err.me) fetchInto('me', '/api/me', () => { if (/^#\/(overview|settings)|^$/.test(location.hash) && !typing()) render(); });
   if (!state.moneyAt || Date.now() - state.moneyAt > 60000) { loadMoney(); loadRate(); loadPlan(); loadSettings(); }  // EMI alerts, net worth and the check-in banner on Overview need them
 }
 // Keep the screen current without a manual refresh: ask "anything new?" when the app comes back to the
@@ -1113,6 +1117,8 @@ state.extra = +(ls.get('extraInr') || 0) || 0;
 // Fetch one piece of data the Debt and Plan tabs need. A failure is remembered (and shown with a Try again
 // button) instead of leaving the page on "Loading…"; one request per piece at a time.
 state.err = {}; const inflight = {};
+// Someone is filling in a form: a background refresh mustn't redraw it under their fingers.
+const typing = () => !!document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus, form.account:focus-within, form.friend:focus-within, form.contact:focus-within, form.buy:focus-within');
 function fetchInto(key, url, after) {
   if (inflight[url]) return inflight[url];
   return inflight[url] = (async () => {
@@ -1124,7 +1130,7 @@ function fetchInto(key, url, after) {
       after?.();
     } catch (e) { state.err[key] = e.message || 'no connection'; }
     finally { inflight[url] = null; }
-    if (/^#\/(money|debt|plan|analysis|overview|trail|liabilities|buy)|^$/.test(location.hash) && !document.querySelector('details.txn[open], form.holding:focus-within, .step input:focus, .setup input:focus')) render();
+    if (/^#\/(money|debt|plan|analysis|overview|trail|liabilities|buy)|^$/.test(location.hash) && !typing()) render();
   })();
 }
 function loadMoney() { state.moneyAt = Date.now(); return fetchInto('money', `/api/money?${moneyQs()}`); }
@@ -1686,7 +1692,7 @@ function moneyPage() {
       `<p class="muted small">Looked up every few hours from open exchange-rate services (open.er-api.com, or Frankfurter). Type your own to keep it; clear it to go back to today’s rate.</p>`) };
 }
 // Splits with people on this app: what they say you owe, what you've told them, and your saved friends (name + email).
-const loadShared = () => fetchInto('shared', '/api/shared', () => { friendNames(); if (/^#\/(friends?|overview)|^$/.test(location.hash)) render(); });
+const loadShared = () => fetchInto('shared', '/api/shared', () => { friendNames(); if (/^#\/(friends?|overview)|^$/.test(location.hash) && !typing()) render(); });
 const contactOf = name => (state.shared?.contacts || []).find(c => c.name.toLowerCase() === String(name).trim().toLowerCase());
 function friendNames() {  // the picker: saved friends first, then names only tagged so far
   $('friend-names').innerHTML = [...new Set([...(state.shared?.contacts || []).map(c => c.name), ...state.all.map(t => t.friend).filter(Boolean)])]
@@ -2092,8 +2098,13 @@ const periodText = P => `${P.label}${P.sofar ? ' ' + P.sofar : ''}`;
 
 /* ---------- Pages ---------- */
 const oweAlerts = () => sharedNet().filter(n => n.owe > 0).map(n => `<a class="banner" href="#/friends"><span>You owe ${esc(whoIs(n.email))} ${esc(owed(n.owe, n.cur))} · ${plural(n.items.length, 'item')}</span>${go1}</a>`).join('');
+// Signed in with an email and no username yet: ask for one (unique; sign in with either from then on).
+const usernameCard = () => state.me?.email && !state.me.username ? '<section class="card"><h2>Choose a username</h2>' +
+  '<p class="muted">Next time you can sign in with it or your email. 3-30 letters or digits; dots, dashes and underscores are fine.</p>' +
+  '<form class="account" data-act="username"><label>Username<input type="text" name="username" required minlength="3" maxlength="30" autocapitalize="none" spellcheck="false" autocomplete="username"></label>' +
+  '<button class="btn">Save</button></form></section>' : '';
 function overview(rt, P, X) {
-  if (!state.all.length) return { html: chips(P) + oweAlerts() + `<section class="card">${empty('No transactions yet', 'New bank SMS will appear here within seconds once your phone forwards them.<br><a href="/import">Import your old SMS</a>')}</section>` };
+  if (!state.all.length) return { html: usernameCard() + chips(P) + oweAlerts() + `<section class="card">${empty('No transactions yet', 'New bank SMS will appear here within seconds once your phone forwards them.<br><a href="/import">Import your old SMS</a>')}</section>` };
   const T = totals(X.cur), d = deltaPct(T.spent, totals(X.prev)), net = T.received - T.spent;
   const prevQs = P.step(-1), nextQs = P.step(1), canPrev = prevQs && P.start > state.earliest;
   let proj = '';
@@ -2139,7 +2150,7 @@ function overview(rt, P, X) {
   const Hh = state.money && health(), hcol = { Good: 'good', Fair: 'warn', 'Needs work': 'bad' };
   const healthCard = Hh?.score != null ? `<a class="banner health ${hcol[Hh.rating]}" href="#/health"><span>Money health: <b>${Hh.rating}</b> · ${Hh.score}/100 · ${esc(Hh.checks.find(c => c.tone === 'poor')?.label || Hh.checks.find(c => c.tone === 'fair')?.label || 'all checks good')}</span>${go1}</a>` : '';
   const lalerts = oweAlerts() + liabAlerts().map(a => `<a class="banner" href="#/liabilities"><span>${esc(a)}</span>${go1}</a>`).join('');
-  return { html: chips(P) + hero + healthCard + salaryBanner + checkin + emis + lalerts + todayCard + coming +
+  return { html: usernameCard() + chips(P) + hero + healthCard + salaryBanner + checkin + emis + lalerts + todayCard + coming +
     (review ? `<a class="banner" href="#/activity?${q}"><span>Needs a category · ${review}</span>${go1}</a>` : '') +
     card('Where it went', esc(state.currency), donut(cats, T.spent) + catRows(cats.slice(0, 4), T.spent, X, P) || empty('No spending in this period'), cats.length ? `#/categories?${q}` : '') +
     card('Spent, last 12 months', 'tap a month', monthBars(state.all, P.endMonth, P), `#/trends?${q}`) +
@@ -2366,8 +2377,14 @@ document.addEventListener('submit', async e => {
 function settings() {
   // Receipts for what the phone sent, so you can check a message arrived (and what happened to it).
   const deliveries = state.sum.deliveries || [], last = deliveries[0];
-  if (!state.me && !state.err.me) fetchInto('me', '/api/me', render);
-  const me = state.me, account = !me ? '' : card('Your account', '', `<p>${me.email ? `Signed in as <b>${esc(me.email)}</b>` : 'Signed in with the site password'}${me.owner ? ' · owner' : ''}.</p>` +
+  if (!state.me && !state.err.me) fetchInto('me', '/api/me', () => { if (!typing()) render(); });
+  const me = state.me, account = !me ? '' : card('Your account', '', `<p>${me.email ? `Signed in as <b>${esc(me.email)}</b>${me.username ? ` · <b>@${esc(me.username)}</b>` : ''}` : 'Signed in with the site password'}${me.owner ? ' · owner' : ''}. You stay signed in on this device for a year.</p>` +
+    (me.email ? `<form class="account" data-act="username"><label>${me.username ? 'Change username' : 'Choose a username'}<input type="text" name="username" required minlength="3" maxlength="30" autocapitalize="none" spellcheck="false" value="${esc(me.username || '')}"></label><button class="btn">Save</button></form>` +
+      '<form class="account" data-act="password"><label>Current password<input type="password" name="current" required autocomplete="current-password"></label>' +
+      '<label>New password (8+)<input type="password" name="new" required minlength="8" autocomplete="new-password"></label>' +
+      '<label>New password again<input type="password" name="again" required minlength="8" autocomplete="new-password"></label><button class="btn">Change password</button></form>' +
+      '<p class="muted small">Changing it signs you out on your other devices.</p>'
+      : '<p class="muted small">The site password is set in Vercel (EXPENSE_TOKEN). Link your data to an email on the admin page to get your own password.</p>') +
     (me.sync_key ? `<p class="muted">Your phone sync key: use it in the phone app (or the iPhone shortcut after “Bearer ”) instead of a password. Keep it private.</p><p class="key" style="font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px">${esc(me.sync_key)}</p>`
       : '<p class="muted">Your phone app uses the site password.</p>'));
   // Claude / ChatGPT: the MCP connector link carries this person's key, so it opens only their data.
@@ -2656,6 +2673,22 @@ document.addEventListener('input', e => {
   if (e.target.name !== 'friend' || !e.target.form?.matches('form.friend')) return;
   const box = e.target.form.querySelector('.friend-email'), name = e.target.value.trim();
   if (box) box.hidden = !name || !!contactOf(name)?.email;
+});
+document.addEventListener('submit', async e => {
+  if (!e.target.matches('form.account')) return;
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector('button');
+  if (f.dataset.act === 'password' && f.new.value !== f.again.value) { toast('The two new passwords don’t match.'); f.again.focus(); return; }
+  btn.disabled = true;
+  try {
+    if (f.dataset.act === 'username') {
+      const r = await post('/api/me/username', { username: f.username.value });
+      state.me = { ...state.me, username: r.username }; toast(`Saved. Sign in with @${r.username} or your email.`);
+    } else {
+      await post('/api/me/password', { current: f.current.value, new: f.new.value }); f.reset(); toast('Password changed. Other devices are signed out.');
+    }
+    render();
+  } catch (err) { btn.disabled = false; toast(`Not saved: ${err.message}`); }
 });
 document.addEventListener('submit', async e => {
   if (!e.target.matches('form.contact')) return;

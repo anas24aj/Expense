@@ -36,7 +36,7 @@ MAX_BODY = 16 * 1024
 VERSION = os.environ.get('VERCEL_GIT_COMMIT_SHA', 'local')[:7]  # which commit is live; Vercel sets this
 MAX_IMPORT_BODY, MAX_IMPORT_BATCH = 2 * 1024 * 1024, 500  # one upload batch from the import page
 MAX_STATEMENT_BODY = 4_400_000  # Vercel refuses request bodies over 4.5 MB; the file arrives base64 (a 3.2 MB file)
-SESSION_DAYS = 30
+SESSION_DAYS = 365  # stay signed in for a year on a device; a password change or the admin ends it sooner
 PAGES = {'/': 'dashboard.html', '/import': 'import.html'}
 # What Android needs to install the site as an app. No personal data, and Chrome fetches the manifest without
 # your login cookie, so these are served to anyone.
@@ -105,6 +105,30 @@ CONTACTS_SCHEMA = "CREATE TABLE IF NOT EXISTS contacts (name TEXT PRIMARY KEY, e
 SPACE = re.compile(r'(?:public|u_\d{1,9})\Z')
 EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}\Z')
 MIN_USER_PASSWORD = 8
+USERNAME = re.compile(r'[a-z0-9][a-z0-9._-]{2,29}\Z')  # 3-30 letters, digits . _ -; stored in lower case
+
+
+def set_username(db, space, name):
+    """db: the public space. Unique, case-insensitive, and never an email (so sign-in can tell them apart)."""
+    name = name.strip().lower()
+    if not USERNAME.match(name):
+        raise ValueError('3-30 letters, digits, dots, dashes or underscores, starting with a letter or digit')
+    if db.run('SELECT 1 FROM app_users WHERE username = :u AND space != :s', u=name, s=space):
+        raise ValueError('that username is taken')
+    db.run('UPDATE app_users SET username = :u WHERE space = :s', u=name, s=space)
+    return name
+
+
+def change_password(db, space, current, new):
+    """db: the public space. Returns the new hash (the session is re-signed with it)."""
+    found = db.run('SELECT pw_hash FROM app_users WHERE space = :s', s=space)
+    if not found or not password_matches(current, found[0]['pw_hash']):
+        raise ValueError('the current password is wrong')
+    if len(new) < MIN_USER_PASSWORD:
+        raise ValueError(f'the new password needs at least {MIN_USER_PASSWORD} characters')
+    h = hash_password(new)
+    db.run('UPDATE app_users SET pw_hash = :h WHERE space = :s', h=h, s=space)
+    return h
 # Transfers you linked by hand on the Money trail: the debit in one of your accounts and the credit it became.
 LINKS_SCHEMA = 'CREATE TABLE IF NOT EXISTS txn_links (debit_id BIGINT PRIMARY KEY, credit_id BIGINT NOT NULL UNIQUE)'
 # One row per imported statement file; its transactions carry statement_id, so the import can be undone.
@@ -204,6 +228,12 @@ class DB:
             self.run("UPDATE holdings SET auto = 1 WHERE kind = 'loan'")
         if 'limit_minor' not in cols:  # a card's credit limit, for the 70%-used warning
             self.run('ALTER TABLE holdings ADD COLUMN limit_minor BIGINT NOT NULL DEFAULT 0')
+        if self.space == 'public':  # app_users.username: a unique name to sign in with instead of the email
+            ucols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'app_users' AND table_schema = current_schema()")}
+                     if self.pg else {r['name'] for r in self.run('PRAGMA table_info(app_users)')})
+            if ucols and 'username' not in ucols:
+                self.run("ALTER TABLE app_users ADD COLUMN username TEXT")
+            self.run('CREATE UNIQUE INDEX IF NOT EXISTS app_users_username ON app_users (username)')
         # transactions.statement_id: the statement a row came from (none for SMS)
         cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions' AND table_schema = current_schema()")}
                 if self.pg else {r['name'] for r in self.run('PRAGMA table_info(transactions)')})
@@ -1373,7 +1403,8 @@ def sign_in(environ, given, email='', key=False, admin=False):
             if _admin_password() and hmac.compare_digest(given.encode(), _admin_password().encode()):
                 return 'ok', None, ''
         elif email:
-            found = db.run('SELECT * FROM app_users WHERE email = :e', e=email.strip().lower())
+            who = email.strip().lower()  # an email or a username: usernames never contain '@'
+            found = db.run('SELECT * FROM app_users WHERE email = :e OR username = :e', e=who)
             if found and found[0]['space'] and password_matches(given, found[0]['pw_hash']):
                 db.run('UPDATE app_users SET last_seen = :t WHERE id = :id', t=datetime.now(timezone.utc).isoformat(timespec='seconds'), id=found[0]['id'])
                 return 'ok', found[0]['space'], found[0]['pw_hash']
@@ -1485,7 +1516,7 @@ def drop_space(db, space):
 
 def users(db):
     out = []
-    for u in db.run('SELECT id, email, space, created_at, last_seen FROM app_users ORDER BY id'):
+    for u in db.run('SELECT id, email, username, space, created_at, last_seen FROM app_users ORDER BY id'):
         out.append(dict(u))
     linked = {u['space'] for u in out}
     return {'users': out, 'owner_linked': 'public' in linked, 'spaces': ['public'] + [u['space'] for u in out if u['space'] != 'public']}
@@ -2080,6 +2111,8 @@ def _app(environ, start_response):
             pair = (int(pair['debit']), None if pair.get('credit') is None else int(pair['credit']))
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) in (('POST', '/api/me/username'), ('POST', '/api/me/password')):
+        pass  # handled with /api/me below
     elif (method, path) == ('POST', '/api/shared/paid'):
         try:
             paid = read_json(environ, MAX_BODY)
@@ -2108,13 +2141,26 @@ def _app(environ, start_response):
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
+    if path in ('/api/me/username', '/api/me/password'):  # your own account: a username, a new password
+        pub = DB()
+        try:
+            body = read_json(environ, MAX_BODY)
+            if path == '/api/me/username':
+                return respond('200 OK', {'username': set_username(pub, space, str(body.get('username') or ''))})
+            new_hash = change_password(pub, space, str(body.get('current') or ''), str(body.get('new') or ''))
+            cookie = new_session(space, new_hash)  # other devices are signed out; this one stays in
+            return respond('200 OK', {'changed': True}, headers=[('Set-Cookie', f'session={cookie}; Max-Age={SESSION_DAYS * 86400}; Path=/; HttpOnly; Secure; SameSite=Lax')])
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': str(e)})
+        finally:
+            pub.close()
     if path == '/api/me':  # who is signed in, and their phone sync key
         pub = DB()
         try:
-            me = pub.run('SELECT email, sync_key FROM app_users WHERE space = :s', s=space)
+            me = pub.run('SELECT email, username, sync_key FROM app_users WHERE space = :s', s=space)
         finally:
             pub.close()
-        return respond('200 OK', {'email': me[0]['email'] if me else None, 'owner': space == 'public',
+        return respond('200 OK', {'email': me[0]['email'] if me else None, 'username': me[0]['username'] if me else None, 'owner': space == 'public',
                                   'sync_key': me[0]['sync_key'] if me else None})
     db = DB(space=space)
     try:

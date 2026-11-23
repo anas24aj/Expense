@@ -115,7 +115,7 @@ function draw() {
   $('signin').hidden = true; $('app').hidden = false; $('out').hidden = false;
   $('owner').hidden = U.owner_linked;
   $('people-title').textContent = `People · ${U.users.length}`;
-  $('people').innerHTML = U.users.map(u => `<div class="person"><div><b>${esc(u.email)}</b>${u.space === 'public' ? ' · owner' : ''}<div class="muted">Added ${esc(u.created_at.slice(0, 10))}${u.last_seen ? ` · last sign-in ${esc(u.last_seen.slice(0, 10))}` : ' · never signed in'}</div></div>` +
+  $('people').innerHTML = U.users.map(u => `<div class="person"><div><b>${esc(u.email)}</b>${u.username ? ` · @${esc(u.username)}` : ''}${u.space === 'public' ? ' · owner' : ''}<div class="muted">Added ${esc(u.created_at.slice(0, 10))}${u.last_seen ? ` · last sign-in ${esc(u.last_seen.slice(0, 10))}` : ' · never signed in'}</div></div>` +
     `<div class="actions"><button data-do="open" data-space="${esc(u.space)}">Open their app</button><button data-do="password" data-id="${u.id}">New password</button>` +
     `<button data-do="key" data-id="${u.id}">New sync key</button><button class="danger" data-do="delete" data-id="${u.id}" data-owner="${u.space === 'public'}">Delete</button></div></div>`).join('')
     || '<p class="muted">No one yet.</p>';
