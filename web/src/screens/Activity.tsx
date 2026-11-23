@@ -92,6 +92,7 @@ export default function ActivityPage() {
 
   return (
     <Page title="Activity" trail={<>
+      <button className="icon-btn" onClick={() => nav(`/month/${month}`)} aria-label="Month overview by category"><Icon name="chart" /></button>
       <button className="icon-btn" onClick={() => nav('/activity/review')} aria-label="To sort"><Icon name="tag" /></button>
       <button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add a transaction"><Icon name="plus" /></button>
     </>}>

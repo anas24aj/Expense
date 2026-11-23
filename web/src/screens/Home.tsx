@@ -1,8 +1,9 @@
 import { Link, Navigate } from 'react-router-dom';
 import { useApi } from '../api/client';
-import type { Account, Commitment, Home, HouseholdFull, Items, NetWorth, Settings, Statement, Trip } from '../api/types';
+import type { Account, Commitment, Home, HouseholdFull, Items, MonthPlan, NetWorth, Payoff, Settings, Statement, Trip } from '../api/types';
 import { dueLabel, fmt, monthLabel, today } from '../lib/format';
 import { ErrorCard, Icon, List, ListRow, Money, PageSkeleton, Page, Section, StatusBadge, Tile } from '../ui';
+import { DebtFreeLine } from './Month';
 
 export const KIND_ICON: Record<string, [string, string]> = {
   rent: ['house', '#5856d6'], bill: ['bolt', '#ff9f0a'], subscription: ['tv', '#af52de'], emi: ['bank', '#5e5ce6'], support: ['heart', '#ff375f'],
@@ -31,6 +32,8 @@ export default function HomePage() {
   const accounts = useApi<Items<Account>>('/accounts');
   const stmts = useApi<Items<Statement>>('/ingest/statements');
   const hh = useApi<HouseholdFull>('/households/current');
+  const payoff = useApi<Payoff>('/insights/payoff');
+  const plan = useApi<MonthPlan>('/insights/plan');
   let onboarded = true;
   try { onboarded = localStorage.getItem('onboarded') === '1'; } catch { /* storage blocked */ }
   if (settings.data && !settings.data.salary && !onboarded) return <Navigate to="/welcome" replace />;
@@ -48,7 +51,7 @@ export default function HomePage() {
     <Page title="Home" subtitle={q.data ? monthLabel(q.data.month.month, true) : ' '}
       trail={<Link to="/more/profile" className="icon-btn" aria-label="Profile"><Icon name="person" /></Link>}>
       {busy ? <PageSkeleton /> : q.error || nw.error ? <ErrorCard error={q.error || nw.error} retry={() => { q.refetch(); nw.refetch(); }} />
-        : <HomeBody h={q.data!} n={nw.data!} setup={setup} payday={daysTo(settings.data?.salary_day ?? null)} trip={trip} hasAccounts={!!accounts.data?.items.length} />}
+        : <HomeBody h={q.data!} n={nw.data!} setup={setup} payday={daysTo(settings.data?.salary_day ?? null)} trip={trip} hasAccounts={!!accounts.data?.items.length} payoff={payoff.data} plan={plan.data} />}
     </Page>
   );
 }
@@ -67,8 +70,9 @@ function GetStarted({ steps }: { steps: Step[] }) {
   );
 }
 
-function HomeBody({ h, n, setup, payday, trip, hasAccounts }: { h: Home; n: NetWorth; setup: Step[] | null; payday: number | null; trip?: Trip; hasAccounts: boolean }) {
+function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h: Home; n: NetWorth; setup: Step[] | null; payday: number | null; trip?: Trip; hasAccounts: boolean; payoff?: Payoff; plan?: MonthPlan }) {
   const m = h.month;
+  const top = m.by_category.slice(0, 3), topMax = Math.max(1, ...top.map(c => c.amount.minor));
   const urgent = h.alerts.filter(a => a.level !== 'info');
   if (setup && !hasAccounts && !m.spent.minor && !m.income.minor) return <div className="stack"><GetStarted steps={setup} /></div>;
   const countries = n.countries.filter(c => c.code !== 'OTHER' || c.assets.minor || c.liabilities.minor);
@@ -85,6 +89,22 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts }: { h: Home; n: NetW
         </div>
       </Link>
 
+
+      <Link to={`/month/${m.month}`} className="glass card span-2" style={{ color: 'inherit' }} aria-label={`${monthLabel(m.month, true)} overview`}>
+        <div className="between"><span className="card-title" style={{ margin: 0 }}>{monthLabel(m.month, true)}</span><Icon name="chevR" className="chev" size={14} /></div>
+        <div className="between" style={{ marginTop: 6, alignItems: 'baseline' }}>
+          <div><span className="caption">Spent </span><b className="num" style={{ font: '700 30px var(--font-display)', letterSpacing: '-.02em' }}>{fmt(m.spent)}</b></div>
+          {m.last_month && <span className="caption">{monthLabel(m.last_month.month)} <Money m={m.last_month.spent} compact /></span>}
+        </div>
+        <div className="stack-sm" style={{ marginTop: 10 }}>
+          {top.map(c => (
+            <div key={c.category}><div className="between caption"><span>{c.category}</span><Money m={c.amount} /></div>
+              <div className="meter"><i style={{ width: `${Math.max(2, 100 * c.amount.minor / topMax)}%` }} /></div></div>
+          ))}
+        </div>
+        <p className="caption" style={{ marginTop: 8 }}>Income <Money m={m.income} compact />{m.saved ? <> · saved <Money m={m.saved} compact /></> : null}{m.loss && m.loss.total.minor ? <> · <span className="neg">lost <Money m={m.loss.total} compact /></span></> : null} · all categories</p>
+      </Link>
+
       <section className="glass card span-2" aria-label="Saudi and India">
         <div className="split">
           {countries.map(c => (
@@ -98,12 +118,29 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts }: { h: Home; n: NetW
         <p className="footnote" style={{ marginTop: 10 }}>Each country in its own currency. Together in SAR at 1 SAR = ₹{n.fx.SAR_INR.toFixed(2)}.</p>
       </section>
 
-      <Link to="/plan" className="glass card" style={{ color: 'inherit' }}>
-        <div className="between"><span className="card-title" style={{ margin: 0 }}>Free this month</span>
+      <section className="glass card span-2" aria-label="This month and next">
+        <div className="between"><span className="card-title" style={{ margin: 0 }}>Expected</span>
           {payday !== null && <span className="badge blue"><Icon name="calendar" size={12} />Payday in {payday}d</span>}</div>
-        <div style={{ font: '700 30px var(--font-display)', letterSpacing: '-.02em', marginTop: 6 }} className={`num ${m.free.minor < 0 ? 'neg' : ''}`}>{fmt(m.free)}</div>
-        <p className="caption">{m.income.minor ? <>of <Money m={m.income} /> after bills, EMIs and set-asides · see the plan</> : 'Set your salary to see what’s free'}</p>
-      </Link>
+        {plan ? <div className="split" style={{ marginTop: 6 }}>
+          {plan.months.map((pm, i) => (
+            <Link key={pm.month} to={i ? `/plan?month=${pm.month}` : '/plan'} className="split-col" style={{ color: 'inherit' }}>
+              <span className="caption"><b>{i ? 'Next month' : 'This month'}</b> · {monthLabel(pm.month)}</span>
+              <span className="caption">In <span className="pos"><Money m={pm.income} compact /></span></span>
+              <span className="caption">Out <Money m={pm.out} compact /> <span className="footnote">bills, EMIs, cards</span></span>
+              <b className={`num ${pm.short ? 'neg' : 'pos'}`} style={{ fontSize: 20 }}>{pm.short ? <>Short <Money m={pm.short} compact /></> : <>+<Money m={pm.surplus} compact /></>}</b>
+            </Link>
+          ))}
+        </div> : <p className="caption">{m.income.minor ? <>Free this month <Money m={m.free} /></> : 'Set your salary to see what’s free'}</p>}
+      </section>
+
+      {payoff && payoff.debts.length > 0 && (
+        <Link to="/payoff" className="glass card" style={{ color: 'inherit' }}>
+          <span className="card-title" style={{ margin: 0 }}>Debt-free plan</span>
+          <div style={{ font: '700 30px var(--font-display)', letterSpacing: '-.02em', marginTop: 6 }} className={`num ${payoff.cards.months === null ? 'neg' : ''}`}>
+            {payoff.cards.months === null ? 'Cards growing' : payoff.cards.months ? `${payoff.cards.months} mo` : 'Cards clear'}</div>
+          <p className="caption"><DebtFreeLine p={payoff} /> · interest <span className="neg"><Money m={payoff.interest_now.total} compact />/mo</span></p>
+        </Link>
+      )}
 
       <Link to="/activity?purpose=fee" className="glass card" style={{ color: 'inherit' }}>
         <span className="card-title" style={{ margin: 0 }}>Lost to fees &amp; interest</span>
@@ -119,7 +156,7 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts }: { h: Home; n: NetW
 
       <nav className="tiles span-2" aria-label="Go to">
         <Shortcut to="/accounts" icon="bank" color="#0a84ff" title="Accounts" sub="India · Saudi" />
-        <Shortcut to="/money" icon="transfer" color="#5e5ce6" title="Money moved" sub="Transfers, family, people" />
+        <Shortcut to="/people" icon="people" color="#ff9f0a" title="People" sub="Who owes whom" />
         <Shortcut to={trip ? `/trips/${trip.id}` : '/trips'} icon="plane" color="#32ade6" title={trip ? trip.city : 'Trips'} sub={trip ? 'On a trip now' : 'Work & personal'} />
         <Shortcut to="/activity/review" icon="tag" color={h.review_count ? '#ff9f0a' : '#30d158'} title={h.review_count ? `${h.review_count.toLocaleString()} to sort` : 'All sorted'} sub="Group by shop, one tap" />
       </nav>

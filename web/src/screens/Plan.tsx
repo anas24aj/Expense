@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Account, Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, MonthPlan, Money as MoneyT, Person, PlanLine, PlanMonth, Pot, WhatIf } from '../api/types';
-import { fmt, monthLabel, shortDate, sumByCurrency, today, toMinor } from '../lib/format';
+import type { Account, Advice, Commitment, Fund, HouseholdFull, Liability, Lookahead, MonthPlan, Money as MoneyT, PlanLine, PlanMonth, Pot, WhatIf } from '../api/types';
+import { fmt, monthLabel, sumByCurrency, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast,
 } from '../ui';
-import { DueRow, KIND_ICON } from './Home';
 import { PersonAvatar } from './People';
 
-const GROUPS: [string, string][] = [['rent', 'Rent'], ['bill', 'Bills'], ['subscription', 'Subscriptions'], ['emi', 'EMIs'], ['support', 'Family support'],
-  ['insurance', 'Insurance'], ['school', 'School'], ['milestone', 'Property milestones']];
-const CYCLES = [{ v: 1, l: 'Monthly' }, { v: 3, l: 'Every 3 months' }, { v: 6, l: 'Every 6 months' }, { v: 12, l: 'Yearly' }];
 
 export default function PlanPage() {
   const look = useApi<Lookahead>('/insights/lookahead', { months: 12 });
@@ -24,7 +20,11 @@ export default function PlanPage() {
     <Page title="Plan">
       <div className="grid-desktop stack">
         <div className="span-2"><MonthPlanner /></div>
-        <div className="span-2"><Commitments q={commits} /></div>
+        <List className="span-2">
+          <ListRow to="/recurring" icon={<Tile icon="repeat" color="#af52de" />} title="Recurring payments" sub="Rent, bills, subscriptions, EMIs, family: all feed this plan"
+            end={commits.data ? sumByCurrency(commits.data.items.map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / Math.max(1, c.cycle_months)) }))).map(m => fmt(m, { compact: true })).join(' + ') + '/mo' : undefined} />
+          <ListRow to="/payoff" icon={<Tile icon="target" color="#ff453a" />} title="Debt-free plan" sub="Months to clear the cards, then the loans" />
+        </List>
         <Debts />
         <Funds />
         <Section title="Next 12 months">
@@ -171,163 +171,6 @@ function LookaheadCard({ l }: { l: Lookahead }) {
       ) : <BarChart data={l.months.map(m => ({ month: m.month, value: m.free.minor / 100 }))} highlight={0} />}
       {l.months.filter(m => m.warnings.length).slice(0, 3).map(m => <p key={m.month} className="caption"><Icon name="info" size={13} /> <b>{monthLabel(m.month, true)}</b> — {m.warnings[0]}</p>)}
     </div>
-  );
-}
-
-function Commitments({ q }: { q: ReturnType<typeof useApi<{ items: Commitment[] }>> }) {
-  const detect = useApi<{ items: DetectedCommitment[] }>('/commitments/detect');
-  const add = useWrite('POST', '/commitments');
-  const markPaid = useWrite<{ id: string; payer?: { kind: string; id: string } }>('POST', b => `/commitments/${b.id}/paid`);
-  const toast = useToast();
-  const [creating, setCreating] = useState(false);
-  const [open, setOpen] = useState<Commitment | null>(null);
-  const [editing, setEditing] = useState<Commitment | null>(null);
-  const del = useWrite<{ id: string }>('DELETE', b => `/commitments/${b.id}`);
-  const deep = new URLSearchParams(useLocation().search).get('commitment');
-  useEffect(() => { if (deep && q.data) setOpen(q.data.items.find(c => c.id === deep) || null); }, [deep, q.data]);
-  if (q.isLoading) return <PageSkeleton />;
-  if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
-  const all = q.data!.items;
-  const sugg = detect.data?.items || [];
-  return (
-    <Section title="Commitments" action={<button onClick={() => setCreating(true)}>Add</button>}>
-      {sugg.length > 0 && (
-        <div className="stack-sm">
-          <span className="caption" style={{ marginLeft: 4 }}><Icon name="sparkle" size={13} /> We found these in your spending — add?</span>
-          <div className="hscroll">
-            {sugg.map(s => {
-              const [icon, color] = KIND_ICON[s.kind] || ['repeat', '#8e8e93'];
-              return (
-                <div key={s.name} className="glass card stack-sm" style={{ width: 200 }}>
-                  <Tile icon={icon} color={color} />
-                  <b>{s.name}</b>
-                  <span className="caption"><Money m={s.amount} /> · {s.cycle_months === 1 ? 'monthly' : `every ${s.cycle_months} mo`}</span>
-                  <button className="btn small secondary" onClick={async () => {
-                    await add.mutateAsync({ name: s.name, kind: s.kind, amount_minor: s.amount.minor, currency: s.amount.currency, cycle_months: s.cycle_months, next_due: s.next_due, match_pattern: s.match_pattern, evidence_txn_ids: s.evidence_txn_ids });
-                    toast(`${s.name} added`);
-                  }}><Icon name="plus" size={16} />Add</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      {!all.length && !sugg.length && <div className="glass card caption">Rent, bills, EMIs, school fees and money sent home: anything you pay on a schedule. We spot them in your transactions, or tap Add.</div>}
-      <div className="grid-desktop stack">
-        {GROUPS.map(([kind, label]) => {
-          const items = all.filter(c => c.kind === kind);
-          if (!items.length) return null;
-          const monthly = sumByCurrency(items.map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / Math.max(1, c.cycle_months)) })));
-          return (
-            <div key={kind} className="stack-sm">
-              <div className="between" style={{ margin: '4px 4px 0' }}><b>{label}</b><span className="caption">≈ {monthly.map(m => fmt(m)).join(' + ')}/mo</span></div>
-              <List>{items.map(c => <DueRow key={c.id} c={c} onClick={() => setOpen(c)} />)}</List>
-            </div>
-          );
-        })}
-      </div>
-      <Sheet open={!!open} onClose={() => setOpen(null)} title={open?.name}>
-        {open && (
-          <div className="stack">
-            <dl className="kv glass card">
-              <dt>Amount</dt><dd><Money m={open.amount} /></dd>
-              <dt>Repeats</dt><dd>{CYCLES.find(c => c.v === open.cycle_months)?.l || 'Once'}</dd>
-              <dt>Next due</dt><dd>{shortDate(open.next_due)}</dd>
-              <dt>Last paid</dt><dd>{open.last_paid ? shortDate(open.last_paid.day) : '—'}</dd>
-            </dl>
-            {open.shares.length > 0 && (
-              <Section title="Shared with">
-                <List>{open.shares.map(s => (
-                  <ListRow key={s.member_id || s.contact_id} icon={<PersonAvatar id={s.member_id || s.contact_id} name={s.name || '?'} size={32} />} title={s.name} sub={<>Share <Money m={s.share} />{s.paid_this_cycle ? '' : ' · tap when they pay'}</>}
-                    end={s.paid_this_cycle ? <span className="badge green">Paid</span> : <span className="badge orange">Not paid</span>} chevron={false}
-                    onClick={s.paid_this_cycle ? undefined : async () => {
-                      await markPaid.mutateAsync({ id: open.id, payer: { kind: s.member_id ? 'member' : 'contact', id: (s.member_id || s.contact_id)! } });
-                      toast(`${s.name} paid`); setOpen(null);
-                    }} />
-                ))}</List>
-              </Section>
-            )}
-            {open.status !== 'paid' && <button className="btn block" onClick={async () => { await markPaid.mutateAsync({ id: open.id }); toast('Marked paid for this cycle'); setOpen(null); }}><Icon name="check" />Mark paid</button>}
-            <div className="grid-2">
-              <button className="btn secondary" onClick={() => { setEditing(open); setOpen(null); }}><Icon name="note" size={16} />Edit</button>
-              <button className="btn danger" disabled={del.isPending} onClick={async () => {
-                if (!confirm(`Delete ${open.name}? Past payments stay in your transactions.`)) return;
-                await del.mutateAsync({ id: open.id }); toast(`${open.name} deleted`); setOpen(null);
-              }}><Icon name="trash" size={16} />Delete</button>
-            </div>
-            <p className="footnote" style={{ textAlign: 'center' }}>Payments tick this off automatically when the bank SMS matches.</p>
-          </div>
-        )}
-      </Sheet>
-      <NewCommitmentSheet open={creating} onClose={() => setCreating(false)} />
-      {editing && <NewCommitmentSheet open edit={editing} onClose={() => setEditing(null)} />}
-    </Section>
-  );
-}
-
-/** Add a commitment, or change one (`edit`): the same form, saved with PATCH. */
-function NewCommitmentSheet({ open, onClose, edit }: { open: boolean; onClose: () => void; edit?: Commitment }) {
-  const [name, setName] = useState(edit?.name || '');
-  const [kind, setKind] = useState<string>(edit?.kind || 'bill');
-  const [amount, setAmount] = useState(edit ? String(edit.amount.minor / 100) : '');
-  const [currency, setCurrency] = useState<string>(edit?.amount.currency || 'SAR');
-  const [cycle, setCycle] = useState(edit?.cycle_months || 1);
-  const [due, setDue] = useState(edit?.next_due || today());
-  const [country, setCountry] = useState<'SA' | 'IN' | 'other'>(edit ? (edit.country === 'IN' ? 'IN' : edit.country === 'SA' ? 'SA' : 'other') : 'SA');
-  const editShares = (edit?.shares || []).map(s => [s.member_id || s.contact_id || '', s] as const);
-  const [sharers, setSharers] = useState<string[]>(editShares.map(([id]) => id));
-  const [equal, setEqual] = useState<'equal' | 'custom'>(editShares.length ? 'custom' : 'equal');
-  const [custom, setCustom] = useState<Record<string, string>>(Object.fromEntries(editShares.map(([id, s]) => [id, String(s.share.minor / 100)])));
-  const people = (useApi<{ items: Person[] }>(open ? '/people' : null).data?.items || []).filter(p => p.relation !== 'self');
-  const add = useWrite<Record<string, unknown>>(edit ? 'PATCH' : 'POST', edit ? `/commitments/${edit.id}` : '/commitments');
-  const toast = useToast();
-  const total = toMinor(Number(amount) || 0, currency);
-  const each = Math.floor(total / (sharers.length + 1));  // you're one of the equal shares
-  const shareOf = (id: string) => (equal === 'equal' ? each : toMinor(Number(custom[id]) || 0, currency));
-  const others = sharers.reduce((s, id) => s + shareOf(id), 0);
-  const pickCurrency = (c: string) => { setCurrency(c); setCountry(c === 'INR' ? 'IN' : c === 'SAR' ? 'SA' : 'other'); };
-  const save = async () => {
-    const shares = sharers.map(id => { const p = people.find(x => x.id === id)!; return { [p.kind === 'member' ? 'member_id' : 'contact_id']: id, share_minor: shareOf(id) }; });
-    await add.mutateAsync({ name, kind, amount_minor: total, currency, cycle_months: cycle, next_due: due, country: country === 'other' ? '' : country, shares });
-    toast(edit ? `${name} saved` : `${name} added`); if (!edit) { setName(''); setAmount(''); setSharers([]); setCustom({}); } onClose();
-  };
-  return (
-    <Sheet open={open} onClose={onClose} title={edit ? `Edit ${edit.name}` : 'New commitment'} detent="large">
-      <div className="stack">
-        <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={pickCurrency} />
-        <Field label="What"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Rent, DEWA, Amma…" /></Field>
-        <div className="chips" style={{ flexWrap: 'wrap' }}>{GROUPS.map(([k, l]) => <Chip key={k} on={kind === k} onClick={() => setKind(k)}>{l}</Chip>)}</div>
-        <div className="chips" style={{ flexWrap: 'wrap' }}>{CYCLES.map(c => <Chip key={c.v} on={cycle === c.v} onClick={() => setCycle(c.v)}>{c.l}</Chip>)}</div>
-        <Field label="Next due"><input className="input" type="date" value={due} onChange={e => setDue(e.target.value)} /></Field>
-        <Segmented label="Country" value={country} onChange={setCountry} options={[{ value: 'SA', label: 'Saudi' }, { value: 'IN', label: 'India' }, { value: 'other', label: 'Other' }]} />
-        <div className="stack-sm">
-          <div className="between" style={{ margin: '0 4px' }}><b>Shared with</b>{sharers.length > 0 && <span className="caption">yours {fmt({ minor: total - others, currency })}</span>}</div>
-          {sharers.length > 0 && <Segmented label="Split" value={equal} onChange={setEqual} options={[{ value: 'equal', label: 'Equal split' }, { value: 'custom', label: 'Custom amounts' }]} />}
-          <List>
-            {people.map(p => {
-              const on = sharers.includes(p.id);
-              return (
-                <div key={p.id} className="list-row">
-                  <button type="button" className="row-flex" style={{ flex: 1, minWidth: 0, background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit', textAlign: 'left', minHeight: 44 }}
-                    aria-pressed={on} onClick={() => setSharers(on ? sharers.filter(x => x !== p.id) : [...sharers, p.id])}>
-                    <Avatar name={p.name} photo={p.photo} size={32} /><span style={{ flex: 1, minWidth: 0 }}>{p.name}<br /><span className="caption">{p.kind === 'member' ? p.relation : 'friend'}</span></span>
-                    {on && equal === 'equal' && <span className="num caption">{fmt({ minor: each, currency })}</span>}
-                    {on ? <Icon name="check" size={22} className="pos" /> : <Icon name="plus" size={20} className="muted" />}
-                  </button>
-                  {on && equal === 'custom' && <input className="input" inputMode="decimal" aria-label={`${p.name}’s share`} style={{ width: 96, flex: 'none' }} placeholder="0"
-                    value={custom[p.id] || ''} onChange={e => setCustom({ ...custom, [p.id]: e.target.value.replace(/[^\d.]/g, '') })} />}
-                </div>
-              );
-            })}
-          </List>
-          {!people.length && <p className="caption" style={{ marginLeft: 4 }}>Add family or friends in People to share a bill.</p>}
-        </div>
-        <button className="btn block" disabled={!name || !Number(amount) || others > total || add.isPending} onClick={save}>{edit ? 'Save' : 'Add'}</button>
-        {others > total && <p className="error" role="alert">Shares add up to more than the bill.</p>}
-        {add.error && <p className="error" role="alert">{add.error.message}</p>}
-        {cycle > 1 && <p className="footnote" style={{ textAlign: 'center' }}>We’ll make a fund and suggest a monthly set-aside.</p>}
-      </div>
-    </Sheet>
   );
 }
 

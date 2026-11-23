@@ -15,7 +15,7 @@ export function MorePage({ me }: { me: Me }) {
   const qc = useQueryClient();
   const signOut = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); qc.clear(); nav('/signin', { replace: true }); };
   const rows: [string, string, string, string, string?][][] = [
-    [['/accounts', 'Accounts & property', 'bank', '#0a84ff', 'India and Saudi, cards, loans, flats, car'], ['/money', 'Money moved', 'transfer', '#5e5ce6', 'Saudi → India, card payments, family, people'],
+    [['/people', 'People', 'people', '#ff9f0a', 'Who owes whom, family, roommate, settle up'], ['/accounts', 'Accounts & property', 'bank', '#0a84ff', 'India and Saudi, cards, loans, flats, car'], ['/money', 'Money moved', 'transfer', '#5e5ce6', 'Saudi → India, card payments, family, people'],
       ['/trips', 'Trips & claims', 'plane', '#32ade6', 'Work and personal trips, what the company owes']],
     [['/more/import', 'Import statements', 'upload', '#30b0c7', 'PDF, Excel or CSV'], ['/more/devices', 'Phones & Shortcut', 'phone', '#34c759', 'Send bank SMS automatically'], ['/more/claude', 'Connect Claude', 'sparkle', '#d97757', 'Ask questions about your money']],
     [['/more/household', 'Household & members', 'family', '#ff375f', me.household.name], ['/more/profile', 'Profile & password', 'person', '#8e8e93'], ['/more/settings', 'Settings', 'gear', '#636366', 'Salary, currencies, timezone']],
@@ -583,7 +583,7 @@ function HomeRent({ a }: { a: Asset }) {
     <>
       <Section title="Rent" action={<Link className="link-btn" to="/plan">Plan</Link>}>
         {a.rent?.length ? <List>{a.rent.map(c => (
-          <ListRow key={c.id} to={`/plan?commitment=${c.id}`} icon={<Tile icon="house" color="#ff9f0a" />} title={c.name}
+          <ListRow key={c.id} to={`/recurring?commitment=${c.id}`} icon={<Tile icon="house" color="#ff9f0a" />} title={c.name}
             sub={`${cycle(c.cycle_months)} · next ${shortDate(c.next_due)}${c.last_paid ? ` · paid ${shortDate(c.last_paid.day)}` : ''}`}
             end={<Money m={c.amount} />} endSub={<span className={`badge ${c.status === 'paid' ? 'green' : c.status === 'overdue' ? 'red' : 'orange'}`}>{c.status}</span>} />
         ))}</List> : <p className="caption" style={{ marginLeft: 4 }}>Add the rent under Plan › Commitments and link it to this home (paid 6 months ahead? pick “Every 6 months”).</p>}

@@ -123,9 +123,9 @@ def _plan_month(req, ctx, accts, m, look, india_cash, people):
         last = (cj['last_paid'] or {}).get('day') or ''
         if due or overdue:
             line('commitment', c['name'], engine.your_share(c), c['currency'], today if overdue else due[0], c['account_id'],
-                 f"/plan?commitment={c['id']}", counted=c['id'] not in funded, country=c['country'])
+                 f"/recurring?commitment={c['id']}", counted=c['id'] not in funded, country=c['country'])
         elif last[:7] == m:
-            line('commitment', c['name'], engine.your_share(c), c['currency'], last, c['account_id'], f"/plan?commitment={c['id']}", paid=True,
+            line('commitment', c['name'], engine.your_share(c), c['currency'], last, c['account_id'], f"/recurring?commitment={c['id']}", paid=True,
                  country=c['country'])
     for l in ctx['liabs']:
         cons = l['construction']
@@ -357,3 +357,44 @@ def review_merchant(req):
     ids = classify.apply_rule(req.hh, merchant, category, purpose, pm, pc)
     left = ledger.visible_txns(req.hh, req.member['id'], REVIEW_WHERE, rb=classify.REVIEW_BELOW)
     return {'merchant': merchant, 'updated': len(ids), 'left': len(left)}
+
+
+# ---------- one credit card ----------
+
+@route('GET', '/api/insights/card/{id}')
+def card(req):
+    """One card: owed now, the last statement (billed in its cycle, paid since it closed; None without a statement day),
+    six months of spending, payments and money lost to interest and fees, utilisation and the next due date. A field
+    that is not known is None, for the app to say "unknown"."""
+    ctx = insights.load(req)
+    aid = valid.ident(req.params['id'], 'account')
+    a = next((x for x in ctx['accounts'] if x['id'] == aid), None)
+    if not a or a['kind'] not in CARD_KINDS:
+        raise ApiError(404, 'no such card')
+    cur, today = a['currency'], ctx['today']
+    rows = [t for t in ctx['raw_txns'] if t['account_id'] == aid and t['currency'] == cur and t['category'] != 'Ignored']
+
+    def total(keep, after, upto):
+        return _M(sum(t['amount_minor'] for t in rows if keep(t) and after < t['day'] <= upto), cur)
+    lost = lambda t: t['direction'] == 'debit' and insights.is_loss(t)
+    spend = lambda t: t['direction'] == 'debit' and t['purpose'] != 'transfer' and not insights.is_loss(t)
+    credit = lambda t: t['direction'] == 'credit'
+    months = [{'month': m, 'spent': total(spend, m, m + '-99'), 'paid': total(credit, m, m + '-99'), 'lost': total(lost, m, m + '-99')}
+              for m in (engine.add_months(today[:7], -k) for k in range(5, -1, -1))]
+    statement = None
+    if a['statement_day']:
+        close = f"{today[:7]}-{min(28, a['statement_day']):02d}"
+        close = close if close <= today else engine.add_months(close, -1)
+        opened = engine.add_months(close, -1)
+        billed = total(lambda t: t['direction'] == 'debit', opened, close)['minor'] - total(credit, opened, close)['minor']
+        paid = total(credit, close, '9999')['minor']
+        statement = {'from': opened, 'to': close, 'billed': _M(max(0, billed), cur), 'paid': _M(paid, cur), 'left': _M(max(0, billed - paid), cur)}
+    due = None
+    if a['due_day']:
+        due = f"{today[:7]}-{min(28, a['due_day']):02d}"
+        due = due if due >= today else engine.add_months(due, 1)
+    owed = None if a['balance'] is None else max(0, -a['balance']['minor'])
+    rate, assumed = insights.card_rate(a['rate_bp'], cur)
+    return {'id': aid, 'currency': cur, 'owed': None if owed is None else _M(owed, cur), 'limit': a['credit_limit'], 'used_pct': a['used_pct'],
+            'due_day': a['due_day'] or None, 'next_due': due, 'statement': statement, 'months': months,
+            'rate_bp': rate, 'rate_assumed': assumed, 'interest_month': None if owed is None else _M(owed * rate / 120000, cur)}

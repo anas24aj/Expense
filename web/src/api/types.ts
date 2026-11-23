@@ -108,10 +108,24 @@ export interface Settings { salary: Money | null; salary_day: number | null; eme
 
 export interface MonthInsight {
   month: string; currency: Currency; income: Money; spent: Money; committed_due: Money; committed_paid: Money; set_aside: Money; free: Money;
-  by_category: { category: string; amount: Money }[]; by_purpose: Record<string, Money> | { purpose: string; amount: Money }[]; other_out?: Money;
+  by_category: { category: string; amount: Money; last?: Money }[]; by_purpose: Record<string, Money> | { purpose: string; amount: Money }[]; other_out?: Money;
   owed_by_you: { loans: Money; cards: Money; bnpl: Money; people: Money; total: Money };
   owed_to_you: { people: Money; claims: Money; total: Money }; interest_month: Money; fx: { SAR_INR: number; at: string };
   spent_by_currency?: Money[]; // this month's spending as spent, per currency (the Saudi / India split)
+  // the monthly overview: losses (fees, interest, FX markup & VAT) apart from by_category; last month; 12-month trend
+  loss?: { total: Money; last: Money; by_category: { category: string; amount: Money }[] };
+  saved?: Money; last_month?: { month: string; income: Money; spent: Money; saved: Money };
+  trend?: { month: string; spent: Money; income: Money }[];
+}
+/** /insights/payoff: cards first (costliest first), EMIs as scheduled; months counted from this month. */
+export interface Payoff {
+  currency: Currency; surplus: Money; prepay: boolean; spend: Money;
+  cards: { months: number | null; month: string | null }; debt_free: { months: number | null; month: string | null };
+  delay: { cards: number | null; debt_free: number | null; interest: Money };
+  interest_now: { cards: Money; loans: Money; total: Money }; interest_total: Money; card_interest: Money; card_interest_min_due: Money; interest_saved: Money;
+  debts: { id: string; name: string; kind: 'card' | 'loan'; balance: Money; local: Money; rate_bp: number; rate_assumed: boolean; emi: Money; cleared: string | null; months: number | null }[];
+  timeline: { month: string; interest: Money; cards: Money; loans: Money; cleared: string[] }[];
+  assumptions: string[];
 }
 export interface LookMonth { month: string; income: Money; commitments: Money; funds: Money; everyday: Money; free: Money; warnings: string[] }
 export interface Lookahead { months: LookMonth[]; debt_free: { month: string | null; months: number | null }; interest_per_month: Money }
@@ -160,4 +174,10 @@ export interface Movements { month: string; currency: Currency; groups: { key: s
 export interface SharedSpend { txn: Txn; share: Money; settled: boolean; splits: { member_id: string | null; contact_id: string | null; share_minor: number }[] }
 export interface PersonLedger { person: Person; shared: SharedSpend[]; sent: Txn[]; received: Txn[]; shared_costs: { day: string; what: string; amount: Money }[];
   totals: { shared: Money[]; their_part: Money[]; sent: Money[]; received: Money[] } }
+/** /insights/card/{id}: one credit card. null = not known (the app says "unknown"). */
+export interface CardView {
+  id: string; currency: Currency; owed: Money | null; limit: Money | null; used_pct: number | null; due_day: number | null; next_due: string | null;
+  statement: { from: string; to: string; billed: Money; paid: Money; left: Money } | null;
+  months: { month: string; spent: Money; paid: Money; lost: Money }[]; rate_bp: number; rate_assumed: boolean; interest_month: Money | null;
+}
 export interface MerchantGroup { merchant: string; count: number; direction: 'debit' | 'credit'; totals: Money[]; last_day: string; category: string | null; account_name: string; txn_ids: string[] }

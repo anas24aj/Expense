@@ -10,17 +10,20 @@ import ActivityPage, { ReviewPage } from './screens/Activity';
 import PeoplePage, { PersonPage } from './screens/People';
 import PlanPage from './screens/Plan';
 import MoneyPage from './screens/Money';
+import MonthPage, { CategoryMonthPage, PayoffPage } from './screens/Month';
+import RecurringPage from './screens/Recurring';
 import { TripPage, TripsPage } from './screens/Trips';
 import { AccountPage, AccountsPage, CoveragePage } from './screens/Accounts';
 import { AssetPage, ClaudePage, DevicesPage, HouseholdPage, ImportPage, MorePage, ProfilePage, SettingsPage } from './screens/More';
 
-// Five tabs (iOS and Material guidance). What you own and owe, and where money moved, open from Home; trips and setup from More.
+// Five tabs (iOS and Material guidance). What you own and owe, the month and the debt-free plan open from Home; people,
+// trips and setup from Home and More.
 const TABS = [
   { to: '/', label: 'Home', icon: 'home', also: ['/accounts', '/assets', '/money'] },
-  { to: '/activity', label: 'Activity', icon: 'activity', also: [] as string[] },
-  { to: '/plan', label: 'Plan', icon: 'plan', also: [] },
-  { to: '/people', label: 'People', icon: 'people', also: [] },
-  { to: '/more', label: 'More', icon: 'more', also: ['/trips'] },
+  { to: '/activity', label: 'Activity', icon: 'activity', also: ['/month'] },
+  { to: '/plan', label: 'Plan', icon: 'plan', also: ['/payoff'] },
+  { to: '/recurring', label: 'Recurring', icon: 'repeat', also: [] as string[] },
+  { to: '/more', label: 'More', icon: 'more', also: ['/trips', '/people'] },
 ];
 const tabOf = (path: string) => Math.max(0, TABS.findIndex((t, i) => (i === 0 ? path === '/' : [t.to, ...t.also].some(p => path.startsWith(p)))));
 
@@ -102,6 +105,11 @@ function Authed() {
         <Route path="/people" element={<PeoplePage />} />
         <Route path="/people/:kind/:id" element={<PersonPage />} />
         <Route path="/plan" element={<PlanPage />} />
+        <Route path="/payoff" element={<PayoffPage />} />
+        <Route path="/recurring" element={<RecurringPage />} />
+        <Route path="/month" element={<MonthPage />} />
+        <Route path="/month/:ym" element={<MonthPage />} />
+        <Route path="/month/:ym/:category" element={<CategoryMonthPage />} />
         <Route path="/money" element={<MoneyPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/accounts/coverage" element={<CoveragePage />} />
@@ -127,7 +135,7 @@ function Authed() {
         <Route path="/more/trips" element={<Navigate to="/trips" replace />} />
         <Route path="/more/trips/:id" element={<Redirect to={id => `/trips/${id}`} />} />
         <Route path="/plan/lookahead" element={<Navigate to="/plan#lookahead" replace />} />
-        <Route path="/plan/commitments/:id" element={<Redirect to={id => `/plan?commitment=${id}`} />} />
+        <Route path="/plan/commitments/:id" element={<Redirect to={id => `/recurring?commitment=${id}`} />} />
         <Route path="/plan/claims/:id" element={<Redirect to={id => `/trips?claim=${id}`} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

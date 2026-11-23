@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
-import type { Account, Asset, Coverage, HouseholdFull, Liability, Member, NetWorth, Person, Txn, UsedBy } from '../api/types';
+import type { Account, Asset, CardView, Coverage, HouseholdFull, Liability, Member, NetWorth, Person, Txn, UsedBy } from '../api/types';
 import { fmt, monthLabel, shortDate } from '../lib/format';
-import { Avatar, BrandTile, brandOf, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
+import { Avatar, BarChart, BrandTile, brandOf, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { FLAG } from './Home';
 import { AddAccountSheet, AddAssetSheet, ASSET_TILE, EditAccountSheet, KIND_LABEL, KIND_TILE, countryOf } from './More';
@@ -32,7 +32,7 @@ function AccountLine({ a }: { a: Account }) {
       <AccountTile a={a} />
       <div className="body">
         <div className="title">{a.institution || a.name}{a.last4 && <span className="caption"> ··{a.last4}</span>}</div>
-        <div className="sub">{card ? (owed(a) ? <>Owed now{due ? ` · due ${due}` : ' · due date not set'}</> : 'Nothing owed') : a.name !== a.institution ? a.name : KIND_LABEL[a.kind]?.replace(/s$/, '')}</div>
+        <div className="sub">{card ? (!a.balance ? 'No balance yet' : owed(a) ? <>Owed now{due ? ` · due ${due}` : ' · due date not set'}</> : 'Nothing owed') : a.name !== a.institution ? a.name : KIND_LABEL[a.kind]?.replace(/s$/, '')}</div>
       </div>
       <div className="end">
         <span className={`amt ${card && owed(a) ? 'neg' : a.balance && a.balance.minor < 0 ? 'neg' : ''}`}>{card ? <Money m={a.balance ? { ...a.balance, minor: owed(a) } : null} /> : <Money m={a.balance} />}</span>
@@ -249,6 +249,7 @@ export function AccountPage() {
               </div>
             )}
           </section>
+          {a.kind === 'credit_card' && <CardDetails id={a.id} />}
           <Section title="Statement coverage" action={<Link to="/accounts/coverage">All accounts</Link>}>
             <div className="glass card">{c ? <CoverageCard c={c} /> : <div className="skel" style={{ height: 40 }} />}</div>
           </Section>
@@ -271,6 +272,42 @@ export function AccountPage() {
       {a && <EditAccountSheet key={a.id} a={a} open={editing} onClose={() => setEditing(false)} />}
       {a && <UsedBySheet a={a} open={lending} onClose={() => setLending(false)} />}
     </Page>
+  );
+}
+
+const unknown = <span className="muted">unknown</span>;
+/** A card's statement, due date, utilisation, six months of spending and what interest and fees took. Unknown is said, not hidden. */
+function CardDetails({ id }: { id: string }) {
+  const q = useApi<CardView>(`/insights/card/${id}`);
+  if (q.isLoading) return <PageSkeleton />;
+  if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
+  const c = q.data!, lostTotal = c.months.reduce((a, m) => a + m.lost.minor, 0);
+  return (
+    <>
+      <Section title="This card">
+        <dl className="kv glass card">
+          <dt>Owed now</dt><dd className={c.owed?.minor ? 'neg' : ''}>{c.owed ? <Money m={c.owed} /> : unknown}</dd>
+          <dt>Last statement</dt><dd>{c.statement ? <>{shortDate(c.statement.to)}: <Money m={c.statement.billed} /></> : unknown}</dd>
+          <dt>Paid since</dt><dd>{c.statement ? <><Money m={c.statement.paid} />{c.statement.left.minor ? <span className="neg"> · <Money m={c.statement.left} /> left</span> : ' · paid in full'}</> : unknown}</dd>
+          <dt>Due</dt><dd>{c.next_due ? shortDate(c.next_due) : unknown}</dd>
+          <dt>Limit used</dt><dd>{c.limit && c.used_pct !== null ? <>{c.used_pct}% of <Money m={c.limit} /></> : unknown}</dd>
+          <dt>Interest rate</dt><dd>{(c.rate_bp / 100).toFixed(0)}% a year{c.rate_assumed ? ' (assumed)' : ''}</dd>
+          <dt>Interest if unpaid</dt><dd className="neg">{c.interest_month ? <><Money m={c.interest_month} />/mo</> : unknown}</dd>
+        </dl>
+        {!c.statement && <p className="footnote">Set the statement and due day under Edit to see the statement and the due date.</p>}
+      </Section>
+      <Section title="Spent on this card, 6 months">
+        <div className="glass card stack-sm">
+          <BarChart data={c.months.map(m => ({ month: m.month, value: m.spent.minor / 100 }))} highlight={c.months.length - 1} height={120} />
+          <div className="table-wrap"><table className="look">
+            <thead><tr><th>Month</th><th>Spent</th><th>Paid</th><th>Lost</th></tr></thead>
+            <tbody>{c.months.map(m => <tr key={m.month}><td>{monthLabel(m.month)}</td><td>{fmt(m.spent, { compact: true })}</td><td>{fmt(m.paid, { compact: true })}</td>
+              <td className={m.lost.minor ? 'neg' : ''}>{fmt(m.lost, { compact: true })}</td></tr>)}</tbody>
+          </table></div>
+          <p className="caption">{lostTotal ? <>Lost to interest &amp; fees in 6 months: <b className="neg">{fmt({ minor: lostTotal, currency: c.currency })}</b></> : 'No interest or fees in 6 months.'}</p>
+        </div>
+      </Section>
+    </>
   );
 }
 

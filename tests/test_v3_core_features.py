@@ -113,6 +113,35 @@ class CoreFeaturesTest(test_v3_plan.PlanTest):
         self.assertLess(self.ok('GET', '/insights/payoff', query='prepay=1')['debt_free']['months'], p['debt_free']['months'])
         self.assertEqual(self.call('GET', '/api/insights/payoff', query='spend_minor=-1')[0], 400)
 
+    def test_next_month_plan_with_salary_history_and_an_old_due_date(self):
+        self.ok('POST', '/salary', {'from_month': '2025-01', 'amount_minor': 20000_00, 'currency': 'SAR', 'kind': 'base'})
+        old = engine.add_months(self.today, -3)  # entered long ago, never ticked off: it rolls on to the coming months
+        self.ok('POST', '/commitments', {'name': 'Rent', 'kind': 'rent', 'amount_minor': 3000_00, 'currency': 'SAR', 'cycle_months': 1, 'next_due': old})
+        this, nxt = self.ok('GET', '/insights/plan')['months']
+        self.assertEqual(nxt['month'], engine.add_months(self.today[:7], 1))
+        self.assertEqual(nxt['income'], M(20000_00))
+        self.assertIn('Rent', [x['name'] for x in nxt['lines']])
+        self.assertEqual(nxt['surplus'], M(20000_00 - sum(x['base']['minor'] for x in nxt['lines'] if x['counted'])))
+        self.assertEqual(this['income'], M(20000_00))
+
+    def test_card_page(self):
+        card = self.acct('credit_card', 'SNB', 'SAR', 'SA', -1200_00, credit_limit_minor=10000_00, statement_day=1, due_day=20)
+        for minor, d, merchant, purpose, cat in ((400_00, 'debit', 'Panda', 'spend', 'Groceries'), (50_00, 'debit', 'FINANCE CHARGE', 'fee', None),
+                                                 (300_00, 'credit', 'Payment received', 'transfer', None)):
+            t = self.txn(minor, d, merchant)
+            self.db.run('UPDATE transactions SET account_id = :a WHERE id = :t', a=card, t=t)
+            self.ok('PATCH', f'/transactions/{t}', {k: v for k, v in (('purpose', purpose), ('category', cat)) if v})
+        c = self.ok('GET', f'/insights/card/{card}')
+        self.assertEqual((c['owed'], c['used_pct'], c['rate_bp'], c['rate_assumed']), (M(1200_00), 12, 3000, True))
+        self.assertEqual(len(c['months']), 6)
+        self.assertEqual((c['months'][-1]['spent'], c['months'][-1]['lost'], c['months'][-1]['paid']), (M(400_00), M(50_00), M(300_00)))
+        self.assertEqual(c['interest_month'], M(30_00))
+        self.assertIsNotNone(c['statement'])
+        bare = self.acct('credit_card', 'Riyad', 'SAR', 'SA', None)
+        b = self.ok('GET', f'/insights/card/{bare}')
+        self.assertEqual((b['owed'], b['statement'], b['next_due'], b['limit']), (None, None, None, None))
+        self.assertEqual(self.call('GET', f'/api/insights/card/{self.bank}')[0], 404)
+
     def test_card_due_alert(self):
         due = int(self.today[8:10])
         if due > 28:
