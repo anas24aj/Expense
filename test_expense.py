@@ -518,6 +518,9 @@ class StoreMixin:
         server.save_account(db, 'AlRajhi · Card •5678', 'Al Rajhi mada', kind='card')  # you know better
         kinds = server.account_kinds(server.transactions(db), db.run('SELECT * FROM accounts'))
         self.assertEqual(kinds['Al Rajhi mada'], ('card', 'set'))
+        # A credit card's "available balance" is credit left: never listed as money you hold.
+        server.store_sms(db, 'AlRajhiBank', 'Credit Card Purchase\nCard: *1596\nAmount: SAR 10.00\nAt: CAFE\nAvailable balance: SAR 175,746.84', '2026-12-30T10:00:00+03:00')
+        self.assertNotIn('AlRajhiBank · Card •1596', [r['account'] for r in server.account_months(server.transactions(db), '2026-12', db.run('SELECT * FROM accounts'))])
         server.delete_account(db, 'SNB salary 7788')
         self.assertFalse(db.run("SELECT 1 FROM accounts WHERE name = 'SNB salary 7788'"))
         # An account from a statement keeps its rows when renamed.

@@ -186,6 +186,8 @@
   .banner.warn { border-color: #d97706; }
   .kind-tag { display: inline-block; font-size: 12px; font-weight: 600; color: var(--text-2); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; margin: 2px 0 6px; }
   .kind-tag small { font-weight: 400; color: var(--muted); }
+  details.bal-src { margin: 6px 0 0; } details.bal-src > summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+  details.bal-src pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace; background: var(--surface-2); border-radius: 8px; padding: 8px; margin: 6px 0; }
   details.acct-edit { margin-top: 10px; } details.acct-edit > summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; }
   form.acct-form { display: grid; gap: 10px; margin-top: 10px; } form.acct-form label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
   form.acct-form input, form.acct-form select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-width: 0; max-width: 100%; }
@@ -1818,6 +1820,8 @@ function balancesPage(rt, P) {
       '<p class="muted small">Remove hides it and stops counting its messages (for things like provident-fund SMS). You can show it again below.</p></form></details>'; };
   const rows = A.map(a => `<section class="card"><h2>${splitAcct(a.account)}<span>${esc(a.currency)}</span></h2>${kindTag(a.account)}` +
     `<div class="big"><span class="muted">Balance now · ${a.typed ? 'you entered it' : 'bank said'} on ${esc(dayLabel(a.as_of))}</span><b>${cur(a.current, a.currency)}</b></div>` +
+    (a.txn_id ? `<details class="bal-src"><summary>Show the message</summary><pre>${esc(a.body)}</pre>` +
+      `<button type="button" class="link danger" data-not-balance="${a.txn_id}">Not a real balance (advert): ignore it</button></details>` : '') +
     `<dl class="carry"><dt>Carried from ${esc(prev)}</dt><dd>${cur(a.opening, a.currency)}</dd>` +
     `<dt>+ Money in</dt><dd class="in">${cur(a.in, a.currency)}</dd><dt>− Money out</dt><dd class="out">${cur(a.out, a.currency)}</dd>` +
     `<dt><b>${m === today().slice(0, 7) ? 'So far this month' : `Closing ${esc(monthName(m, 'short'))}`}</b></dt><dd><b>${cur(a.closing, a.currency)}</b></dd></dl>${editor(a.account, a.currency)}</section>`).join('');
@@ -1830,6 +1834,15 @@ function balancesPage(rt, P) {
   return { title: 'Accounts & cards', sub: monthName(m), html: chips(P) + (rows || `<section class="card">${empty('No balances yet', 'They come from the “Avl Bal” or “Balance” line in your bank SMS, or a balance you type under Edit.')}</section>`) + others + hidden + add +
     '<section class="card"><p class="muted small">Worked out from the latest balance each bank stated and that account’s transactions, so each month starts where the last one ended. If an SMS was missed, the months before it are off by that amount.</p></section>' };
 }
+document.addEventListener('click', async e => {
+  const nb = e.target.closest('[data-not-balance]');
+  if (!nb) return;
+  nb.disabled = true;
+  try {  // Ignored: out of balances and totals, like an advert
+    await post('/api/category', { id: +nb.dataset.notBalance, category: IGNORED, whole_merchant: false });
+    toast('Ignored. It no longer counts as a balance or a transaction.'); state.acctMonth = null; state.acctUrl = null; state.bal = null; await load(true); render();
+  } catch (err) { nb.disabled = false; toast(`Not saved: ${err.message}`); }
+});
 document.addEventListener('submit', async e => {
   if (!e.target.matches('form.acct-form')) return;
   e.preventDefault();
@@ -1868,7 +1881,8 @@ function afford(q) {
   const C = cuts(), cutTotal = C.reduce((a, x) => a + x.cut, 0), D = dti();
   // Pay now: an account holding enough (its own currency), and what's left in savings for emergencies.
   const inCurOf = c => c === cur ? price : c === 'SAR' ? inSar : c === 'INR' ? inInr : Math.round(inSar / 3.75);
-  const pots = [...(state.bal || []).filter(b => b.kind === 'balance'),  // bank balances from SMS, and your cash savings on the Debt tab
+  const fresh = b => dayNum(today()) - dayNum(b.day) <= 45;  // an old balance isn't what's there today
+  const pots = [...(state.bal || []).filter(b => b.kind === 'balance' && b.account_kind !== 'card' && fresh(b)),  // bank accounts and debit cards (never a credit card's limit), and your cash savings
     ...M.holdings.filter(h => h.kind === 'saving' && ['SAR', 'INR'].includes(h.currency)).map(h => ({ account: h.name, amount: h.balance_minor / 100, currency: h.currency, day: h.as_of, saving: true }))];
   const accts = pots.map(b => ({ ...b, need: inCurOf(b.currency), has: Math.round(b.amount * 100) }))
     .sort((a, b) => (b.has >= b.need) - (a.has >= a.need) || !!a.saving - !!b.saving || b.has / b.need - a.has / a.need);  // an everyday account before savings

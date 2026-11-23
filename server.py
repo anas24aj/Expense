@@ -819,7 +819,8 @@ def balances(every):
             n = BAL_NUM.search(body[m.end():m.end() + 30])
             if n and not re.match(r'\s*(?:as\s+on|on)\b', body[m.end():m.end() + 8], re.I):
                 out[t['account']] = {'account': t['account'], 'kind': 'limit' if (m.group(1) or '').lower() in ('limit', 'lmt') else 'balance',
-                                     'amount': float(n.group(1).replace(',', '')), 'currency': t['currency'], 'day': t['received_at'][:10], 'at': t['received_at']}
+                                     'amount': float(n.group(1).replace(',', '')), 'currency': t['currency'], 'day': t['received_at'][:10], 'at': t['received_at'],
+                                     'txn_id': t['id'], 'body': t['body']}
                 break
     return sorted(out.values(), key=lambda b: b['day'], reverse=True)
 
@@ -885,7 +886,8 @@ def account_months(every, month, typed=()):
     end = datetime(y + m // 12, m % 12 + 1, 1, tzinfo=tz)
     when = lambda t: datetime.fromisoformat(t['received_at'])
     out = []
-    stated = {b['account']: b for b in balances(every)}
+    credit = {n for n, (k, _) in account_kinds(every, typed).items() if k == 'card'}  # a credit card's 'available balance' is credit left, not money
+    stated = {b['account']: b for b in balances(every) if b['account'] not in credit}
     for a in typed:  # a balance you typed: used when the SMS never state one, or it's newer than what they said
         b = stated.get(a['name'])
         if a['balance_at'] and not a['hidden'] and (not b or b['kind'] != 'balance' or a['balance_at'] > b['at']):
@@ -903,7 +905,8 @@ def account_months(every, month, typed=()):
         spent = -sum(v for w, v in mine if start <= w < end and v < 0)
         opening = before(start)
         out.append({'account': b['account'], 'currency': b['currency'], 'opening': opening / 100, 'in': got / 100, 'out': spent / 100,
-                    'closing': (opening + got - spent) / 100, 'current': b['amount'], 'as_of': b['day'], 'typed': b.get('typed', False)})
+                    'closing': (opening + got - spent) / 100, 'current': b['amount'], 'as_of': b['day'], 'typed': b.get('typed', False),
+                    'txn_id': b.get('txn_id'), 'body': b.get('body', '')})
     return out
 
 
@@ -2584,7 +2587,9 @@ def _app(environ, start_response):
                                                'kind': kinds.get(n, ('bank', 'name'))[0], 'how': kinds.get(n, ('bank', 'name'))[1]} for n in names],
                                       'hidden': sorted(hidden)})
         if path == '/api/balances':
-            return respond('200 OK', balances(transactions(db)))
+            every = transactions(db)
+            kinds = account_kinds(every, db.run('SELECT * FROM accounts'))
+            return respond('200 OK', [{**b, 'account_kind': kinds.get(b['account'], ('bank', 'name'))[0]} for b in balances(every)])
         if path == '/api/trail':
             return respond('200 OK', trail(db, query.get('from'), query.get('to')))
         if path == '/api/friend/settle':

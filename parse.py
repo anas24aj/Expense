@@ -30,8 +30,9 @@ SKIP = re.compile(
     r'|رمز التحقق|رمز التفعيل|كلمة المرور|لمرة واحدة|مستحق', re.I)
 # Adverts: "Purchase 20GB for SAR 99 now! Dial *1100#" has an amount and "purchase" but nothing was paid.
 AD = re.compile(
-    r'\b(?:promo(?:tion)?|discount|unsubscribe|congratulations|limited time|valid (?:till|until)|(?:recharge|subscribe|buy|shop) now)\b'
-    r'|\bdial\s*\*|\d\s*%\s*off\b|عرض خاص|اشترك الآن|لفترة محدودة', re.I)
+    r'\b(?:promo(?:tion)?|discount|unsubscribe|congratulations|limited time|valid (?:till|until)|(?:recharge|subscribe|buy|shop|apply) now'
+    r'|you are eligible|get up to|eligible for (?:a |an )?(?:loan|financing|finance|credit))\b'
+    r'|\bdial\s*\*|\d\s*%\s*off\b|عرض خاص|اشترك الآن|لفترة محدودة|قدم الآن|مؤهل', re.I)
 _END = r'(?=\s+(?:on|via|ref|refno|upi|avl|avbl|txn|from|to|using|for|في)\b|[,;(\n]|\.(?=\s|$)|$)'  # a dot ends the name only as a full stop, so "NOON.COM" stays whole
 MERCHANT = [
     re.compile(r'\bVPA\s+([\w.\-]+@[\w.\-]+)', re.I),
