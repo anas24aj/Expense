@@ -2370,8 +2370,18 @@ function settings() {
   const me = state.me, account = !me ? '' : card('Your account', '', `<p>${me.email ? `Signed in as <b>${esc(me.email)}</b>` : 'Signed in with the site password'}${me.owner ? ' · owner' : ''}.</p>` +
     (me.sync_key ? `<p class="muted">Your phone sync key: use it in the phone app (or the iPhone shortcut after “Bearer ”) instead of a password. Keep it private.</p><p class="key" style="font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px">${esc(me.sync_key)}</p>`
       : '<p class="muted">Your phone app uses the site password.</p>'));
+  // Claude / ChatGPT: the MCP connector link carries this person's key, so it opens only their data.
+  const mcpUrl = me?.sync_key ? `${location.origin}/mcp/${me.sync_key}` : '';
+  const assistant = !me ? '' : card('Connect Claude or ChatGPT', 'MCP', mcpUrl
+    ? '<p class="muted">Lets Claude or ChatGPT read your spending, debts and transfers, and add a transaction or fix a category when you ask.</p>' +
+      `<p class="key" style="font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px">${esc(mcpUrl)}</p>` +
+      `<button type="button" class="btn" data-copy="${esc(mcpUrl)}">Copy link</button>` +
+      '<ul class="muted small" style="padding-left:18px;margin:10px 0 0"><li><b>Claude</b>: Settings → Connectors → Add custom connector → paste the link.</li>' +
+      '<li><b>ChatGPT</b>: Settings → Connectors → Advanced → turn on Developer mode → Create → paste the link, authentication: none.</li>' +
+      '<li>The link works like a password: anyone with it can read your money. If it leaks, ask the admin for a new key.</li></ul>'
+    : '<p class="muted">Link your account to an email on the admin page (Your existing data) to get your connector link.</p>');
   return { title: 'Settings', html:
-    account + installCard() +
+    account + assistant + installCard() +
     // The sync app reads the SMS inbox, so SMS that arrived while the phone kept it asleep still come in.
     (iPhone ? iPhoneSmsCard() : card('Phone sync app', 'Android', '<p class="muted">Sends your bank SMS here from the SMS inbox every 15 minutes and on each new SMS, ' +
       'so nothing is missed while the phone sleeps. Replaces the SMS forwarder app.</p>' +
@@ -2677,6 +2687,8 @@ document.addEventListener('click', async e => {
     if (await postAndRedraw('/api/friend/settle', { friend: settle.dataset.settle })) { toast(`Settled with ${settle.dataset.settle}.`); state.shared = null; loadShared(); }
     else settle.disabled = false;
   }
+  const cp = e.target.closest('[data-copy]');
+  if (cp) { try { await navigator.clipboard.writeText(cp.dataset.copy); toast('Copied.'); } catch { toast('Copying is blocked here: press and hold the link to copy it.'); } return; }
   const net = e.target.closest('[data-settle-net]');
   if (net) {  // one payment of the difference squares both directions with this person
     if (!confirm(`Settle up with ${net.dataset.name}? Both what you owe them and what they owe you are marked settled.`)) return;

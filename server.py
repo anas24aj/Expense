@@ -1721,6 +1721,211 @@ def _admin(environ, method, path, query, respond, redirect):
     return respond('404 Not Found', {'error': 'not found'})
 
 
+# ---------- MCP: Claude, ChatGPT and other assistants read your money (and, when asked, add or fix a transaction) ----------
+# Streamable HTTP, stateless: each POST carries one JSON-RPC message (or a list) and gets JSON back; no event stream.
+# Who: the personal key in the address (/mcp/<key>, for connectors that only take a URL) or 'Authorization: Bearer <key>'
+# (a person's sync key, or the site password for the original data). Wrong keys count toward the login lockout.
+MCP_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
+MCP_MAX_BODY = 64 * 1024
+MCP_LIST_MAX = 200
+
+
+def _brief(t):
+    out = {'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount'], 'currency': t['currency'],
+           'direction': 'spent' if t['direction'] == 'debit' else 'received', 'merchant': t['merchant'], 'category': t['category'], 'account': t['account']}
+    if t.get('friend'):
+        out.update(friend=t['friend'], friend_share=t['theirs'], settled=t['settled'])
+    return out
+
+
+def _month_arg(a):
+    m = str(a.get('month') or '').strip()
+    if m and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', m):
+        raise ValueError('month must look like 2026-10')
+    return m or None
+
+
+def _cur_arg(a, default=None):
+    c = str(a.get('currency') or '').strip().upper() or default
+    if c and c not in ('SAR', 'INR', 'USD'):
+        raise ValueError('currency must be SAR, INR or USD')
+    return c
+
+
+def mcp_overview(db, a):
+    S = summary(db, _month_arg(a), _cur_arg(a))
+    return {k: S[k] for k in ('currency', 'currencies', 'month', 'by_category', 'top_merchants', 'by_account')} | {
+        'last_12_months': S['months'][-12:], 'needing_a_category': len(S['to_review']), 'categories': S['categories']}
+
+
+def mcp_transactions(db, a):
+    month, cur, limit = _month_arg(a), _cur_arg(a), max(1, min(MCP_LIST_MAX, int(a.get('limit') or 50)))
+    cat, mer, way = str(a.get('category') or '').lower(), str(a.get('merchant') or '').lower(), str(a.get('direction') or '')
+    rows = [t for t in transactions(db, month, cur) if (not cat or t['category'].lower() == cat) and (not mer or mer in t['merchant'].lower())
+            and (way not in ('spent', 'received') or (t['direction'] == 'debit') == (way == 'spent'))]
+    return {'count': len(rows), 'transactions': [_brief(t) for t in rows[:limit]]}
+
+
+def mcp_search(db, a):
+    q = str(a.get('query') or '').strip()
+    if not q:
+        raise ValueError('query is required')
+    found = search(db, q, _cur_arg(a))
+    return {'count': found['count'], 'spent': found['spent'], 'transactions': [_brief(t) for t in found['results']]}
+
+
+def mcp_debts(db, a):
+    M = money(db, 'INR')
+    month = datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).strftime('%Y-%m')
+    debt = lambda h: {'name': h['name'], 'kind': h['kind'], 'currency': h['currency'], 'owed_now': h['balance_now'] / 100,
+                      'monthly_payment': h['emi_minor'] / 100, 'due_day': h['due_day'], 'interest_pct_a_year': h['rate_bp'] / 100,
+                      'auto_debit': bool(h['auto']), 'credit_limit': (h.get('limit_minor') or 0) / 100 or None,
+                      'paid_this_month': [{'date': x['date'], 'amount': x['amount'], 'how': x['source']} for x in h['payments'] if x['date'][:7] == month]}
+    saving = lambda h: {'name': h['name'], 'currency': h['currency'], 'balance': h['balance_minor'] / 100 if h['currency'] != 'GOLD' else None,
+                        'grams': h['balance_minor'] / 100 if h['currency'] == 'GOLD' else None}
+    plan = M['plans']['as_is']
+    return {'debts': [debt(h) for h in M['holdings'] if h['kind'] in DEBTS], 'savings': [saving(h) for h in M['holdings'] if h['kind'] == 'saving'],
+            'inr_per_sar': M['rate'], 'debt_free_in_months_at_current_payments': plan['months'], 'interest_still_to_pay_inr': plan['interest'] / 100}
+
+
+def mcp_trail(db, a):
+    m = _month_arg(a)
+    first, last = (f'{m}-01', f'{m}-31') if m else (None, None)
+    T = trail(db, first, last)
+    return {'flows': [{k: f[k] for k in ('from', 'to', 'kind', 'count', 'sent', 'got', 'last')} for f in T['flows']],
+            'accounts': [{k: x[k] for k in ('name', 'kind', 'in', 'out', 'count')} for x in T['accounts']],
+            'unmatched_transfers': len(T['unmatched'])}
+
+
+def mcp_friends(db, a):
+    owed = defaultdict(lambda: defaultdict(float))
+    for t in transactions(db):
+        if t['friend'] and not t['settled']:
+            owed[t['friend']][t['currency']] += t['theirs'] if t['direction'] == 'debit' else -t['amount']
+    S = shared(db)
+    return {'friends_owe_you': {f: {c: round(v, 2) for c, v in cs.items() if v} for f, cs in owed.items()},
+            'you_owe_people_on_this_app': [{'to': r['from_email'], 'amount': r['amount_minor'] / 100, 'currency': r['currency'], 'for': r['what'], 'date': r['day']} for r in S['to_me']],
+            'saved_friends': S['contacts']}
+
+
+def mcp_balances(db, a):
+    return {'accounts': balances(transactions(db))}
+
+
+def mcp_add(db, a):
+    """A transaction you tell the assistant about, stored like a bank SMS (so it's categorized and counted the same way)."""
+    amount, cur = Decimal(str(a.get('amount') or 0)), _cur_arg(a, 'SAR')
+    merchant = ' '.join(str(a.get('merchant') or '').split())[:60]
+    if not 0 < amount < 10 ** 9 or not merchant:
+        raise ValueError('amount (more than 0) and merchant are required')
+    day = str(a.get('date') or '').strip() or datetime.now(ZoneInfo(os.environ.get('EXPENSE_TZ') or 'Asia/Riyadh')).date().isoformat()
+    date.fromisoformat(day)
+    spent = str(a.get('direction') or 'spent') != 'received'
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    body = f"{'Paid' if spent else 'Received'} {cur} {amount:.2f} {'to' if spent else 'from'} {merchant} on {day} (added by your assistant {now})"
+    stored = store_sms(db, 'Assistant', body, f'{day}T12:00:00+03:00')
+    if not stored:
+        raise ValueError('it could not be stored')
+    t = next(x for x in transactions(db) if x['body'] == body)
+    if a.get('category'):
+        set_category(db, t['id'], ' '.join(str(a['category']).split())[:MAX_CATEGORY], False)
+        t = next(x for x in transactions(db) if x['id'] == t['id'])
+    return {'added': _brief(t)}
+
+
+def mcp_categorize(db, a):
+    cat = ' '.join(str(a.get('category') or '').split())
+    if not 0 < len(cat) <= MAX_CATEGORY:
+        raise ValueError(f'category must be 1-{MAX_CATEGORY} characters')
+    tid = int(a.get('transaction_id') or 0)
+    set_category(db, tid, cat, bool(a.get('all_from_merchant')))
+    t = next((x for x in transactions(db) if x['id'] == tid), None)
+    return {'transaction': _brief(t) if t else None}
+
+
+_S = lambda props, req=(): {'type': 'object', 'properties': props, 'required': list(req), 'additionalProperties': False}
+_MONTH = {'type': 'string', 'description': 'YYYY-MM, e.g. 2026-10. Leave out for the current month.'}
+_CUR = {'type': 'string', 'enum': ['SAR', 'INR', 'USD'], 'description': 'Only this currency (amounts are never mixed).'}
+MCP_TOOLS = {
+    'get_overview': ('A month at a glance: spending by category, top merchants, by card/account, and the last 12 months of spent vs received.',
+                     _S({'month': _MONTH, 'currency': _CUR}), mcp_overview, True),
+    'list_transactions': ('Transactions, newest first, optionally for one month, category, merchant (part of the name) or direction.',
+                          _S({'month': _MONTH, 'currency': _CUR, 'category': {'type': 'string'}, 'merchant': {'type': 'string'},
+                              'direction': {'type': 'string', 'enum': ['spent', 'received']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': MCP_LIST_MAX}}),
+                          mcp_transactions, True),
+    'search_transactions': ('Find transactions in every month whose text, merchant, category or card contains all these words.',
+                            _S({'query': {'type': 'string'}, 'currency': _CUR}, ['query']), mcp_search, True),
+    'get_debts': ('Loans, credit cards and pay-later plans (owed now, monthly payment, due day, interest, paid this month, credit limit), savings, and when debt is cleared at current payments.',
+                  _S({}), mcp_debts, True),
+    'get_money_trail': ('How money moved between your own accounts (e.g. salary → Saudi bank → Indian bank → loan), with totals per route.',
+                        _S({'month': _MONTH}), mcp_trail, True),
+    'get_friends': ('What friends owe you for purchases you split, and what you owe people on this app.', _S({}), mcp_friends, True),
+    'get_account_balances': ('Each account’s latest balance (or a card’s available limit) from its newest bank SMS.', _S({}), mcp_balances, True),
+    'add_transaction': ('Record a purchase or money received that the bank SMS didn’t cover. Only when the user asks to add it.',
+                        _S({'amount': {'type': 'number', 'exclusiveMinimum': 0}, 'currency': _CUR, 'merchant': {'type': 'string'},
+                            'direction': {'type': 'string', 'enum': ['spent', 'received']}, 'date': {'type': 'string', 'description': 'YYYY-MM-DD; today if left out'},
+                            'category': {'type': 'string'}}, ['amount', 'merchant']), mcp_add, False),
+    'set_category': ('Change a transaction’s category (and optionally every transaction from that merchant). Only when the user asks.',
+                     _S({'transaction_id': {'type': 'integer'}, 'category': {'type': 'string'}, 'all_from_merchant': {'type': 'boolean'}},
+                        ['transaction_id', 'category']), mcp_categorize, False),
+}
+
+
+def mcp_reply(space, msg):
+    """One JSON-RPC message in, its response out (None for a notification)."""
+    if not isinstance(msg, dict) or msg.get('jsonrpc') != '2.0' or 'method' not in msg:
+        return {'jsonrpc': '2.0', 'id': msg.get('id') if isinstance(msg, dict) else None, 'error': {'code': -32600, 'message': 'invalid request'}}
+    if 'id' not in msg:
+        return None  # notifications/initialized and the like need no answer
+    ok = lambda result: {'jsonrpc': '2.0', 'id': msg['id'], 'result': result}
+    method, params = msg['method'], msg.get('params') or {}
+    if method == 'initialize':
+        asked = params.get('protocolVersion')
+        return ok({'protocolVersion': asked if asked in MCP_VERSIONS else MCP_VERSIONS[0], 'capabilities': {'tools': {'listChanged': False}},
+                   'serverInfo': {'name': 'expense', 'title': 'Expenses', 'version': VERSION},
+                   'instructions': 'Personal spending, debts and transfers from bank SMS and statements. Amounts are in their own currency (SAR, INR, USD); '
+                                   'never add different currencies together. Use the write tools only when the user asks.'})
+    if method == 'ping':
+        return ok({})
+    if method == 'tools/list':
+        return ok({'tools': [{'name': n, 'description': d, 'inputSchema': schema, 'annotations': {'readOnlyHint': ro, 'destructiveHint': False}}
+                             for n, (d, schema, _, ro) in MCP_TOOLS.items()]})
+    if method == 'tools/call':
+        tool = MCP_TOOLS.get(params.get('name'))
+        if not tool:
+            return {'jsonrpc': '2.0', 'id': msg['id'], 'error': {'code': -32602, 'message': f"unknown tool: {params.get('name')}"}}
+        db = DB(space=space)
+        try:
+            data = tool[2](db, params.get('arguments') or {})
+            return ok({'content': [{'type': 'text', 'text': json.dumps(data, ensure_ascii=False, default=str)}], 'structuredContent': data, 'isError': False})
+        except (ValueError, KeyError, TypeError, ArithmeticError) as e:
+            return ok({'content': [{'type': 'text', 'text': f'Could not do that: {e}'}], 'isError': True})
+        finally:
+            db.close()
+    return {'jsonrpc': '2.0', 'id': msg['id'], 'error': {'code': -32601, 'message': f'unknown method: {method}'}}
+
+
+def _mcp(environ, method, path, respond):
+    if method != 'POST':  # no server-to-client event stream: everything is answered in the POST
+        return respond('405 Method Not Allowed', {'error': 'POST JSON-RPC messages here'}, headers=[('Allow', 'POST')])
+    header = environ.get('HTTP_AUTHORIZATION', '')
+    key = path[len('/mcp/'):] if path.startswith('/mcp/') else header[7:] if header.startswith('Bearer ') else ''
+    result, space, _ = sign_in(environ, unquote(key), key=True) if key and _token() else ('wrong', None, '')
+    if result != 'ok':
+        return respond('401 Unauthorized', {'error': 'use your connector link from Settings (it has your key in it)'})
+    try:
+        length = int(environ.get('CONTENT_LENGTH') or 0)
+        if not 0 < length <= MCP_MAX_BODY:
+            raise ValueError
+        incoming = json.loads(environ['wsgi.input'].read(length))
+    except ValueError:
+        return respond('400 Bad Request', {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'parse error'}})
+    replies = [r for r in (mcp_reply(space, m) for m in (incoming if isinstance(incoming, list) else [incoming])) if r is not None]
+    if not replies:
+        return respond('202 Accepted', b'', 'text/plain')
+    return respond('200 OK', replies if isinstance(incoming, list) else replies[0])
+
+
 def app(environ, start_response):
     """Any unexpected error becomes a 500 that says what went wrong (type and message, no stack or data), so the
     page's error bar can show it; the full trace still goes to the server log."""
@@ -1768,6 +1973,8 @@ def _app(environ, start_response):
         return respond('200 OK', (HERE / 'login.html').read_bytes(), 'text/html; charset=utf-8')
     if (method, path) == ('POST', '/logout'):
         return redirect('/login', '')
+    if path == '/mcp' or path.startswith('/mcp/'):
+        return _mcp(environ, method, path, respond)
     if path == '/admin' or path.startswith(('/admin/', '/api/admin/')):
         return _admin(environ, method, path, query, respond, redirect)
 
@@ -1908,7 +2115,7 @@ def _app(environ, start_response):
         finally:
             pub.close()
         return respond('200 OK', {'email': me[0]['email'] if me else None, 'owner': space == 'public',
-                                  'sync_key': me[0]['sync_key'] if me and space != 'public' else None})
+                                  'sync_key': me[0]['sync_key'] if me else None})
     db = DB(space=space)
     try:
         if path == '/api/health':

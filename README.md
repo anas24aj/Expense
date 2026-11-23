@@ -124,3 +124,9 @@ One site and one database can serve several people, each with private data:
 4. Their phone sends SMS with their own **sync key** (shown in their Settings) instead of a password: in the Android app's password box, or after `Bearer ` in the iPhone shortcut.
 
 The site password (`EXPENSE_TOKEN`) with the email left empty still opens the original data, and the phones that use it keep working.
+
+## Claude, ChatGPT and other assistants (MCP)
+
+The site is an MCP server at `/mcp`. Each person's connector link, `https://<your-site>/mcp/<their key>`, is in their Settings under **Connect Claude or ChatGPT**; it opens only their data. Clients that can send headers (Claude Desktop, Claude Code) can use `/mcp` with `Authorization: Bearer <key or site password>` instead.
+
+Tools: `get_overview`, `list_transactions`, `search_transactions`, `get_debts`, `get_money_trail`, `get_friends`, `get_account_balances` (read), and `add_transaction`, `set_category` (write, only when you ask). The link works like a password; a new sync key from the admin page turns the old link off.

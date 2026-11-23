@@ -880,6 +880,39 @@ class AppTest(unittest.TestCase):
         finally:
             os.environ.pop('ADMIN_PASSWORD', None)
 
+    def test_mcp_for_claude_and_chatgpt(self):
+        rpc = lambda path, msg, **kw: self.call('POST', path, json.dumps(msg).encode(), **{'auth': '', **kw})
+        call = lambda path, name, args=None, **kw: json.loads(rpc(path, {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': name, 'arguments': args or {}}}, **kw)[1])['result']
+        # The owner's data, with the site password as a bearer header (Claude Desktop / Claude Code).
+        status, out = rpc('/mcp', {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 't'}}},
+                          auth=f'Bearer {TOKEN}')
+        self.assertEqual((status, json.loads(out)['result']['protocolVersion']), (200, '2025-03-26'))
+        self.assertEqual(rpc('/mcp', {'jsonrpc': '2.0', 'method': 'notifications/initialized'}, auth=f'Bearer {TOKEN}')[0], 202)
+        tools = {t['name']: t for t in json.loads(rpc('/mcp', {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, auth=f'Bearer {TOKEN}')[1])['result']['tools']}
+        self.assertIn('get_overview', tools)
+        self.assertFalse(tools['add_transaction']['annotations']['readOnlyHint'])
+        added = call('/mcp', 'add_transaction', {'amount': 45, 'currency': 'SAR', 'merchant': 'Starbucks', 'date': '2026-11-20'}, auth=f'Bearer {TOKEN}')
+        self.assertFalse(added['isError'])
+        t = added['structuredContent']['added']
+        self.assertEqual((t['amount'], t['currency'], t['direction'], t['merchant'], t['date']), (45.0, 'SAR', 'spent', 'Starbucks', '2026-11-20'))
+        fixed = call('/mcp', 'set_category', {'transaction_id': t['id'], 'category': 'Food'}, auth=f'Bearer {TOKEN}')['structuredContent']
+        self.assertEqual(fixed['transaction']['category'], 'Food')
+        listed = call('/mcp', 'list_transactions', {'month': '2026-11'}, auth=f'Bearer {TOKEN}')['structuredContent']
+        self.assertEqual([x['merchant'] for x in listed['transactions']], ['Starbucks'])
+        self.assertTrue(call('/mcp', 'list_transactions', {'month': 'Nov'}, auth=f'Bearer {TOKEN}')['isError'])  # a clear message, not a crash
+        self.assertIn('debts', call('/mcp', 'get_debts', auth=f'Bearer {TOKEN}')['structuredContent'])
+        # A person's own link (for connectors that take only a URL) opens only their data.
+        db = server.DB()
+        try:
+            uid = server.new_user(db, 'friend@example.com', 'friend-pass-1')
+            key = db.run('SELECT sync_key FROM app_users WHERE id = :id', id=uid)[0]['sync_key']
+        finally:
+            db.close()
+        self.assertEqual(call(f'/mcp/{key}', 'list_transactions')['structuredContent']['count'], 0)
+        self.assertEqual(rpc('/mcp/not-a-real-key-123456789', {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'})[0], 401)
+        self.assertEqual(rpc('/mcp', {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'})[0], 401)  # no key at all
+        self.assertEqual(self.call('GET', f'/mcp/{key}', auth='')[0], 405)
+
     def test_login_tolerates_spaces_and_reports_missing_setup(self):
         os.environ['EXPENSE_TOKEN'] = f' {TOKEN}\n'  # pasted into Vercel with whitespace
         self.assertEqual(self.login(f'{TOKEN} ')[:2], (303, '/'))  # keyboard added a trailing space
