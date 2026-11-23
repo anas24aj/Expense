@@ -5,6 +5,7 @@ const P: Record<string, string> = {
   people: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm-6 9c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.8c1.9.7 3 2.6 3 5.2',
   plan: 'M4 19.5V10m5.3 9.5V5m5.4 14.5v-7m5.3 7V8',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  wifiOff: 'M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.2-2.8M19 13a10 10 0 0 0-2.4-1.8M2 9.3a15 15 0 0 1 4.3-2.8M22 9.3A15 15 0 0 0 11 5.1M12 20h.01',
   plus: 'M12 5v14M5 12h14',
   close: 'M6 6l12 12M18 6 6 18',
   check: 'M5 12.5 10 17.5 19 7',
@@ -93,7 +94,7 @@ const PURPOSE_ICON: Record<string, [string, string]> = {
 export function Tile({ icon, color }: { icon: string; color: string }) {
   return <span className="icon-tile" style={{ background: `linear-gradient(180deg, color-mix(in srgb, ${color} 82%, white), ${color})` }}><Icon name={icon} /></span>;
 }
-// Well-known merchants get a brand-colored monogram tile (no external logo requests: nothing about your spending leaves the app).
+// Well-known merchants get a brand-colored monogram tile; the real logo comes through our own /api/logo, so no third party sees your brands.
 // [pattern, label, background, text color]
 const BRANDS: [RegExp, string, string, string][] = [
   [/netflix/i, 'N', '#000', '#e50914'], [/youtube/i, '▶', '#ff0000', '#fff'], [/google ?play/i, '▶', '#fff', '#01875f'], [/google/i, 'G', '#fff', '#4285f4'],
@@ -115,7 +116,8 @@ const BRANDS: [RegExp, string, string, string][] = [
   [/axis/i, 'A', '#97144d', '#fff'], [/tiqmo/i, 't', '#6c2bd9', '#fff'], [/one ?card/i, '1', '#111', '#fff'], [/barq/i, 'B', '#0a1f44', '#fff'],
   [/nissan|patrol/i, 'N', '#c3002f', '#fff'], [/shriram/i, 'SP', '#7a1f2b', '#fff'],
 ];
-/** Brand → its website, for the real logo (favicon). The monogram above stays underneath as the fallback. */
+/** Brand → its website, for the real logo (favicon). The monogram above stays underneath as the fallback.
+ * The server serves only these domains: keep api/logo.py DOMAINS in step (tests/test_v3_logo.py checks). */
 const DOMAINS: [RegExp, string][] = [
   [/netflix/i, 'netflix.com'], [/youtube/i, 'youtube.com'], [/google ?play/i, 'play.google.com'], [/google/i, 'google.com'], [/apple|itunes|icloud/i, 'apple.com'],
   [/spotify/i, 'spotify.com'], [/amazon|amzn/i, 'amazon.com'], [/shahid/i, 'shahid.mbc.net'], [/disney|hotstar/i, 'hotstar.com'], [/anghami/i, 'anghami.com'],
@@ -133,7 +135,7 @@ const DOMAINS: [RegExp, string][] = [
 ];
 export function logoOf(name?: string | null) {
   const d = name && DOMAINS.find(([rx]) => rx.test(name));
-  return d ? `https://www.google.com/s2/favicons?domain=${d[1]}&sz=128` : undefined;
+  return d ? `/api/logo/${d[1]}` : undefined;
 }
 /** A brand tile: the real logo when it loads, its monogram underneath otherwise. */
 export function BrandTile({ name, size }: { name: string; size?: number }) {

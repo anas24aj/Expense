@@ -36,7 +36,9 @@ export function Page({ title, subtitle, back, trail, children }: { title: string
       <header className={`topbar ${collapsed ? 'collapsed' : ''}`}>
         <div className="lead">
           {back && (
-            <button className="icon-btn" onClick={() => (back === true ? nav(-1) : nav(back))} aria-label="Back">
+            <button className="icon-btn" aria-label="Back"
+              // go back through history when this app put an entry there (keeps the OS back stack honest); a deep link goes up instead
+              onClick={() => ((window.history.state?.idx ?? 0) > 0 ? nav(-1) : nav(back === true ? '/' : back, { replace: true }))}>
               <Icon name="chevL" />
             </button>
           )}
@@ -190,7 +192,21 @@ export function PageSkeleton() {
   );
 }
 export function ErrorCard({ error, retry }: { error: Error | null; retry?: () => void }) {
-  return <EmptyState icon="warn" title="Couldn’t load this" text={error?.message} action={retry && <button className="btn small secondary" onClick={retry}>Try again</button>} />;
+  const online = useOnline();
+  const network = !online || error instanceof TypeError; // fetch() rejects with a TypeError ("Failed to fetch") when it can't reach us
+  return <EmptyState icon={online ? 'warn' : 'wifiOff'} title={!online ? 'You’re offline' : network ? 'Can’t reach Ledger' : 'Couldn’t load this'}
+    text={!online ? 'Nothing is kept on this phone, so this shows once you’re back online.' : network ? 'Check your connection and try again.' : error?.message}
+    action={retry && <button className="btn small secondary" onClick={retry}>Try again</button>} />;
+}
+/** navigator.onLine, kept current by the online/offline events. */
+export function useOnline() {
+  const [on, setOn] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const up = () => setOn(navigator.onLine);
+    window.addEventListener('online', up); window.addEventListener('offline', up);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', up); };
+  }, []);
+  return on;
 }
 
 /** Keeps one broken screen from blanking the app; resets when the route changes (key it by pathname). */
@@ -205,6 +221,9 @@ export class Boundary extends Component<{ children: ReactNode }, { error: Error 
 }
 
 /* ---------- Sheet: bottom sheet with detents and drag to dismiss ---------- */
+type SheetEntry = { idx: number; url: string };
+let leaving: SheetEntry | null = null;
+const sheets: SheetEntry[] = []; // open sheets, topmost last: one back press closes only the top one
 type Detent = 'auto' | 'medium' | 'large';
 export function Sheet({ open, onClose, title, children, detent = 'auto', lead, trail }: { open: boolean; onClose: () => void; title?: string; children: ReactNode; detent?: Detent; lead?: ReactNode; trail?: ReactNode }) {
   const [size, setSize] = useState<Detent>(detent);
@@ -220,6 +239,35 @@ export function Sheet({ open, onClose, title, children, detent = 'auto', lead, t
   }, [onClose]);
 
   useEffect(() => { if (open) setSize(detent); }, [open, detent]);
+  // OS back (Android back, iOS edge swipe) closes the sheet instead of leaving the page: an open sheet owns one history entry
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const st = window.history.state || {};
+    let me: SheetEntry;
+    if (leaving && st.idx === leaving.idx) { me = leaving; leaving = null; } // take over an entry being let go (StrictMode re-run, sheet after sheet)
+    else { me = { idx: (st.idx ?? 0) + 1, url: location.href }; window.history.pushState({ ...st, idx: me.idx }, ''); }
+    sheets.push(me);
+    const pop = () => { if (sheets[sheets.length - 1] === me && (window.history.state?.idx ?? 0) < me.idx) closeRef.current(); };
+    window.addEventListener('popstate', pop);
+    return () => {
+      window.removeEventListener('popstate', pop);
+      sheets.splice(sheets.indexOf(me), 1);
+      leaving = me;
+      setTimeout(() => { // closed by its own UI: step back off its entry, unless OS back already did or the app went to another page
+        if (leaving !== me) return;
+        leaving = null;
+        if (window.history.state?.idx !== me.idx) return;
+        const url = location.href; // the page may have changed its own URL (a filter, say) while the sheet was up: keep that
+        window.history.back();
+        if (url !== me.url) window.addEventListener('popstate', () => {
+          window.history.replaceState(window.history.state, '', url);
+          window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+        }, { once: true });
+      });
+    };
+  }, [open]);
   // closed by the parent (after a save, say): slide out instead of vanishing, showing what was there
   const [shown, setShown] = useState(open);
   const last = useRef({ children, title });

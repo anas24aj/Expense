@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, useApi, useWrite } from '../api/client';
-import type { Account, Asset, Category, Claim, Fund, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
+import { api, ApiError, qs, useApi, useWrite } from '../api/client';
+import type { Account, Asset, Category, Money as M, Claim, Fund, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
 import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, sumByCurrency, thisMonth, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Monies, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
@@ -26,28 +27,59 @@ export function TxnRow({ t, onOpen }: { t: Txn; onOpen: (t: Txn) => void }) {
   );
 }
 
-type Filters = { account_id?: string; category?: string; purpose?: string; member_id?: string; review?: boolean };
 type FilterKey = 'account_id' | 'category' | 'purpose' | 'member_id';
+const FILTER_KEYS: FilterKey[] = ['account_id', 'category', 'purpose', 'member_id'];
+type TxnPage = { items: Txn[]; next_before: string | null; total?: number; days?: Record<string, M[]> };
 
 export default function ActivityPage() {
-  const [month, setMonth] = useState(thisMonth());
-  const [q, setQ] = useState('');
-  const [params] = useSearchParams();
-  const [f, setF] = useState<Filters>(() => ({ account_id: params.get('account_id') || undefined, category: params.get('category') || undefined }));
+  // month, search and filters live in the URL: they survive tab switches, back and reloads
+  const [params, setParams] = useSearchParams();
+  const set = (patch: Record<string, string | undefined>) => setParams(p => {
+    for (const [k, v] of Object.entries(patch)) if (v) p.set(k, v); else p.delete(k);
+    return p;
+  }, { replace: true });
+  const month = params.get('month') || thisMonth();
+  const q = params.get('q') || '';
+  const review = params.get('review') === '1';
+  const f = Object.fromEntries(FILTER_KEYS.map(k => [k, params.get(k) || undefined])) as Record<FilterKey, string | undefined>;
+  const [text, setText] = useState(q);
+  useEffect(() => { // debounced: one request per pause in typing, not per letter
+    const t = setTimeout(() => { if (text.trim() !== q) set({ q: text.trim() || undefined }); }, 250);
+    return () => clearTimeout(t);
+  }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
   const [picking, setPicking] = useState<FilterKey | null>(null);
   const [open, setOpen] = useState<Txn | null>(null);
   const [adding, setAdding] = useState(false);
-  const list = useApi<{ items: Txn[] }>('/transactions', { month, q, ...f, review: f.review ? 1 : undefined });
+  // a search covers every month; otherwise one month, paged 200 rows at a time as you scroll
+  const filters = { ...(q ? { q } : { month }), ...f, review: review ? 1 : undefined };
+  const list = useInfiniteQuery<TxnPage, ApiError>({
+    queryKey: ['/transactions', { ...filters, paged: 1 }],
+    queryFn: ({ pageParam }) => api<TxnPage>('/transactions' + qs({ ...filters, limit: 200, before: pageParam as string | undefined })),
+    initialPageParam: undefined,
+    getNextPageParam: p => p.next_before ?? undefined,
+  });
   const accounts = useApi<{ items: Account[]; recent_ids?: string[] }>('/accounts');
   const cats = useApi<{ items: Category[] }>('/categories');
   const hh = useApi<HouseholdFull>('/households/current');
   const nav = useNavigate();
+  const first = list.data?.pages[0];
+  const more = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = more.current;
+    if (!el || !list.hasNextPage) return;
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting && !list.isFetchingNextPage) list.fetchNextPage(); }, { rootMargin: '1200px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [list.hasNextPage, list.isFetchingNextPage, list.fetchNextPage, list.data]);
 
   const groups = useMemo(() => {
     const g = new Map<string, Txn[]>();
-    for (const t of list.data?.items || []) g.set(t.day, [...(g.get(t.day) || []), t]);
+    for (const p of list.data?.pages || []) for (const t of p.items) g.set(t.day, [...(g.get(t.day) || []), t]);
     return [...g.entries()];
   }, [list.data]);
+  const loaded = groups.reduce((n, [, xs]) => n + xs.length, 0);
+  const count = first?.total ?? loaded;
+  const year = thisMonth().slice(0, 4);
 
   const options: Record<FilterKey, { label: string; items: { value: string; label: string }[] }> = {
     account_id: { label: 'Account', items: (accounts.data?.items || []).map(a => ({ value: a.id, label: `${a.institution} · ${a.name}` })) },
@@ -56,6 +88,7 @@ export default function ActivityPage() {
     member_id: { label: 'Member', items: (hh.data?.members || []).map(m => ({ value: m.id, label: m.display_name })) },
   };
   const chipLabel = (k: FilterKey) => (f[k] ? options[k].items.find(i => i.value === f[k])?.label || f[k] : options[k].label);
+  const setMonth = (m: string) => set({ month: m === thisMonth() ? undefined : m });
 
   return (
     <Page title="Activity" trail={<>
@@ -63,21 +96,23 @@ export default function ActivityPage() {
       <button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add a transaction"><Icon name="plus" /></button>
     </>}>
       <div className="between">
-        <div className="month-switch" role="group" aria-label="Month">
-          <button onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month"><Icon name="chevL" /></button>
-          <strong aria-live="polite">{monthLabel(month, true)}</strong>
-          <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= thisMonth()} aria-label="Next month" style={{ opacity: month >= thisMonth() ? .3 : 1 }}><Icon name="chevR" /></button>
-        </div>
-        {!!list.data?.items.length && <span className="caption">{list.data.items.length} items</span>}
+        {q ? <strong style={{ padding: '6px 4px' }}>Searching all months</strong> : (
+          <div className="month-switch" role="group" aria-label="Month">
+            <button onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month"><Icon name="chevL" /></button>
+            <strong aria-live="polite">{monthLabel(month, true)}</strong>
+            <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= thisMonth()} aria-label="Next month" style={{ opacity: month >= thisMonth() ? .3 : 1 }}><Icon name="chevR" /></button>
+          </div>
+        )}
+        {count > 0 && <span className="caption">{count}{first?.total === undefined && list.hasNextPage ? '+' : ''} {count === 1 ? 'item' : 'items'}</span>}
       </div>
       <div className="search">
         <Icon name="search" />
-        <input className="input" type="search" placeholder="Search merchants, categories" value={q} onChange={e => setQ(e.target.value)} aria-label="Search" />
+        <input className="input" type="search" placeholder="Search all months" value={text} onChange={e => setText(e.target.value)} aria-label="Search" />
       </div>
       <div className="chips" role="toolbar" aria-label="Filters">
-        <Chip on={f.review} onClick={() => setF({ ...f, review: !f.review })} icon="sparkle">To check</Chip>
-        {(Object.keys(options) as FilterKey[]).map(k => (
-          <Chip key={k} on={!!f[k]} onClick={() => (f[k] ? setF({ ...f, [k]: undefined }) : setPicking(k))}>
+        <Chip on={review} onClick={() => set({ review: review ? undefined : '1' })} icon="sparkle">To check</Chip>
+        {FILTER_KEYS.map(k => (
+          <Chip key={k} on={!!f[k]} onClick={() => (f[k] ? set({ [k]: undefined }) : setPicking(k))}>
             {chipLabel(k)}{f[k] ? <Icon name="close" /> : <Icon name="chevD" />}
           </Chip>
         ))}
@@ -85,22 +120,24 @@ export default function ActivityPage() {
 
       {list.isLoading ? <div className="glass list" style={{ padding: 16 }}><div className="stack">{[0, 1, 2, 3, 4].map(i => <Skeleton key={i} h={40} />)}</div></div>
         : list.error ? <ErrorCard error={list.error} retry={list.refetch} />
-        : !groups.length ? (q || Object.values(f).some(Boolean) ? <EmptyState icon="search" title="No matches" text="Try clearing the search or filters." />
+        : !groups.length ? (q || review || Object.values(f).some(Boolean) ? <EmptyState icon="search" title="No matches" text="Try clearing the search or filters." />
           : <EmptyState icon="activity" title={`Nothing in ${monthLabel(month, true)}`} text="Every payment shows up here, tagged to the account it came from. Import a bank statement, or connect your phone so bank SMS arrive by themselves."
               action={<div className="row-flex" style={{ justifyContent: 'center' }}><Link to="/more/import" className="btn small">Import statement</Link><Link to="/more/devices" className="btn small secondary">Connect phone</Link></div>} />)
         : groups.map(([day, items]) => {
-          const out = sumByCurrency(items.filter(t => t.direction === 'debit' && ['spend', 'fee', 'support'].includes(t.purpose)).map(t => t.split_mine || t.amount));
+          // the server's per-day totals cover rows not paged in yet; summed here only when it sent none
+          const out = first?.days ? first.days[day] || [] : sumByCurrency(items.filter(t => t.direction === 'debit' && ['spend', 'fee', 'support'].includes(t.purpose)).map(t => t.split_mine || t.amount));
           return (
-            <section key={day} aria-label={dayLabel(day)}>
-              <h2 className="day-head"><span>{dayLabel(day)}</span>{out.length > 0 && <span className="num"><Monies items={out} /></span>}</h2>
+            <section key={day} className="day-section" aria-label={dayLabel(day)}>
+              <h2 className="day-head"><span>{dayLabel(day)}{day.slice(0, 4) !== year ? ` ${day.slice(0, 4)}` : ''}</span>{out.length > 0 && <span className="num"><Monies items={out} /></span>}</h2>
               <List>{items.map(t => <TxnRow key={t.id} t={t} onOpen={setOpen} />)}</List>
             </section>
           );
         })}
+      {list.hasNextPage && <div ref={more} aria-busy={list.isFetchingNextPage}><Skeleton h={56} r={18} /></div>}
 
       <Sheet open={!!picking} onClose={() => setPicking(null)} title={picking ? options[picking].label : ''} detent="medium">
         {picking && (
-          <List>{options[picking].items.map(o => <ListRow key={o.value} title={o.label} onClick={() => { setF({ ...f, [picking]: o.value }); setPicking(null); }} chevron={false} />)}</List>
+          <List>{options[picking].items.map(o => <ListRow key={o.value} title={o.label} onClick={() => { set({ [picking]: o.value }); setPicking(null); }} chevron={false} />)}</List>
         )}
       </Sheet>
       <TxnSheet txn={open} onClose={() => setOpen(null)} />
@@ -342,7 +379,9 @@ function AddTxnSheet({ open, onClose, accounts, recent }: { open: boolean; onClo
   };
   const setDirection = (d: 'debit' | 'credit') => { setDir(d); setPd(PERSON_DIRS[d][0].value); };
   return (
-    <Sheet open={open} onClose={onClose} title="Add" detent="auto">
+    // Add sits in the header, where the keyboard can't cover it
+    <Sheet open={open} onClose={onClose} title="Add" detent="auto" lead={<button className="link-btn" onClick={onClose}>Cancel</button>}
+      trail={<button className="link-btn" style={{ fontWeight: 700 }} disabled={!Number(amount) || !day || save.isPending || tag.isPending} onClick={submit}>Add</button>}>
       <div className="stack">
         <Segmented label="Direction" value={dir} onChange={setDirection} options={[{ value: 'debit', label: 'Money out' }, { value: 'credit', label: 'Money in' }]} />
         <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={c => { setCurrency(c); setAccount(null); }} autoFocus />
@@ -363,7 +402,6 @@ function AddTxnSheet({ open, onClose, accounts, recent }: { open: boolean; onClo
           </select>
         </Field>
         {person && <Segmented label="Which way" value={pd} onChange={setPd} options={PERSON_DIRS[dir]} />}
-        <button className="btn block" disabled={!Number(amount) || !day || save.isPending || tag.isPending} onClick={submit}>Add</button>
         <p className="footnote" style={{ textAlign: 'center' }}>{person ? 'With no account it’s just an IOU between you, e.g. they paid your share of a bill.' : 'We’ll guess the category — tap it later to change.'}</p>
       </div>
     </Sheet>
@@ -381,10 +419,15 @@ export function ReviewPage() {
   const items = (q.data?.items || []).filter(t => !done.includes(t.id));
   const t = items[0];
   const skip = () => { setDone(d => [...d, t.id]); setDx(0); };
-  const answer = async (s: ReviewTxn['suggestions'][number]) => {
-    setDone(d => [...d, t.id]);
-    await api(`/transactions/${t.id}`, { method: 'PATCH', body: { purpose: s.purpose, category: s.category ?? undefined, person: s.person ? { kind: s.person.kind, id: s.person.id } : undefined } });
-    toast(s.label);
+  const patch = useWrite<Record<string, unknown>>('PATCH', b => `/transactions/${b.id}`); // refreshes Home's "to check" count too
+  const answer = (s: ReviewTxn['suggestions'][number]) => {
+    const x = t;
+    setDone(d => [...d, x.id]);
+    patch.mutate({ id: x.id, purpose: s.purpose, category: s.category ?? undefined, person: s.person ? { kind: s.person.kind, id: s.person.id } : undefined }, {
+      onSuccess: () => toast(s.label, () => patch.mutate({ id: x.id, purpose: x.purpose, category: x.category, person: x.person ? { kind: x.person.kind, id: x.person.id } : null },
+        { onSuccess: () => setDone(d => d.filter(i => i !== x.id)), onError: e => toast(`Couldn’t undo: ${e.message}`) })),
+      onError: e => { setDone(d => d.filter(i => i !== x.id)); toast(`Not saved: ${e.message}`); }, // back in the queue
+    });
   };
   return (
     <Page title="Review" back="/activity" subtitle={q.data ? (items.length ? `${items.length} left · swipe to skip` : 'All caught up') : ' '}>

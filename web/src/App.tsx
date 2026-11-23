@@ -1,7 +1,8 @@
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useApi } from './api/client';
 import type { Me } from './api/types';
-import { Boundary, Icon, PageSkeleton } from './ui';
+import { Boundary, Icon, PageSkeleton, useOnline } from './ui';
 import { ForgotPage, JoinPage, ResetPage, SignInPage, SignUpPage } from './screens/Auth';
 import Onboarding from './screens/Onboarding';
 import HomePage from './screens/Home';
@@ -12,34 +13,60 @@ import { TripPage, TripsPage } from './screens/Trips';
 import { AccountPage, CoveragePage, FlowsPage } from './screens/Flows';
 import { AccountsPage, AssetPage, AssetsPage, ClaudePage, DevicesPage, HouseholdPage, ImportPage, MorePage, ProfilePage, SettingsPage } from './screens/More';
 
+// Five tabs at most (iOS and Material guidance); People lives under More.
 const TABS = [
-  { to: '/', label: 'Home', icon: 'home' },
-  { to: '/activity', label: 'Activity', icon: 'activity' },
-  { to: '/people', label: 'People', icon: 'people' },
-  { to: '/plan', label: 'Plan', icon: 'plan' },
-  { to: '/assets', label: 'Assets', icon: 'building' },
-  { to: '/more', label: 'More', icon: 'more' },
+  { to: '/', label: 'Home', icon: 'home', also: [] as string[] },
+  { to: '/activity', label: 'Activity', icon: 'activity', also: [] },
+  { to: '/plan', label: 'Plan', icon: 'plan', also: [] },
+  { to: '/assets', label: 'Assets', icon: 'building', also: [] },
+  { to: '/more', label: 'More', icon: 'more', also: ['/people'] },
 ];
+const tabOf = (path: string) => Math.max(0, TABS.findIndex((t, i) => (i === 0 ? path === '/' : [t.to, ...t.also].some(p => path.startsWith(p)))));
 
 function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
-  const { pathname } = useLocation();
-  const active = Math.max(0, TABS.findIndex((t, i) => (i === 0 ? pathname === '/' : pathname.startsWith(t.to))));
+  const { pathname, search } = useLocation();
+  const active = tabOf(pathname);
+  const online = useOnline();
+  // each tab reopens where you left it (its last URL, then its scroll position); tapping the current tab goes to its top
+  const lastUrl = useRef<Record<number, string>>({});
+  const scroll = useRef<Record<string, number>>({});
+  const here = pathname + search;
+  lastUrl.current[active] = here;
+  const to = (i: number) => (i === active ? TABS[i].to : lastUrl.current[i] || TABS[i].to);
+  const key = useRef(pathname);
+  useEffect(() => {
+    window.history.scrollRestoration = 'manual'; // restored below, per screen
+    const save = () => { scroll.current[key.current] = window.scrollY; };
+    window.addEventListener('scroll', save, { passive: true });
+    return () => window.removeEventListener('scroll', save);
+  }, []);
+  useLayoutEffect(() => {
+    key.current = pathname; // scroll is kept per screen, not per filter
+    const y = scroll.current[pathname] || 0;
+    let n = 0, raf = 0;
+    const go = () => { window.scrollTo(0, y); if (Math.abs(window.scrollY - y) > 2 && ++n < 30) raf = requestAnimationFrame(go); }; // wait for the list to render
+    go();
+    const stop = () => cancelAnimationFrame(raf);
+    window.addEventListener('touchstart', stop, { once: true }); window.addEventListener('wheel', stop, { once: true });
+    return () => { stop(); window.removeEventListener('touchstart', stop); window.removeEventListener('wheel', stop); };
+  }, [pathname]);
   return (
     <div className="shell">
       <a href="#main" className="sr-only">Skip to content</a>
       <nav className="sidebar" aria-label="Main">
         <div className="brand"><img src="/icon.svg" alt="" />Ledger</div>
         {TABS.map((t, i) => (
-          <NavLink key={t.to} to={t.to} end={t.to === '/'} aria-current={i === active ? 'page' : undefined}><Icon name={t.icon} />{t.label}</NavLink>
+          <NavLink key={t.to} to={to(i)} end={t.to === '/'} aria-current={i === active ? 'page' : undefined}><Icon name={t.icon} />{t.label}</NavLink>
         ))}
         <div className="grow" />
         <div className="hh">{me.household.name}<br /><span className="footnote">{me.user.email}</span></div>
       </nav>
+      {!online && <div className="offline-bar" role="status"><Icon name="wifiOff" size={16} />Offline · nothing new until you reconnect</div>}
       <main id="main" className="main"><Boundary key={pathname}>{children}</Boundary></main>
       <nav className="tabbar" aria-label="Tabs">
         <span className="lens" style={{ transform: `translateX(${active * 100}%)` }} aria-hidden />
         {TABS.map((t, i) => (
-          <NavLink key={t.to} to={t.to} end={t.to === '/'} aria-current={i === active ? 'page' : undefined}><Icon name={t.icon} />{t.label}</NavLink>
+          <NavLink key={t.to} to={to(i)} end={t.to === '/'} aria-current={i === active ? 'page' : undefined}><Icon name={t.icon} />{t.label}</NavLink>
         ))}
       </nav>
     </div>

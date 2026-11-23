@@ -17,7 +17,7 @@ from api.db import DB, Scoped
 
 DIST = Path(__file__).parent.parent / 'web' / 'dist'
 MAX_BODY = 6 * 1024 * 1024  # statements arrive base64; Vercel caps requests at 4.5 MB anyway
-MODULES = ['api.auth', 'api.households', 'api.ledger', 'api.ingest', 'api.plan', 'api.insights', 'api.flows', 'api.salary']
+MODULES = ['api.auth', 'api.households', 'api.ledger', 'api.ingest', 'api.plan', 'api.insights', 'api.flows', 'api.salary', 'api.logo']
 _routes = []
 _loaded = []
 
@@ -152,8 +152,8 @@ def app(environ, start_response):
             try:
                 _authorize(req, level)
                 out = fn(req)
-                status, body = out if isinstance(out, tuple) else (200, out)
-                return send(status, body, headers=req.headers_out)
+                status, body, *ctype = out if isinstance(out, tuple) else (200, out)  # (status, bytes, content type) for files
+                return send(status, body, *ctype, headers=req.headers_out)
             except ApiError as e:
                 return send(e.status, {'error': e.message}, headers=req.headers_out)
         return send(405 if allowed else 404, {'error': 'method not allowed' if allowed else 'not found'})

@@ -11,13 +11,14 @@ import { EditAccountSheet, KIND_LABEL, KIND_TILE } from './More';
 const COLOR: Record<FlowNode['kind'], string> = { inflow: '#30d158', account: '#0a84ff', spending: '#ff9f0a', outflow: '#bf5af2' };
 type Laid = FlowNode & { x: number; y: number; h: number; value: number; col: number };
 
-/** Columns: inflows → accounts (deeper when fed by another account) → spending/outflows. Pure layout, no library. */
-export function layoutSankey(f: Flows, width: number, height: number) {
+/** Columns: inflows → accounts (deeper when fed by another account) → spending/outflows. Pure layout, no library.
+ *  flat: every account in one middle column (3 columns, for phones); transfers between accounts are then left out of the picture. */
+export function layoutSankey(f: Flows, width: number, height: number, flat = false) {
   const val = new Map<string, { in: number; out: number }>();
   for (const n of f.nodes) val.set(n.id, { in: 0, out: 0 });
   for (const l of f.links) { val.get(l.source)!.out += l.amount.minor; val.get(l.target)!.in += l.amount.minor; }
   const depth = new Map<string, number>(f.nodes.map(n => [n.id, n.kind === 'inflow' ? 0 : 1]));
-  for (let pass = 0; pass < f.nodes.length; pass++) { // relax; capped so a transfer cycle can't loop forever
+  for (let pass = 0; !flat && pass < f.nodes.length; pass++) { // relax; capped so a transfer cycle can't loop forever
     let changed = false;
     for (const l of f.links) {
       const s = f.nodes.find(n => n.id === l.source)!, t = f.nodes.find(n => n.id === l.target)!;
@@ -41,7 +42,7 @@ export function layoutSankey(f: Flows, width: number, height: number) {
     for (const n of c) { const h = Math.max(2, value(n.id) * k); laid.set(n.id, { ...n, x, y, h, value: value(n.id), col: ci }); y += h + gap; }
   });
   const outOff = new Map<string, number>(), inOff = new Map<string, number>();
-  const links = [...f.links].filter(l => laid.has(l.source) && laid.has(l.target))
+  const links = [...f.links].filter(l => laid.has(l.source) && laid.has(l.target) && laid.get(l.source)!.col < laid.get(l.target)!.col)
     .sort((a, b) => laid.get(a.target)!.y - laid.get(b.target)!.y)
     .map(l => {
       const s = laid.get(l.source)!, t = laid.get(l.target)!, w = Math.max(1, l.amount.minor * k);
@@ -58,22 +59,26 @@ function Sankey({ f }: { f: Flows }) {
   const [width, setWidth] = useState(340);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const ro = new ResizeObserver(([e]) => setWidth(Math.max(300, Math.floor(e.contentRect.width))));
+    const ro = new ResizeObserver(([e]) => setWidth(Math.max(240, Math.floor(e.contentRect.width))));
     if (box.current) ro.observe(box.current);
     return () => ro.disconnect();
   }, []);
   const perCol = Math.max(...['inflow', 'account', 'spending'].map(k => f.nodes.filter(n => (k === 'spending' ? n.kind === 'spending' || n.kind === 'outflow' : n.kind === k)).length));
   const height = Math.max(320, perCol * 40);
-  const narrow = width < 500; // phones: tighter label gutters so a 3-column flow fits without sideways scrolling
-  const padL = narrow ? 82 : 112, padR = narrow ? 82 : 112;
-  const cols = useMemo(() => layoutSankey(f, 600, height).cols, [f, height]);
-  const step = narrow && cols <= 3 ? 88 : 130; // a deeper chain of accounts scrolls sideways, never the page
-  const w = Math.max(width, padL + padR + (cols - 1) * step);
-  const L = useMemo(() => layoutSankey(f, w - padL - padR, height), [f, w, height]);
+  const narrow = width < 600; // phones: three columns (accounts collapsed into one) that fit the width, no sideways drag
+  const max = narrow ? 12 : 17;
+  const short = (name: string, m = max) => { const n = name.replace(/ Bank\b/, ''); return n.length > m ? n.slice(0, m - 1) + '…' : n; };
+  // gutters as wide as the longest label on each side (≤7.2px a character at 11.5px), so nothing is clipped
+  const gutter = (kinds: FlowNode['kind'][]) => Math.min(narrow ? 100 : 136, 12 + 7.2 * Math.max(7, ...f.nodes.filter(n => kinds.includes(n.kind)).map(n => short(n.name).length)));
+  const padL = narrow ? 2 : gutter(['inflow']), padR = gutter(['spending', 'outflow']); // phones: inflow labels sit right of their bar
+  const cols = useMemo(() => layoutSankey(f, 600, height, narrow).cols, [f, height, narrow]);
+  const w = narrow ? width : Math.max(width, padL + padR + (cols - 1) * 130); // desktop: a deeper chain of accounts scrolls sideways, never the page
+  const L = useMemo(() => layoutSankey(f, w - padL - padR, height, narrow), [f, w, height, narrow, padL, padR]);
   const halo = { paintOrder: 'stroke', stroke: 'var(--glass-solid)', strokeWidth: 3, strokeLinejoin: 'round' } as const;
   return (
     <div ref={box} style={{ overflowX: 'auto', overflowY: 'hidden' }}>
-      {w > width && <p className="caption" style={{ marginBottom: 6, position: 'sticky', left: 0 }}>Swipe the chart sideways to follow the money →</p>}
+      {narrow && f.links.some(l => f.nodes.find(n => n.id === l.source)?.kind === 'account' && f.nodes.find(n => n.id === l.target)?.kind === 'account') &&
+        <p className="caption" style={{ marginBottom: 6 }}>Transfers between your accounts are listed under Biggest flows.</p>}
       <svg viewBox={`${-padL} -8 ${w} ${height + 16}`} width={w} height={height + 16} role="img" aria-label="Money flow between income, accounts and spending" style={{ display: 'block', overflow: 'visible' }}>
         {L.links.map((l, i) => (
           <path key={i} d={l.d} fill={l.color} opacity={hover && hover !== l.source && hover !== l.target ? 0.06 : 0.26} style={{ transition: 'opacity .2s' }}>
@@ -81,15 +86,15 @@ function Sankey({ f }: { f: Flows }) {
           </path>
         ))}
         {L.nodes.map(n => {
-          const right = n.col === L.cols - 1, left = n.col === 0;
+          const right = n.col === L.cols - 1, left = n.col === 0 && !narrow;
           const tx = right ? n.x + L.nodeW + 6 : left ? n.x - 6 : n.x + L.nodeW + 4;
           const anchor = right || !left ? 'start' : 'end';
-          const name = n.name.replace(/ Bank\b/, ''), max = narrow && step < 130 ? 13 : 17, short = name.length > max ? name.slice(0, max - 1) + '…' : name;
+          const room = left || right ? max : Math.max(4, Math.floor(((w - padL - padR) / Math.max(1, L.cols - 1) - L.nodeW - 10) / 7.2)); // a middle label stops short of the next column
           return (
             <g key={n.id} onPointerEnter={() => setHover(n.id)} onPointerLeave={() => setHover(null)} onClick={() => setHover(hover === n.id ? null : n.id)}>
               <rect x={n.x} y={n.y} width={L.nodeW} height={n.h} rx={3} fill={COLOR[n.kind]} />
               <text x={tx} y={n.y + Math.min(n.h / 2, 10)} textAnchor={anchor} dominantBaseline="middle" style={{ font: '600 11.5px var(--font)', fill: 'var(--text)', ...halo }}>
-                {short}<title>{n.name}</title>
+                {short(n.name, room)}<title>{n.name}</title>
                 <tspan x={tx} dy="13" style={{ font: '500 10.5px var(--font)', fill: 'var(--text-2)' }}>{fmt({ minor: n.value, currency: f.currency }, { compact: true })}</tspan>
               </text>
             </g>
