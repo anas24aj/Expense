@@ -6,7 +6,7 @@
   ],
   "functions": {
     "api/app.py": {
-      "maxDuration": 300
+      "maxDuration": 60
     }
   },
   "buildCommand": "cd web && npm ci && npm run build"
