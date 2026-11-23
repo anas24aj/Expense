@@ -180,3 +180,31 @@ turns v3 rows into engine shapes once per request.
   column is informational. With `trip_id` only that trip's expenses are candidates; matched txns already in a claim are skipped.
 - **MCP** tools call the same route handlers in-process as the key's member (`admin` routes still checked);
   `search_transactions` = `GET /transactions?q=`.
+
+## Construction loans, salary history, missed EMIs, shared vehicle costs (added 2026-11-23; migration 006_loans_salary.sql)
+| Method | Path | Body → Response |
+|---|---|---|
+| POST/PATCH | /assets/{id}/milestones[/{mid}] | adds `liability_id`, `disbursed_on` (a tranche paid by the bank). `disbursed_on` without `liability_id` uses the milestone's, else the asset's loan; 400 when there is none. `disbursed_on: ""` undoes it. Pay it yourself with `paid_on` / `paid_txn_id` as before. |
+| POST/PATCH | /liabilities[/{id}] | adds `emi_from` (day full EMIs start; construction loans) |
+| GET/POST | /salary | GET → `{items: [SalaryEntry] (newest month first), month, expected_this_month: Money}`; POST `{from_month: YYYY-MM, amount_minor, currency, kind?: base|arrears|bonus (default base), member_id? (default you), note?}` → 201 SalaryEntry |
+| DELETE | /salary/{id} | → `{id, deleted}` |
+| GET | /alerts | → `{items: [Alert]}` (the same list as `/insights/home` `alerts`) |
+
+SalaryEntry: `{id, member_id, member_name, from_month, amount: Money, kind, note}`.
+- **Expected income** (month view, look-ahead, what-if, advice): per month, each member's latest `base` entry with `from_month` ≤ that
+  month, summed, plus `arrears`/`bonus` entries whose `from_month` is that month (paid once). No base entry yet → the old
+  `settings.salary`, else the salary-credit median (unchanged). Math: `engine.salary_in` / `engine.expected_income`.
+- **Construction loan**: a liability that any milestone names in `liability_id`. Outstanding = disbursed tranches (on or before today)
+  − principal repaid; every linked payment counts (not only after `as_of`), each paying `balance × rate/12` interest first
+  (`engine.loan_walk`), so a pre-EMI payment repays nothing. Liability adds `emi_from` and `construction: {sanctioned, disbursed,
+  undisbursed, pre_emi, monthly (pre-EMI before emi_from, else EMI), phase: pre_emi|emi, emi_from, tranches: [{milestone_id, asset_id,
+  name, day, amount, future}]}|null`; `paid_pct` is of what was disbursed. Look-ahead counts today's pre-EMI until `emi_from`, then the EMI.
+- **Missed EMI alert** (`level: bad`, adds `liability_id`, `month`): an open `loan` with an EMI (or pre-EMI) and outstanding > 0 whose
+  due date (due_day, 0 = month end) in the last 3 months is after `as_of`, 3+ days past, with no linked payment that month.
+- **Bounce charges**: debit text with bounce / dishonour / insufficient funds / ECS·ACH·NACH·SI·cheque·EMI·mandate return (or RTN)
+  *and* a charge word (charge, chg, fee, penal) → purpose `fee`, *Fees & interest*, before loan/commitment rules. A returned EMI
+  without a charge word is left alone.
+- **Asset** adds `costs: [{txn_id, day, merchant, cost_type, amount}]` (all `/costs`-tagged txns, newest first), `cost_totals: {type: Money}`,
+  `cost_total`, `sharer_totals: [{member_id, contact_id, name, amount}]` (each sharer's share_pct of matching types, `'*'` all),
+  `my_cost_total`; milestones add `liability_id`, `disbursed_on` (`paid` is true for a disbursed one; `next_milestone` skips them).
+- Accounts: the web add sheet now sends an explicit `country`; edit/archive use the existing PATCH.

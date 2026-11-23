@@ -17,7 +17,7 @@ from api.db import DB, Scoped
 
 DIST = Path(__file__).parent.parent / 'web' / 'dist'
 MAX_BODY = 6 * 1024 * 1024  # statements arrive base64; Vercel caps requests at 4.5 MB anyway
-MODULES = ['api.auth', 'api.households', 'api.ledger', 'api.ingest', 'api.plan', 'api.insights', 'api.flows']
+MODULES = ['api.auth', 'api.households', 'api.ledger', 'api.ingest', 'api.plan', 'api.insights', 'api.flows', 'api.salary']
 _routes = []
 _loaded = []
 

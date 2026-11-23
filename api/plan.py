@@ -22,7 +22,7 @@ REFS = {'account_id': 'accounts', 'contact_id': 'contacts', 'member_id': 'member
 SPECS = {
     'liabilities': ({'kind': LIAB_KINDS, 'name': 'text', 'lender': 'text', 'currency': 'cur', 'principal_minor': 'int',
                      'opening_balance_minor': 'int', 'as_of': 'day', 'rate_bp': 'int', 'emi_minor': 'int', 'due_day': 'int',
-                     'start_on': 'day', 'end_on': 'day', 'match_pattern': 'text', 'account_id': 'ref', 'contact_id': 'ref', 'member_id': 'ref'},
+                     'start_on': 'day', 'end_on': 'day', 'emi_from': 'day', 'match_pattern': 'text', 'account_id': 'ref', 'contact_id': 'ref', 'member_id': 'ref'},
                     ('kind', 'name', 'currency')),
     'commitments': ({'name': 'text', 'kind': COMMIT_KINDS, 'amount_minor': 'int', 'currency': 'cur', 'cycle_months': (0, 1, 3, 6, 12),
                      'next_due': 'day', 'end_on': 'day', 'country': 'text', 'match_pattern': 'text', 'account_id': 'ref',
@@ -31,7 +31,8 @@ SPECS = {
     'funds': ({'name': 'text', 'target_minor': 'int', 'currency': 'cur', 'due_on': 'day'}, ('name', 'target_minor', 'currency', 'due_on')),
     'assets': ({'kind': ASSET_KINDS, 'name': 'text', 'currency': 'cur', 'cost_minor': 'int', 'value_minor': 'int', 'value_as_of': 'day',
                 'liability_id': 'ref', 'match_pattern': 'text', 'details': 'json'}, ('kind', 'name', 'currency')),
-    'asset_milestones': ({'name': 'text', 'due_on': 'day', 'amount_minor': 'int', 'paid_txn_id': 'ref', 'paid_on': 'day'},
+    'asset_milestones': ({'name': 'text', 'due_on': 'day', 'amount_minor': 'int', 'paid_txn_id': 'ref', 'paid_on': 'day',
+                          'liability_id': 'ref', 'disbursed_on': 'day'},
                          ('name', 'due_on', 'amount_minor')),
     'trips': ({'name': 'text', 'city': 'text', 'country': 'text', 'start_on': 'day', 'end_on': 'day', 'kind': ('business', 'personal')},
               ('name', 'start_on', 'end_on')),
@@ -145,10 +146,16 @@ def liability_json(l, ctx):
         months = server.plan([{'id': 1, 'balance_now': out, 'rate_bp': l['rate_bp'], 'emi_minor': l['emi_minor']}], 0)['months']
         payoff = engine.add_months(ctx['today'][:7], months) if months is not None else None
     principal = l['principal_minor'] or l['opening_balance_minor']
+    cons = l.get('construction')
+    lent = cons['disbursed'] if cons else principal  # a construction loan has only lent what it disbursed
     return {'id': l['id'], 'kind': l['kind'], 'name': l['name'], 'lender': l['lender'], 'currency': cur, 'principal': M(principal, cur),
             'opening_balance': M(l['opening_balance_minor'], cur), 'as_of': l['as_of'], 'outstanding': M(out, cur), 'rate_bp': l['rate_bp'],
             'emi': M(l['emi_minor'], cur), 'due_day': l['due_day'], 'start_on': l['start_on'], 'end_on': l['end_on'],
-            'paid_pct': round(100 * (principal - out) / principal) if principal else None, 'payoff_month': payoff,
+            'paid_pct': round(100 * (lent - out) / lent) if lent else None, 'payoff_month': payoff, 'emi_from': l['emi_from'] or None,
+            'construction': {**{k: M(cons[k], cur) for k in ('disbursed', 'undisbursed', 'pre_emi', 'monthly')}, 'sanctioned': M(principal, cur),
+                             'phase': cons['phase'], 'emi_from': cons['emi_from'],
+                             'tranches': [{**{k: t[k] for k in ('milestone_id', 'asset_id', 'name', 'day', 'future')}, 'amount': M(t['amount_minor'], cur)}
+                                          for t in cons['tranches']]} if cons else None,
             'interest_month': M(out * l['rate_bp'] / 120000, cur), 'account_id': l['account_id'], 'contact_id': l['contact_id'],
             'member_id': l['member_id'], 'match_pattern': l['match_pattern'], 'closed': bool(l['closed_at']),
             'payments': [{'txn_id': p['txn_id'], 'day': p['day'], 'amount': M(p['amount'], cur), 'interest': M(p['interest'], cur),
@@ -464,10 +471,20 @@ def asset_json(a, ctx, names):
     sharers = ctx['asset_sharers'][a['id']]
     pct = lambda k: min(100, sum(s['share_pct'] for s in sharers if s['cost_type'] in (k, '*')))
     mine = sum(v * (100 - pct(k)) / 100 for k, v in by_type.items())
-    unpaid = [m for m in stones if not (m['paid_on'] or m['paid_txn_id'])]
+    unpaid = [m for m in stones if not (m['paid_on'] or m['paid_txn_id'] or m['disbursed_on'])]
     nxt = unpaid[0] if unpaid else None
     ms = lambda m: {'id': m['id'], 'name': m['name'], 'due_on': m['due_on'], 'amount': M(m['amount_minor'], cur),
-                    'paid': bool(m['paid_on'] or m['paid_txn_id']), 'paid_on': m['paid_on'], 'paid_txn_id': m['paid_txn_id']}
+                    'paid': bool(m['paid_on'] or m['paid_txn_id'] or m['disbursed_on']), 'paid_on': m['paid_on'], 'paid_txn_id': m['paid_txn_id'],
+                    'liability_id': m['liability_id'], 'disbursed_on': m['disbursed_on']}
+    cost_rows = sorted(((c, ctx['by_id'][c['txn_id']]) for c in ctx['costs'] if c['asset_id'] == a['id'] and c['txn_id'] in ctx['by_id']),
+                       key=lambda ct: ct[1]['day'], reverse=True)
+    totals, parts = defaultdict(float), {}  # all-time cost per type; each sharer's part of them
+    for c, t in cost_rows:
+        v = conv(t['amount_minor'], t['currency']) * (1 if t['direction'] == 'debit' else -1)
+        totals[c['cost_type']] += v
+        for s in sharers:
+            if s['cost_type'] in (c['cost_type'], '*'):
+                parts.setdefault(s['member_id'] or s['contact_id'], [s, 0])[1] += v * s['share_pct'] / 100
     return {'id': a['id'], 'kind': a['kind'], 'name': a['name'], 'currency': cur, 'cost': M(a['cost_minor'], cur),
             'value': M(a['value_minor'] or a['cost_minor'], cur), 'value_as_of': a['value_as_of'], 'paid': M(paid, cur), 'financed': M(financed, cur),
             'remaining': M(max(0, a['cost_minor'] - paid - financed), cur), 'milestones': [ms(m) for m in stones],
@@ -475,6 +492,12 @@ def asset_json(a, ctx, names):
             'costs_by_type': {k: M(v, cur) for k, v in sorted(by_type.items())},
             'sharers': [{'id': s['id'], 'cost_type': s['cost_type'], 'member_id': s['member_id'], 'contact_id': s['contact_id'],
                          'name': names.get(s['member_id'] or s['contact_id'], ''), 'share_pct': s['share_pct']} for s in sharers],
+            'costs': [{'txn_id': t['id'], 'day': t['day'], 'merchant': t['merchant'], 'cost_type': c['cost_type'],
+                       'amount': M(conv(t['amount_minor'], t['currency']), cur)} for c, t in cost_rows],
+            'cost_totals': {k: M(v, cur) for k, v in sorted(totals.items())}, 'cost_total': M(sum(totals.values()), cur),
+            'sharer_totals': [{'member_id': s['member_id'], 'contact_id': s['contact_id'], 'name': names.get(k, ''), 'amount': M(v, cur)}
+                              for k, (s, v) in parts.items()],
+            'my_cost_total': M(sum(totals.values()) - sum(v for _, v in parts.values()), cur),
             'liability_id': a['liability_id'], 'match_pattern': a['match_pattern'], 'details': details}
 
 
@@ -517,10 +540,19 @@ def asset_delete(req):
     return deleted(req.params['id'])
 
 
+def _tranche(req, cols, m=None):
+    """A milestone marked disbursed is a tranche of a loan: the one named, else the milestone's, else the asset's."""
+    if cols.get('disbursed_on'):
+        cols['liability_id'] = cols.get('liability_id') or (m or {}).get('liability_id') or req.hh.get('assets', req.params['id'])['liability_id']
+        if not cols['liability_id']:
+            raise ApiError(400, 'link a loan to this property (or send liability_id) before marking a tranche disbursed')
+    return cols
+
+
 @route('POST', '/api/assets/{id}/milestones')
 def milestone_add(req):
     _get(req.hh, 'assets', req.params['id'], 'asset')
-    req.hh.insert('asset_milestones', asset_id=req.params['id'], **clean(req.hh, 'asset_milestones', req.json, True))
+    req.hh.insert('asset_milestones', asset_id=req.params['id'], **_tranche(req, clean(req.hh, 'asset_milestones', req.json, True)))
     return 201, _one_asset(req, req.params['id'])
 
 
@@ -533,8 +565,7 @@ def _milestone(req):
 
 @route('PATCH', '/api/assets/{id}/milestones/{mid}')
 def milestone_edit(req):
-    _milestone(req)
-    cols = clean(req.hh, 'asset_milestones', req.json, False)
+    cols = _tranche(req, clean(req.hh, 'asset_milestones', req.json, False), _milestone(req))
     if cols.get('paid_txn_id') and not cols.get('paid_on'):
         cols['paid_on'] = req.hh.get('transactions', cols['paid_txn_id'])['day']
     req.hh.update('asset_milestones', req.params['mid'], **cols)

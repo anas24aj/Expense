@@ -43,6 +43,12 @@ export interface Liability {
   id: string; kind: 'loan' | 'card' | 'bnpl' | 'person'; name: string; lender: string; currency: Currency; principal: Money;
   outstanding: Money; rate_bp: number; emi: Money; due_day: number | null; start_on: string | null; end_on: string | null;
   paid_pct: number; payoff_month: string | null; interest_month: Money; account_id: string | null; contact_id: string | null;
+  emi_from?: string | null; construction?: Construction | null;
+}
+/** A loan paid out in tranches while a property is built: pre-EMI (interest on what is out) until full EMIs start. */
+export interface Construction {
+  sanctioned: Money; disbursed: Money; undisbursed: Money; pre_emi: Money; monthly: Money; phase: 'pre_emi' | 'emi'; emi_from: string | null;
+  tranches: { milestone_id: string; asset_id: string; name: string; day: string; amount: Money; future: boolean }[];
 }
 export type CommitmentKind = 'rent' | 'bill' | 'subscription' | 'emi' | 'support' | 'insurance' | 'school' | 'milestone' | (string & {});
 export interface Share { member_id?: string; contact_id?: string; name: string; share: Money; paid_this_cycle: boolean }
@@ -53,15 +59,20 @@ export interface Commitment {
 }
 export type DetectedCommitment = Omit<Commitment, 'id'> & { evidence_txn_ids: string[] };
 export interface Fund { id: string; name: string; target: Money; due_on: string; saved: Money; monthly: Money; on_track: boolean; commitment_id: string | null }
-export interface Milestone { id: string; name: string; due_on: string; amount: Money; paid: boolean }
+export interface Milestone { id: string; name: string; due_on: string; amount: Money; paid: boolean; paid_on?: string | null; paid_txn_id?: string | null; liability_id?: string | null; disbursed_on?: string | null }
+export interface AssetCost { txn_id: string; day: string; merchant: string; cost_type: string; amount: Money }
+export interface AssetSharer { id?: string; cost_type: string; name: string; member_id?: string | null; contact_id?: string | null; share_pct: number }
 export interface Asset {
   id: string; kind: 'property' | 'vehicle' | 'investment'; name: string; currency: Currency; cost: Money; value: Money; paid: Money; financed: Money;
   remaining: Money; milestones: Milestone[]; next_milestone: Milestone | null; monthly_cost: Money; my_monthly_cost: Money;
-  costs_by_type: Record<string, Money>; sharers: { cost_type: string; name: string; member_id?: string; contact_id?: string; share_pct: number }[];
-  liability_id: string | null; details: Record<string, string | number | null>;
+  costs_by_type: Record<string, Money>; sharers: AssetSharer[];
+  liability_id: string | null; details: Record<string, string | number | null>; value_as_of?: string;
+  costs?: AssetCost[]; cost_totals?: Record<string, Money>; cost_total?: Money; my_cost_total?: Money;
+  sharer_totals?: { member_id: string | null; contact_id: string | null; name: string; amount: Money }[];
 }
 export interface Claim { id: string; name: string; payer: string; status: 'draft' | 'submitted' | 'paid' | 'partly'; member_id: string; items: Txn[]; expected: Money; received: Money; age_days: number; submitted_on: string | null;
   suggestion?: { txn_id: string; day: string; amount: Money } | null; reimbursement_txn_ids?: string[] }
+export interface SalaryEntry { id: string; member_id: string | null; member_name: string; from_month: string; amount: Money; kind: 'base' | 'arrears' | 'bonus'; note: string }
 export interface Settings { salary: Money | null; salary_day: number | null; emergency_months: number; debt_strategy: 'avalanche' | 'snowball'; extra_to_debt_minor: number }
 
 export interface MonthInsight {

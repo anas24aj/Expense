@@ -63,7 +63,7 @@ commitment_payments(commitment_id, cycle_start, txn_id NULL, paid_by_member_id, 
 funds(id, household_id, name, target_minor, currency, due_on, commitment_id NULL)
 fund_moves(fund_id, on_day, amount_minor, txn_id NULL)
 assets(id, household_id, kind property|vehicle|investment, name, currency, cost_minor, value_minor, value_as_of)
-asset_milestones(asset_id, name, due_on, amount_minor, paid_txn_id NULL)
+asset_milestones(asset_id, name, due_on, amount_minor, paid_txn_id NULL, paid_on, liability_id NULL, disbursed_on)  -- tranche: 006
 asset_costs(asset_id, txn_id, cost_type, shared_with_member_id|contact_id, share_pct)
 claims(id, household_id, member_id, name, status, submitted_on, expected_minor)
 claim_items(claim_id, txn_id)
@@ -71,6 +71,8 @@ contacts(id, household_id, name, phone, email, linked_user_id NULL)          -- 
 settings(household_id, key, value)
 trips(id, household_id, name, city, country, start_on, end_on, kind business|personal)   -- 004_trips.sql
 trip_txns(trip_id, txn_id, status personal|missed|claimed|unreviewed, set_by)
+salary_history(id, household_id, member_id, from_month YYYY-MM, amount_minor, currency, kind base|arrears|bonus, note)  -- 006
+liabilities.emi_from   -- day full EMIs start on a construction loan (pre-EMI before it); 006
 ```
 
 ## Why this fixes the complaints
