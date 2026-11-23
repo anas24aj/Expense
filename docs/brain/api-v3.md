@@ -86,3 +86,15 @@ Pipeline per message: parse.py → account match (last4/sender) or auto-create a
 ## MCP (`api/mcp.py`)
 JSON-RPC 2.0 over POST (`initialize`, `tools/list`, `tools/call`, `ping`). Tools read the same functions as the API:
 `get_home, get_month, get_lookahead, what_if, list_transactions, search_transactions, get_people, get_commitments, get_liabilities, get_claims, get_assets, get_advice, add_transaction, set_purpose`.
+
+## Trips (added 2026-11-23, owner request; `api/plan.py`, migration 004_trips.sql)
+A trip is a date window and a place. Every transaction in the window (and, when known, in that place/currency) belongs
+to it automatically. A trip's expenses are each `claimed` (in a claim), `personal` (not claimable), `missed` (should
+have been claimed) or `unreviewed`. A business trip with a claim shows what isn't claimed yet so nothing is lost.
+| GET | /trips | `{items: [Trip]}` Trip: `{id, name, city, country, start_on, end_on, kind: business|personal, claim_ids: [], totals: {total, claimed, personal, missed, unreviewed} (Money in trip currency + base), count}` |
+| POST/PATCH/DELETE | /trips[/{id}] | `{name, city, country, start_on, end_on, kind}` |
+| GET | /trips/{id} | Trip + `expenses: [Txn + trip_status]`, `claims: [Claim]` |
+| POST | /trips/{id}/tag | `{txn_ids, status: personal|missed|claimed|unreviewed}` |
+| POST | /trips/{id}/claim | `{name, txn_ids?}` create a claim from the trip (default: all unreviewed + missed business expenses) |
+| POST | /claims/import | `{file_name, data_base64, trip_id?}` the company claim Excel: rows (date, description, amount, currency, claimed amount) → claim + items matched to transactions (amount ± FX tolerance, date ± 3 days); unmatched rows returned as `unmatched` |
+Spending reports exclude `claimed` and `missed` trip expenses until reimbursed (they're money expected), include `personal`.
