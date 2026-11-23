@@ -58,18 +58,24 @@ function TripRow({ t }: { t: Trip }) {
 export function TripsPage() {
   const q = useApi<{ items: Trip[] }>('/trips');
   const [adding, setAdding] = useState(false);
-  const items = [...(q.data?.items || [])].sort((a, b) => b.start_on.localeCompare(a.start_on));
+  const [kind, setKind] = useState<'all' | 'business' | 'personal'>('all');
+  const all = q.data?.items || [];
+  const items = all.filter(t => kind === 'all' || t.kind === kind).sort((a, b) => b.start_on.localeCompare(a.start_on));
   const years = [...new Set(items.map(t => t.start_on.slice(0, 4)))];
   return (
     <Page title="Trips" back="/more" subtitle="Everything you spend between the dates lands in the trip. Claim what’s work."
       trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="New trip"><Icon name="plus" /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !items.length
         ? <EmptyState icon="plane" title="No trips yet" text="Add one before you fly — expenses file themselves." action={<button className="btn small" onClick={() => setAdding(true)}>New trip</button>} />
-        : years.map(y => (
+        : <>
+          <Segmented label="Show" value={kind} onChange={setKind} options={[{ value: 'all', label: `All ${all.length}` },
+            { value: 'business', label: `Work ${all.filter(t => t.kind === 'business').length}` }, { value: 'personal', label: `Personal ${all.filter(t => t.kind === 'personal').length}` }]} />
+          {years.map(y => (
           <Section key={y} title={y}>
             <List>{items.filter(t => t.start_on.startsWith(y)).map(t => <TripRow key={t.id} t={t} />)}</List>
           </Section>
-        ))}
+          ))}
+        </>}
       <NewTripSheet open={adding} onClose={() => setAdding(false)} />
     </Page>
   );

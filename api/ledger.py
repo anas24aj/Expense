@@ -171,6 +171,23 @@ def archive_account(req):
     return {'id': a['id'], 'deleted': True}
 
 
+@route('POST', '/api/accounts/{id}/used-by')
+def used_by(req):
+    """Someone else used this card between two days: every money-out row then is theirs (they owe you)."""
+    a, b = get_account(req.hh, req.member['id'], req.params['id']), req.json
+    mid, cid = households.person_of(req, b.get('person'))
+    start, end = valid.day(b.get('from'), 'from'), valid.day(b.get('to'), 'to')
+    if end < start:
+        raise ApiError(400, 'to is before from')
+    purpose = valid.choice(b.get('purpose'), {'lend', 'support'}, 'purpose', default='support' if mid else 'lend')
+    rows = req.hh.run("SELECT id FROM transactions WHERE household_id = :hid AND account_id = :a AND direction = 'debit' "
+                      'AND deleted_at IS NULL AND day >= :f AND day <= :t', a=a['id'], f=start, t=end)
+    for r in rows:
+        meta = req.hh.one('SELECT * FROM txn_meta WHERE txn_id = :t AND household_id = :hid', t=r['id']) or {}
+        classify.save_meta(req.hh, r['id'], {**dict(meta), 'purpose': purpose, 'person_member_id': mid, 'person_contact_id': cid, 'confidence': 1.0}, 'user')
+    return {'account_id': a['id'], 'tagged': len(rows)}
+
+
 # ---------- transactions ----------
 
 @route('GET', '/api/transactions')

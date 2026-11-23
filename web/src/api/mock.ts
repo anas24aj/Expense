@@ -365,6 +365,7 @@ on('POST', '/mcp-key', () => ({ url: location.origin + '/mcp/mk_' + Math.random(
 on('GET', '/accounts', () => ({ items: accounts }));
 on('POST', '/accounts', (_m, b) => { const a = acct(id(), b.kind, b.institution, b.name || b.institution, b.currency, b.country || 'SA', b.last4 || null, { minor: 0, currency: b.currency }); accounts.push(a); return a; });
 on('PATCH', '/accounts/{id}', (m, b) => Object.assign(accounts.find(x => x.id === m[1])!, b));
+on('POST', '/accounts/{id}/used-by', (m, b) => { const xs = txns.filter(t => t.account_id === m[1] && t.direction === 'debit' && t.day >= b.from && t.day <= b.to); for (const t of xs) t.purpose = b.person.kind === 'member' ? 'support' : 'lend'; return { account_id: m[1], tagged: xs.length }; });
 on('GET', '/transactions', (_m, _b, q) => {
   let items = txns.filter(t => t.purpose !== 'ignore');
   const mo = q.get('month'); if (mo) items = items.filter(t => t.day.startsWith(mo));

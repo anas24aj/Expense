@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useApi } from '../api/client';
-import type { Account, Coverage, Flows, FlowNode, HouseholdFull, Txn } from '../api/types';
+import { useApi, useWrite } from '../api/client';
+import type { Account, Coverage, Flows, FlowNode, HouseholdFull, Person, Txn } from '../api/types';
 import { fmt, monthLabel, shiftMonth, shortDate, thisMonth, today } from '../lib/format';
-import { Chip, EmptyState, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
+import { Avatar, Chip, EmptyState, Field, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { EditAccountSheet, KIND_LABEL, KIND_TILE } from './More';
 
@@ -222,6 +222,7 @@ export function AccountPage() {
   const hh = useApi<HouseholdFull>('/households/current');
   const [open, setOpen] = useState<Txn | null>(null);
   const [editing, setEditing] = useState(false);
+  const [lending, setLending] = useState(false);
   const a = accounts.data?.items.find(x => x.id === id);
   const c = cov.data?.items.find(x => x.account_id === id);
   const owner = hh.data?.members.find(m => m.id === a?.owner_member_id)?.display_name;
@@ -249,6 +250,7 @@ export function AccountPage() {
             <List>
               <ListRow to={`/activity?account_id=${a.id}`} icon={<Tile icon="activity" color="#0a84ff" />} title="All transactions" />
               <ListRow to={`/more/import?account=${a.id}`} icon={<Tile icon="upload" color="#30b0c7" />} title="Import a statement" sub="Fills any missing months" />
+              <ListRow onClick={() => setLending(true)} icon={<Tile icon="person" color="#ff9f0a" />} title="Someone else used it" sub="Mark every spend between two dates as theirs" />
               <ListRow to="/more/flows" icon={<Tile icon="chart" color="#bf5af2" />} title="Money flow" sub="Where this account’s money went" />
             </List>
           </Section>
@@ -260,6 +262,35 @@ export function AccountPage() {
       )}
       <TxnSheet txn={open} onClose={() => setOpen(null)} />
       {a && <EditAccountSheet key={a.id} a={a} open={editing} onClose={() => setEditing(false)} />}
+      {a && <UsedBySheet a={a} open={lending} onClose={() => setLending(false)} />}
     </Page>
+  );
+}
+
+/** A card lent to someone for a stretch (e.g. a roommate's trip): every money-out row in the dates becomes theirs. */
+function UsedBySheet({ a, open, onClose }: { a: Account; open: boolean; onClose: () => void }) {
+  const people = (useApi<{ items: Person[] }>(open ? '/people' : null).data?.items || []).filter(p => p.relation !== 'self');
+  const [who, setWho] = useState<Person | null>(null);
+  const [from, setFrom] = useState(''), [to, setTo] = useState('');
+  const save = useWrite<object, { tagged: number }>('POST', `/accounts/${a.id}/used-by`);
+  const [done, setDone] = useState<number | null>(null);
+  const close = () => { setDone(null); setWho(null); save.reset(); onClose(); };
+  return (
+    <Sheet open={open} onClose={close} title="Someone else used it">
+      {done !== null ? <div className="stack"><p>{done} spend{done === 1 ? '' : 's'} marked as {who?.name}’s.</p><button className="btn block" onClick={close}>Done</button></div> : (
+        <div className="stack">
+          <p className="caption">Every money-out on {a.name} between these days becomes {who ? who.name + '’s' : 'theirs'}: friends then owe you, family counts as support.</p>
+          <div className="row-flex" style={{ gap: 8 }}>
+            <Field label="From"><input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></Field>
+            <Field label="To"><input className="input" type="date" value={to} onChange={e => setTo(e.target.value)} /></Field>
+          </div>
+          <List>{people.map(p => <ListRow key={p.kind + p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.kind === 'member' ? 'Family' : 'Friend'}
+            end={who?.id === p.id ? <Icon name="check" size={22} className="pos" /> : undefined} onClick={() => setWho(p)} chevron={false} />)}</List>
+          {save.error && <p className="caption neg">{save.error.message}</p>}
+          <button className="btn block" disabled={!who || !from || !to || to < from || save.isPending}
+            onClick={async () => setDone((await save.mutateAsync({ person: { kind: who!.kind, id: who!.id }, from, to })).tagged)}>Mark as theirs</button>
+        </div>
+      )}
+    </Sheet>
   );
 }

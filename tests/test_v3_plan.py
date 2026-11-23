@@ -78,6 +78,17 @@ class PlanTest(unittest.TestCase):
     def spent(self):
         return self.ok('GET', '/insights/month', query='month=' + self.today[:7])['spent']['minor']
 
+    def test_card_used_by_someone_else_for_a_period(self):
+        inside, outside = self.txn(5000, 'debit', 'Hotel', '2026-04-25'), self.txn(700, 'debit', 'Cafe', '2026-06-01')
+        refund = self.txn(300, 'credit', 'Hotel refund', '2026-04-26')
+        out = self.ok('POST', f'/accounts/{self.bank}/used-by', {'person': {'kind': 'contact', 'id': self.ali}, 'from': '2026-04-20', 'to': '2026-05-21'})
+        self.assertEqual(out['tagged'], 1)
+        meta = lambda t: self.db.one('SELECT purpose, person_contact_id FROM txn_meta WHERE txn_id = :t', t=t) or {}
+        self.assertEqual((meta(inside)['purpose'], meta(inside)['person_contact_id']), ('lend', self.ali))
+        self.assertNotEqual(meta(outside).get('person_contact_id'), self.ali)
+        self.assertNotEqual(meta(refund).get('person_contact_id'), self.ali)
+        self.assertEqual(self.call('POST', f'/api/accounts/{self.bank}/used-by', {'person': {'kind': 'contact', 'id': self.ali}, 'from': '2026-05-21', 'to': '2026-04-20'})[0], 400)
+
     # ---- liabilities ----
 
     def test_loan_outstanding_interest_split_and_payoff(self):
