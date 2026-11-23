@@ -110,7 +110,7 @@ class PotApi(unittest.TestCase):
         c = self.ok('POST', '/contacts', {'name': 'Afaq', 'email': 'afaq@example.com'})
         out = self.ok('POST', f'/contacts/{c["id"]}/invite')
         self.assertEqual((out['email'], out['sent']), ('afaq@example.com', False))  # no mail service in tests
-        self.assertTrue(out['link'].endswith('/signup'))
+        self.assertIn('/signup?invite=contact.', out['link'])
 
 
     def test_new_expense_defaults_to_an_account(self):

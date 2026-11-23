@@ -262,13 +262,16 @@ def delete_contact(req):
 @route('POST', '/api/contacts/{id}/invite')
 def invite_contact(req):
     """Email a contact a sign-up link. They get their own household; what they share with this one shows under Shared
-    (matched by this email), so it never opens this household's books to them."""
+    once they sign up or sign in through this link (its token links the contact to their account; an email address
+    alone proves nothing), so it never opens this household's books to them."""
     c = _contact(req, req.params['id'])
     if not c['email']:
         raise ApiError(400, 'add their email first')
-    link = f"{auth.base_url(req)}/signup"
+    token = auth.contact_token(req.db, c['id'])
+    link = f"{auth.base_url(req)}/signup?invite={token}"
     sent = emailer.send(c['email'], f"{req.user['name']} shares money with you", f"{req.user['name']} added you to share costs on the app. "
-                        f"Sign up with {c['email']} to see what you share:\n{link}")
+                        f"Sign up through this link to see what you share:\n{link}\n\nAlready on the app? Sign in here instead:\n"
+                        f"{auth.base_url(req)}/signin?invite={token}")
     return {'email': c['email'], 'link': link, 'sent': sent}
 
 
@@ -359,11 +362,11 @@ def device_view(d):
 
 @route('GET', '/api/shared', auth='user')
 def shared_with_me(req):
-    """What other households recorded with me as their contact (matched by my sign-in email): the balance and the
-    unsettled split lines, from my side. Read-only; each side settles in its own household."""
+    """What other households recorded with me as their contact (linked through their contact invite link, never by an
+    email nobody verified): the balance and the unsettled split lines, from my side. Read-only; each side settles in its own household."""
     items = []
     for c in req.db.run('SELECT c.id, c.household_id, h.name FROM contacts c JOIN households h ON h.id = c.household_id '
-                        'WHERE c.email = :e AND c.removed_at IS NULL', e=req.user['email']):
+                        'WHERE c.linked_user_id = :u AND c.removed_at IS NULL', u=req.user['id']):
         hh = Scoped(req.db, c['household_id'])
         bal = balances(hh)[('contact', c['id'])]
         lines = hh.run('SELECT t.day, t.merchant, t.merchant_raw, t.direction, t.currency, s.share_minor FROM splits s JOIN transactions t ON t.id = s.txn_id '

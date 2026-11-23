@@ -90,7 +90,8 @@ def _balance(hh, a):
     if not a['opening_as_of']:
         return None, None
     r = hh.one("SELECT COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_minor ELSE -amount_minor END), 0) AS n, MAX(day) AS last "
-               "FROM transactions WHERE household_id = :hid AND account_id = :a AND deleted_at IS NULL AND day >= :d", a=a['id'], d=a['opening_as_of'])
+               "FROM transactions WHERE household_id = :hid AND account_id = :a AND currency = :c AND deleted_at IS NULL AND day >= :d",
+               a=a['id'], c=a['currency'], d=a['opening_as_of'])  # a foreign-currency row (an unbilled USD SMS) is not in this balance
     return a['opening_balance_minor'] + int(r['n']), r['last'] or a['opening_as_of']
 
 
@@ -419,7 +420,7 @@ def unlink(req):
 @route('DELETE', '/api/transactions/{id}')
 def delete_transaction(req):
     row = get_txn(req.hh, req.member['id'], req.params['id'])
-    req.hh.update('transactions', row['id'], deleted_at=now())
+    req.hh.update('transactions', row['id'], deleted_at=now(), dedupe_key=f"{row['dedupe_key']}.del.{row['id']}")  # frees the key for a re-import
     return {'id': row['id'], 'deleted': True}
 
 

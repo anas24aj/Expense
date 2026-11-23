@@ -6,13 +6,14 @@ import binascii
 import hashlib
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import server  # v2 SMS knowledge: SECRET, AD_SENDER, account-kind words, balance and card-reminder patterns
 from api import classify, ledger, valid
 from api.app import ApiError, route
 from api.db import new_id, now
-from parse import account_of, merchant_of, parse
+from parse import ARABIC_DIGITS, BRACKETED, CURRENCIES, account_of, merchant_of, parse
 from statement import StatementError, read_statement, span
 
 MAX_BODY = 2000
@@ -131,6 +132,15 @@ def ingest_sms(hh, sender, body, at, device_id=None, member_id=None):
         return False, outcome, None
     last4 = account_of(body)[-4:].lstrip('•')
     account = find_account(hh, institution_of(sender), last4, kind_of(sender, body), parsed['currency'], member_id)
+    note, doubt = '', False
+    if parsed['currency'] != account['currency']:  # 'USD 10.00 spent … (SAR 37.50)' on a SAR card: the statement bills SAR
+        shown = f"{parsed['currency']} {parsed['amount_minor'] / 100:,.2f}"
+        billed = next((m for m in BRACKETED.finditer(body.translate(ARABIC_DIGITS)) if CURRENCIES[m.group(1).lower().rstrip('.')] == account['currency']), None)
+        if billed:
+            parsed = {**parsed, 'currency': account['currency'], 'amount_minor': int(Decimal(billed.group(2).replace(',', '')) * 100)}
+            note = f'Spent as {shown}'
+        else:  # no billed amount: the statement row will come in another currency and not match this one
+            note, doubt = f"{shown} on a {account['currency']} account: probably also on the statement in {account['currency']}", True
     lo, hi = (datetime.fromordinal(datetime.fromisoformat(day).toordinal() + k).date().isoformat() for k in (-STATEMENT_SMS_DAYS, STATEMENT_SMS_DAYS))
     in_statement = hh.one("SELECT id FROM transactions WHERE household_id = :hid AND account_id = :a AND source = 'statement' AND deleted_at IS NULL "
                           "AND amount_minor = :m AND direction = :d AND day >= :lo AND day <= :hi AND raw_message_id IS NULL",
@@ -143,7 +153,7 @@ def ingest_sms(hh, sender, body, at, device_id=None, member_id=None):
     merchant = parsed['merchant'] or merchant_of(body)
     t = hh.insert('transactions', account_id=account['id'], member_id=member_id, occurred_at=when, day=day, amount_minor=parsed['amount_minor'],
                   currency=parsed['currency'], direction=parsed['direction'], merchant_raw=merchant, merchant=merchant[:80], source='sms',
-                  raw_message_id=raw['id'], dedupe_key='sms.' + h, created_at=now())
+                  raw_message_id=raw['id'], dedupe_key='sms.' + h, note=note, created_at=now())
     if (bal := stated_balance(body)) and account['currency'] == parsed['currency']:
         kind, minor = bal
         if kind == 'balance' and account['kind'] not in ('credit_card', 'bnpl'):
@@ -151,6 +161,8 @@ def ingest_sms(hh, sender, body, at, device_id=None, member_id=None):
         elif kind == 'limit' and account['credit_limit_minor']:
             _set_balance(hh, account, minor - account['credit_limit_minor'], when)  # owed = limit - available
     classify.reclassify(hh, [t['id']])
+    if doubt:  # a probable duplicate goes to Review
+        hh.run('UPDATE txn_meta SET confidence = 0 WHERE txn_id = :t AND household_id = :hid', t=t['id'])
     return True, 'stored', t['id']
 
 
@@ -262,8 +274,11 @@ def delete_statement(req):
         raise ApiError(404, 'statement not found')
     ledger.get_account(req.hh, req.member['id'], s['account_id'])  # 404 for someone else's private account
     with req.db.tx():
-        req.hh.run("UPDATE transactions SET deleted_at = :t WHERE household_id = :hid AND statement_id = :s AND source = 'statement' AND deleted_at IS NULL",
+        req.hh.run("UPDATE transactions SET deleted_at = :t, dedupe_key = dedupe_key || '.del.' || id "  # frees the key for a re-import
+                   "WHERE household_id = :hid AND statement_id = :s AND source = 'statement' AND deleted_at IS NULL",
                    t=now(), s=s['id'])
+        req.hh.run('DELETE FROM txn_links WHERE household_id = :hid AND (from_txn IN (SELECT id FROM transactions WHERE household_id = :hid AND statement_id = :s) '
+                   'OR to_txn IN (SELECT id FROM transactions WHERE household_id = :hid AND statement_id = :s))', s=s['id'])  # the other leg can pair again
         req.hh.run('DELETE FROM statements WHERE id = :id AND household_id = :hid', id=s['id'])
     return {'id': s['id'], 'deleted': True}
 

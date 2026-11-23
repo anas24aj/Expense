@@ -66,6 +66,8 @@ def call_route(db, who, method, path, args):
         if hit and m == method:
             if level == 'admin' and who['member']['role'] not in ('owner', 'admin'):
                 raise ApiError(403, 'only the household owner or an admin can do this')
+            if method != 'GET' and who['member']['role'] == 'viewer':
+                raise ApiError(403, 'viewers can look but not change anything')
             req = Request(environ, db)
             req.params, req.user, req.member, req.hh = hit.groupdict(), who['user'], who['member'], Scoped(db, who['household_id'])
             out = fn(req)
@@ -115,7 +117,7 @@ def app(environ, start_response):
         return send('405 Method Not Allowed', {'error': 'POST JSON-RPC messages here'})
     path, header = environ.get('PATH_INFO') or '', environ.get('HTTP_AUTHORIZATION', '')
     key = unquote(path[len('/mcp/'):]) if path.startswith('/mcp/') else header[7:] if header.startswith('Bearer ') else ''
-    db = DB()
+    db, who = DB(), None
     try:
         from api import auth
         who = auth.mcp_user(key, db) if key else None  # {user, household_id, member}
@@ -134,6 +136,7 @@ def app(environ, start_response):
         return send('200 OK', replies if isinstance(incoming, list) else replies[0])
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
+        router.log_error(db, 'POST /mcp', e, Scoped(db, who['household_id']) if who else None)
         return send('500 Internal Server Error', {'error': 'something went wrong on our side', 'kind': type(e).__name__})
     finally:
         db.close()

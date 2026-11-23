@@ -74,11 +74,9 @@ def load(req):
     claim_part = {}  # txn id -> the part a claim covers (in the txn's currency) when it is not the whole amount
     for c in items:
         t = by_id.get(c['txn_id'])
-        if t and c['claimed_minor'] is not None:
-            try:
-                claim_part[t['id']] = min(t['amount_minor'], round(engine.conv(c['claimed_minor'], c['claimed_currency'] or t['currency'], t['currency'], r)))
-            except ValueError:  # no rate for that currency: treat it as the whole amount
-                pass
+        src = c['claimed_currency'] or (t or {}).get('currency')
+        if t and c['claimed_minor'] is not None and (src == t['currency'] or {src, t['currency']} <= engine.SUPPORTED):  # no rate: the whole amount
+            claim_part[t['id']] = min(t['amount_minor'], round(engine.conv(c['claimed_minor'], src, t['currency'], r)))
     theirs = defaultdict(int)
     for s in hh.run('SELECT txn_id, member_id, share_minor FROM splits WHERE household_id = :hid'):
         t = by_id.get(s['txn_id'])

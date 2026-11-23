@@ -87,14 +87,21 @@ class DB:
 
     @contextmanager
     def tx(self):
-        """A transaction: all or nothing."""
+        """A transaction: all or nothing. Nested calls join the outer transaction, which commits or rolls back."""
+        if getattr(self, '_in_tx', False):
+            yield self
+            return
         self.run('BEGIN')
+        self._in_tx = True
         try:
             yield self
         except BaseException:
             self.run('ROLLBACK')
             raise
-        self.run('COMMIT')
+        else:
+            self.run('COMMIT')
+        finally:
+            self._in_tx = False
 
     @contextmanager
     def lock(self, name):
@@ -115,9 +122,10 @@ class DB:
             for f in sorted(MIGRATIONS.glob('*.sql')):
                 if f.name in done:
                     continue
-                for stmt in [s.strip() for s in re.sub(r'--[^\n]*', '', f.read_text()).split(';') if s.strip()]:
-                    self.run(stmt)
-                self.run('INSERT INTO schema_migrations (name, applied_at) VALUES (:n, :t)', n=f.name, t=now())
+                with self.tx():  # one file is all or nothing (Postgres and SQLite DDL are transactional)
+                    for stmt in [s.strip() for s in re.sub(r'--[^\n]*', '', f.read_text()).split(';') if s.strip()]:
+                        self.run(stmt)
+                    self.run('INSERT INTO schema_migrations (name, applied_at) VALUES (:n, :t)', n=f.name, t=now())
 
     def close(self):
         if self.pg and len(_idle.setdefault(self.url, [])) < POOL:

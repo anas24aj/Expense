@@ -101,7 +101,7 @@ def infer(hh, t, ctx):
     """{purpose, category, confidence, person_member_id?, commitment_id?, liability_id?, asset_id?} for one transaction."""
     text, debit = text_of(t).lower(), t['direction'] == 'debit'
     out = lambda purpose, category, conf, **kw: {'purpose': purpose, 'category': category, 'confidence': conf, **kw}
-    if _linked(hh, t['id']):
+    if t['id'] in ctx['linked'] if 'linked' in ctx else _linked(hh, t['id']):
         return out('transfer', OWN_TRANSFER, 0.95)
     if ctx.get('pair', True):
         other = _pair(hh, t)
@@ -110,6 +110,7 @@ def infer(hh, t, ctx):
             hh.insert('txn_links', kind='transfer', from_txn=d['id'], to_txn=c['id'], set_by='rule', created_at=now(),
                       fx_rate=None if d['currency'] == c['currency'] else round(c['amount_minor'] / d['amount_minor'], 6))
             ctx.setdefault('also', []).append(other['id'])
+            ctx.get('linked', set()).update((d['id'], c['id']))
             return out('transfer', OWN_TRANSFER, 0.95)
     if debit and BOUNCE.search(text) and CHARGE.search(text):
         return out('fee', FEES, 0.9)
@@ -161,24 +162,30 @@ def _context(hh, pair=True):
             'rules': {r['pattern']: r for r in hh.run('SELECT * FROM merchant_rules WHERE household_id = :hid')}}
 
 
-def save_meta(hh, txn_id, meta, set_by='rule'):
+def save_meta(hh, txn_id, meta, set_by='rule', old=False, category=None):
+    """Upsert a transaction's meaning. `old`: its txn_meta row (None: has none) when the caller already loaded it;
+    `category`: the transaction's current category, so an unchanged meaning costs no write."""
     cols = {'purpose': meta['purpose'], 'confidence': float(meta.get('confidence', 1.0)), 'set_by': set_by, 'updated_at': now(),
             **{k: meta.get(k) for k in ('person_member_id', 'person_contact_id', 'liability_id', 'asset_id', 'commitment_id', 'claim_id', 'fund_id')}}
-    old = hh.one('SELECT claim_id, fund_id FROM txn_meta WHERE txn_id = :t AND household_id = :hid', t=txn_id)
+    if old is False:
+        old = hh.one('SELECT * FROM txn_meta WHERE txn_id = :t AND household_id = :hid', t=txn_id)
     if old:  # a claim or fund the plan side attached stays attached
         cols['claim_id'] = cols['claim_id'] or old['claim_id']
         cols['fund_id'] = cols['fund_id'] or old['fund_id']
+        same = lambda k: round(float(old[k] or 0), 4) == round(cols[k], 4) if k == 'confidence' else old[k] == cols[k]
+        if all(same(k) for k in cols if k != 'updated_at') and (not meta.get('category') or meta['category'] == category):
+            return
         hh.run(f'UPDATE txn_meta SET {", ".join(f"{k} = :{k}" for k in cols)} WHERE txn_id = :t AND household_id = :hid', t=txn_id, **cols)
     else:
         hh.db.run(f'INSERT INTO txn_meta (txn_id, household_id, {", ".join(cols)}) VALUES (:t, :h, {", ".join(":" + k for k in cols)})',
                   t=txn_id, h=hh.hid, **cols)  # txn_meta has no id column, so not Scoped.insert
-    if meta.get('category'):
+    if meta.get('category') and meta['category'] != category:
         hh.run('UPDATE transactions SET category = :c WHERE id = :t AND household_id = :hid', c=meta['category'], t=txn_id)
 
 
 def reclassify(hh, txn_ids=None, pair=True):
-    """Classify the household's transactions (all, or `txn_ids`) whose meaning the user hasn't set. plan.py calls this
-    after a commitment/liability/asset is created or changed. Returns the ids it (re)classified."""
+    """Classify the household's transactions (all, or `txn_ids`) whose meaning the user hasn't set, in one transaction.
+    Returns the ids it (re)classified."""
     where, params = '', {}
     if txn_ids is not None:
         txn_ids = list(txn_ids)
@@ -186,17 +193,36 @@ def reclassify(hh, txn_ids=None, pair=True):
             return []
         sql, params = valid.inlist('i', txn_ids)
         where = f'AND t.id IN {sql} '
-    rows = hh.run(SELECT + "WHERE t.household_id = :hid AND t.deleted_at IS NULL " + where +
-                  "AND t.id NOT IN (SELECT txn_id FROM txn_meta WHERE household_id = :hid AND set_by = 'user') ORDER BY t.occurred_at, t.dedupe_key, t.id", **params)
-    ctx, done = _context(hh, pair), []
-    for t in rows:
-        save_meta(hh, t['id'], infer(hh, t, ctx))
-        done.append(t['id'])
-    for other in set(ctx.get('also', [])) - set(done):  # the other leg of a new pair, unless the user set it
-        if not hh.one("SELECT txn_id FROM txn_meta WHERE txn_id = :t AND household_id = :hid AND set_by = 'user'", t=other):
-            save_meta(hh, other, {'purpose': 'transfer', 'category': OWN_TRANSFER, 'confidence': 0.95})
-            done.append(other)
+    with hh.db.tx():
+        metas = {m['txn_id']: m for m in hh.run('SELECT * FROM txn_meta t WHERE household_id = :hid ' + where.replace('t.id', 't.txn_id'), **params)}
+        rows = [t for t in hh.run(SELECT + "WHERE t.household_id = :hid AND t.deleted_at IS NULL " + where + "ORDER BY t.occurred_at, t.dedupe_key, t.id", **params)
+                if (metas.get(t['id']) or {}).get('set_by') != 'user']
+        ctx, done = _context(hh, pair), []
+        ctx['linked'] = {x for l in hh.run("SELECT from_txn, to_txn FROM txn_links WHERE household_id = :hid AND kind = 'transfer'") for x in (l['from_txn'], l['to_txn'])}
+        for t in rows:
+            save_meta(hh, t['id'], infer(hh, t, ctx), old=metas.get(t['id']), category=t['category'])
+            done.append(t['id'])
+        for other in set(ctx.get('also', [])) - set(done):  # the other leg of a new pair, unless the user set it
+            if not hh.one("SELECT txn_id FROM txn_meta WHERE txn_id = :t AND household_id = :hid AND set_by = 'user'", t=other):
+                save_meta(hh, other, {'purpose': 'transfer', 'category': OWN_TRANSFER, 'confidence': 0.95})
+                done.append(other)
     return done
+
+
+RULE_COL = {'commitments': 'commitment_id', 'liabilities': 'liability_id', 'assets': 'asset_id', 'funds': 'fund_id'}
+
+
+def candidates(hh, table, rid):
+    """Ids of the transactions a rule (a commitment, liability, asset or pot) could change: those whose text has its
+    match_pattern, plus those tagged to it now. Matching is in Python, exactly as infer() does it."""
+    row = hh.one(f'SELECT match_pattern FROM {table} WHERE id = :id AND household_id = :hid', id=rid)
+    pattern = ((row or {}).get('match_pattern') or '').lower()
+    ids = {r['txn_id'] for r in hh.run(f'SELECT txn_id FROM txn_meta WHERE household_id = :hid AND {RULE_COL[table]} = :id', id=rid)}
+    if pattern:
+        ids |= {t['id'] for t in hh.run('SELECT t.id, t.merchant, t.merchant_raw, r.body AS raw_body FROM transactions t '
+                                         'LEFT JOIN raw_messages r ON r.id = t.raw_message_id AND r.household_id = t.household_id '
+                                         'WHERE t.household_id = :hid AND t.deleted_at IS NULL') if pattern in text_of(t).lower()}
+    return ids
 
 
 def apply_rule(hh, merchant, category='', purpose='', person_member_id=None, person_contact_id=None):

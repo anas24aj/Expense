@@ -295,6 +295,7 @@ class IngestTest(Base):
         sts = self.c.ok('GET', '/api/ingest/statements')['items']
         self.c.ok('DELETE', f"/api/ingest/statements/{sts[0]['id']}")
         self.assertEqual(len(self.c.ok('GET', f"/api/transactions?account_id={acc['id']}")['items']), 1)
+        self.assertEqual(self.c.ok('POST', '/api/ingest/statement', body)['new'], 2)  # a deleted statement imports again
 
     def test_batch_and_bad_input(self):
         out = self.c.ok('POST', '/api/ingest/sms/batch', {'messages': [{'sender': 'STCPay', 'body': 'Purchase SAR 15.00 at KUDU', 'received_at': '2026-11-10T10:00:00Z'},
@@ -353,7 +354,8 @@ class LedgerTest(Base):
         harish = owner.ok('POST', '/api/contacts', {'name': 'Harish', 'email': 'harish@x.com'})
         t = owner.ok('POST', '/api/transactions', {'day': '2026-11-02', 'amount_minor': 4000, 'currency': 'SAR', 'direction': 'debit', 'merchant': 'Rent'})
         owner.ok('POST', f"/api/transactions/{t['id']}/split", {'shares': [{'contact_id': harish['id'], 'share_minor': 2000}]})
-        h = signup('harish@x.com', name='Harish')
+        token = owner.ok('POST', f"/api/contacts/{harish['id']}/invite")['link'].split('invite=')[1]
+        h = signup('harish@x.com', name='Harish', invite=token)
         got = h.ok('GET', '/api/shared')['items']
         self.assertEqual((len(got), got[0]['you_owe'], got[0]['lines'][0]['your_share']), (1, [{'minor': 2000, 'currency': 'SAR'}], {'minor': 2000, 'currency': 'SAR'}))
         self.assertEqual(owner.ok('GET', '/api/shared')['items'], [])
