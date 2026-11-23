@@ -711,6 +711,28 @@ def why_not(a, b):
     return f'arrived {gap} later; automatic matching allows {LINK_DAYS} days' if secs > LINK_DAYS * 86400 else ''
 
 
+# 'Avl Bal INR 65,243.48', 'Balance: SAR 18,200.00', 'Avl Limit: INR 3,14,721.04', '· balance 12,345.67' (statements), 'الرصيد'.
+# The number needs decimals, Indian/Western commas or 3+ digits, and isn't a date, so 'balance as on 26/10' isn't read.
+BALANCE = re.compile(r'\b(limit|lmt|bal(?:ance)?)\b|(الرصيد)', re.I)
+BAL_NUM = re.compile(r'(\d[\d,]*\.\d{1,2}|\d{1,3}(?:,\d{2,3})+|\d{3,})(?![\d/]|-\d)')
+
+
+def balances(every):
+    """Each account's latest balance (or a card's available limit) from the newest SMS or statement row that states one."""
+    out = {}
+    for t in sorted(every, key=lambda t: t['received_at'], reverse=True):
+        if t['account'] in out:
+            continue
+        body = t['body'].translate(ARABIC_DIGITS)
+        for m in BALANCE.finditer(body):
+            n = BAL_NUM.search(body[m.end():m.end() + 30])
+            if n and not re.match(r'\s*(?:as\s+on|on)\b', body[m.end():m.end() + 8], re.I):
+                out[t['account']] = {'account': t['account'], 'kind': 'limit' if (m.group(1) or '').lower() in ('limit', 'lmt') else 'balance',
+                                     'amount': float(n.group(1).replace(',', '')), 'currency': t['currency'], 'day': t['received_at'][:10]}
+                break
+    return sorted(out.values(), key=lambda b: b['day'], reverse=True)
+
+
 def unmatched(every, inside):
     """Transfers in the period with no other side found, newest first, each with the likeliest other sides (opposite
     way, another account, within a week; same amount or an exchange rate first) for you to link by hand."""
@@ -1467,7 +1489,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -1587,6 +1609,8 @@ def _app(environ, start_response):
             return respond('200 OK', statements(db))
         if path == '/api/statements':
             return respond('200 OK', statements(db))
+        if path == '/api/balances':
+            return respond('200 OK', balances(transactions(db)))
         if path == '/api/trail':
             return respond('200 OK', trail(db, query.get('from'), query.get('to')))
         if path == '/api/friend/settle':

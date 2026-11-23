@@ -310,6 +310,19 @@ class StoreMixin:
         self.assertEqual((stored['amount_minor'], stored['currency'], stored['direction']), (2545000, 'SAR', 'credit'))
         self.assertEqual(server.transactions(db)[0]['category'], 'Salary')
 
+    def test_latest_balance_per_account(self):
+        db = self.db
+        for sender, body, at in (
+                ('JD-IDFCFB-S', 'Your A/c XX1234 debited by Rs. 15,000.00 on 26/10/26; ANIL credited. Available balance Rs. 82,978.82.', '2026-10-26T19:12:00+05:30'),
+                ('JD-IDFCFB-S', 'Your A/C XXXXX951234 is debited by INR 14,813.34 on 26/10/26 19:18. New Bal :INR 65,243.48.', '2026-10-26T19:18:00+05:30'),
+                ('VM-CANBNK', 'Acct XXX864 credited with INR 13,000.00 on 04/11/26 from V M Kumar; UPI:900000000001; Bal INR 31,769.14-CanaraBank', '2026-11-04T10:00:00+05:30'),
+                ('ICICI', 'INR 3,200.50 spent on ICICI Bank Card XX9012 on 15-Oct-26 at AMAZON. Avl Limit: INR 1,20,000.00', '2026-10-15T10:00:00+05:30'),
+                ('SAB', 'PoS Purchase\nAmount: SAR 45.50\nAt: PANDA\nBalance as on 20/10 is shown in the app', '2026-10-20T10:00:00+03:00')):
+            server.store_sms(db, sender, body, at)
+        got = {b['account']: (b['kind'], b['amount']) for b in server.balances(server.transactions(db))}
+        self.assertEqual(got, {'IDFCFB · Account •1234': ('balance', 65243.48), 'CANBNK · Account •864': ('balance', 31769.14),
+                               'ICICI · Card •9012': ('limit', 120000.0)})  # newest per account; no date read as a balance
+
     def test_salary_from_the_plan_amount(self):
         db = self.db
         db.run("INSERT INTO settings (key, value) VALUES ('salary', :v)", v=json.dumps({'amount': 25000, 'day': 25, 'currency': 'SAR'}))
