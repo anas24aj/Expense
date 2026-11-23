@@ -192,6 +192,7 @@
   form.contact { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } form.contact label { flex: 1; min-width: 0; display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
   form.contact input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-width: 0; max-width: 100%; }
   .fix.friend .friend-email input { width: 100%; }
+  .link-status { font-size: 12px; } .link-status.ok { color: var(--good, #0f7b3e); } .link-status.no { color: var(--text-2); }
   form.buy { display: grid; gap: 12px; } form.buy label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
   form.buy input, form.buy select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; max-width: 100%; }
   form.buy .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
@@ -1708,7 +1709,7 @@ function friendForm(t) {
   const debit = t.direction === 'debit', split = !t.friend ? '2' : t._t >= t._c ? 'all' : 'custom';
   return `<form class="fix friend" data-id="${t.id}" data-amount="${t._c}">` +
     `<label>${debit ? 'Bought for a friend?' : 'Money back from a friend?'}<input type="text" name="friend" list="friend-names" maxlength="40" autocomplete="off" placeholder="Pick or type a name" value="${esc(t.friend)}"></label>` +
-    `<label class="friend-email" ${!t.friend || contactOf(t.friend)?.email ? 'hidden' : ''}>Their email <small class="muted">(once; if they use this app they’ll see what they owe)</small><input type="email" name="email" autocomplete="off" placeholder="optional"></label>` +
+    `<label class="friend-email" ${!t.friend || contactOf(t.friend)?.email ? 'hidden' : ''}>Their email <small class="muted">(once; if they use this app they’ll see what they owe)</small><input type="email" name="email" autocomplete="off" placeholder="optional"><small class="link-status" aria-live="polite"></small></label>` +
     (debit ? `<label>Whose is it<select name="split">` +
       [['2', 'Shared: split 2 ways, they owe half'], ['3', 'Split 3 ways, they owe 2/3'], ['4', 'Split 4 ways, they owe 3/4'], ['all', 'All theirs'], ['custom', 'Their share: type it']]
         .map(([v, label]) => `<option value="${v}" ${v === split ? 'selected' : ''}>${label}</option>`).join('') + '</select></label>' +
@@ -2055,7 +2056,7 @@ function friendsPage(rt) {
     `<section class="card"><div class="big"><span class="muted">${e.owed < 0 ? 'You owe them' : 'They owe you'}</span><b>${money(Math.abs(e.owed))}</b></div>` +
     (e.owed ? `<p class="muted">Paid back in cash, or squared up another way?</p><button type="button" class="btn" data-settle="${esc(e.name)}">Mark settled</button>` : '<p class="muted">All square.</p>') + '</section>' +
     (c => `<section class="card"><h2>Email</h2>${c?.email ? `<p>${esc(c.email)} · ${c.app ? '✅ uses this app: sees what they owe you' : 'not on this app yet'}</p>` : ''}` +
-      `<form class="contact"><input type="hidden" name="name" value="${esc(e.name)}"><label>${c?.email ? 'Change' : 'Add their email (once)'}<input type="email" name="email" value="${esc(c?.email || '')}" placeholder="name@example.com"></label><button class="btn">Save</button></form></section>`)(contactOf(e.name)) +
+      `<form class="contact"><input type="hidden" name="name" value="${esc(e.name)}"><label>${c?.email ? 'Change' : 'Add their email (once)'}<input type="email" name="email" value="${esc(c?.email || '')}" placeholder="name@example.com"><small class="link-status" aria-live="polite"></small></label><button class="btn">Save</button></form></section>`)(contactOf(e.name)) +
     `<section class="card"><h2>Transactions<span>tap to change</span></h2>${e.list.map(t => row(t, true)).join('')}</section>` };
 }
 // Transactions grouped by day, each day header linking to that day and showing what it spent.
@@ -2616,12 +2617,31 @@ async function saveFriend(form, remove) {
   const email = remove ? '' : (form.email?.value || '').trim();
   const ok = await postAndRedraw('/api/friend', { id: Number(form.dataset.id), friend: name, theirs, email }, form.dataset.id);
   if (ok) {
-    state.shared = null; loadShared();
+    state.shared = null; await loadShared();
     const c = contactOf(name);
-    toast(remove ? 'Friend tag removed.' : email || c?.app ? `Tagged with ${name}. They see it in their app.` : `Tagged with ${name}.`);
+    toast(remove ? 'Friend tag removed.' : c?.app ? `Tagged with ${name} · ✓ linked: they see it in their app.`
+      : c?.email ? `Tagged with ${name}. ${c.email} isn’t on this app yet: it links when the admin adds them.` : `Tagged with ${name}.`);
   }
   else form.querySelectorAll('button').forEach(b => { b.disabled = false; });
 }
+// While typing a friend's email: is it someone on this app? (Checked after a short pause.)
+let linkTimer;
+document.addEventListener('input', e => {
+  if (e.target.name !== 'email' || !e.target.form?.matches('form.friend, form.contact')) return;
+  const box = e.target.parentElement.querySelector('.link-status'), email = e.target.value.trim();
+  clearTimeout(linkTimer);
+  if (!box) return;
+  box.textContent = ''; box.className = 'link-status';
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) return;
+  linkTimer = setTimeout(async () => {
+    try {
+      const r = await (await fetch(`/api/contact/check?email=${enc(email)}`)).json();
+      if (e.target.value.trim() !== email) return;
+      box.className = `link-status ${r.app ? 'ok' : 'no'}`;
+      box.textContent = r.app ? '✓ Linked: they have an account here and will see what they owe.' : 'Not on this app yet. Saved anyway; it links when the admin adds them.';
+    } catch {}
+  }, 400);
+});
 document.addEventListener('input', e => {
   if (e.target.name !== 'friend' || !e.target.form?.matches('form.friend')) return;
   const box = e.target.form.querySelector('.friend-email'), name = e.target.value.trim();

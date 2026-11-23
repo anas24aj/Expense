@@ -901,6 +901,28 @@ def share(db, txn_ids):
         pub.close()
 
 
+def on_app(db, email):
+    """Whether an email belongs to someone on this app (other than you)."""
+    email = email.strip().lower()
+    pub = public_of(db)
+    try:
+        return bool(email) and bool(pub.run('SELECT 1 FROM app_users WHERE email = :e AND space != :s', e=email, s=db.space))
+    finally:
+        pub.close()
+
+
+def relink(pub, email):
+    """Someone was just added: everyone who had already saved their email gets their splits shared with them now."""
+    for u in pub.run("SELECT space FROM app_users WHERE space != '' AND email != :e", e=email):
+        theirs = DB(pub.url if pub.pg else pub.main_file, u['space'])
+        try:
+            names = [r['name'] for r in theirs.run('SELECT name FROM contacts WHERE email = :e', e=email)]
+            for n in names:
+                share(theirs, [r['txn_id'] for r in theirs.run('SELECT txn_id FROM txn_friends WHERE LOWER(friend) = :n', n=n.lower())])
+        finally:
+            theirs.close()
+
+
 def shared(db):
     """What other people on the app say you owe them (unsettled), what you've told them they owe you, and your saved
     friends (with whether their email is on the app)."""
@@ -1647,6 +1669,7 @@ def _admin(environ, method, path, query, respond, redirect):
                 new_user(pub, str(body.get('email', '')), str(body.get('password', '')), bool(body.get('owner')))
             except ValueError as e:
                 return respond('400 Bad Request', {'error': str(e)})
+            relink(pub, str(body.get('email', '')).strip().lower())
             return respond('200 OK', users(pub))
         found = pub.run('SELECT * FROM app_users WHERE id = :id', id=int(body.get('id') or 0)) if 'id' in body else []
         if (method, path) == ('POST', '/api/admin/users/password'):
@@ -1663,6 +1686,7 @@ def _admin(environ, method, path, query, respond, redirect):
             if not found:
                 return respond('404 Not Found', {'error': 'no such person'})
             pub.run('DELETE FROM app_users WHERE id = :id', id=found[0]['id'])
+            pub.run('DELETE FROM shared_splits WHERE to_email = :e OR from_space = :s', e=found[0]['email'], s=found[0]['space'])
             if body.get('data') and found[0]['space'] != 'public':
                 drop_space(pub, found[0]['space'])
             return respond('200 OK', users(pub))
@@ -1873,7 +1897,7 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me'), ('GET', '/api/shared'), ('GET', '/api/contact/check')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
@@ -1911,11 +1935,13 @@ def _app(environ, start_response):
                 set_friend(db, *tag[:3])
                 if tag[1] and tag[3]:
                     set_contact(db, tag[1], tag[3])
+                saved = db.run('SELECT email FROM contacts WHERE LOWER(name) = :n', n=tag[1].lower()) if tag[1] else []
+                linked = bool(saved) and on_app(db, saved[0]['email'])
             except KeyError:
                 return respond('404 Not Found', {'error': 'no such transaction'})
             except ValueError as e:
                 return respond('400 Bad Request', {'error': f'bad request: {e}'})
-            return respond('200 OK', {'saved': True, **refreshed(db, query)})
+            return respond('200 OK', {'saved': True, 'linked': linked, 'email': saved[0]['email'] if saved else '', **refreshed(db, query)})
         if path == '/api/delete':
             try:
                 delete_transaction(db, doomed)
@@ -2005,6 +2031,8 @@ def _app(environ, start_response):
             return respond('200 OK', statements(db))
         if path == '/api/shared':
             return respond('200 OK', shared(db))
+        if path == '/api/contact/check':  # while typing a friend's email: are they on this app?
+            return respond('200 OK', {'app': on_app(db, query.get('email', ''))})
         if path == '/api/shared/paid':
             try:
                 paid_back(db, *paid)

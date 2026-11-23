@@ -342,6 +342,20 @@ class StoreMixin:
             self.assertEqual(server.shared(hari)['to_me'], [])
             server.set_friend(hari, ids['UBER'], 'Ali', 30000)
             self.assertEqual(server.shared(wife)['to_me'], [])
+            # A friend whose email isn't on the app yet: saved, not linked; linked as soon as the admin adds them.
+            self.assertEqual((server.on_app(hari, 'wife@example.com'), server.on_app(hari, 'ali@example.com'), server.on_app(hari, 'hari@example.com')), (True, False, False))
+            server.set_contact(hari, 'Ali', 'ali@example.com')
+            self.assertFalse(next(c for c in server.shared(hari)['contacts'] if c['name'] == 'Ali')['app'])
+            ali_id = server.new_user(db, 'ali@example.com', 'ali-pass-12')
+            server.relink(db, 'ali@example.com')
+            ali = server.DB(self.url, space(ali_id))
+            try:
+                self.assertEqual([(r['what'], r['amount_minor']) for r in server.shared(ali)['to_me']], [('UBER', 30000)])
+                db.run('DELETE FROM app_users WHERE id = :id', id=ali_id)
+                db.run('DELETE FROM shared_splits WHERE to_email = :e', e='ali@example.com')
+            finally:
+                server.drop_space(db, ali.space)
+                ali.close()
         finally:
             for d in (hari, wife):
                 server.drop_space(db, d.space)
