@@ -102,6 +102,10 @@ SHARED_SCHEMA = '''CREATE TABLE IF NOT EXISTS shared_splits (from_space TEXT NOT
   settled INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (from_space, txn_id))'''
 # Your friends' emails, given once: name -> email (empty: not known).
 CONTACTS_SCHEMA = "CREATE TABLE IF NOT EXISTS contacts (name TEXT PRIMARY KEY, email TEXT NOT NULL DEFAULT '')"
+# Money between two people on the app (e.g. a husband's transfer arriving in his wife's account): each side keeps the
+# other side's details. blocked = 1: you unlinked it, so it's never linked again.
+PEER_SCHEMA = '''CREATE TABLE IF NOT EXISTS peer_links (txn_id BIGINT PRIMARY KEY, who TEXT NOT NULL, their_space TEXT NOT NULL,
+  their_txn BIGINT NOT NULL, their_account TEXT NOT NULL DEFAULT '', their_day TEXT NOT NULL DEFAULT '', blocked INTEGER NOT NULL DEFAULT 0)'''
 SPACE = re.compile(r'(?:public|u_\d{1,9})\Z')
 EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}\Z')
 MIN_USER_PASSWORD = 8
@@ -203,7 +207,7 @@ class DB:
             self.run(schema)
             for extra in [USERS_SCHEMA, SHARED_SCHEMA] if space == 'public' else []:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
-            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA, CONTACTS_SCHEMA]:
+            for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA, CONTACTS_SCHEMA, PEER_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
             DB._schema_ready.add(ready)  # before the re-read: if that fails, requests must still work and not retry it each time
@@ -371,6 +375,7 @@ def transactions(db, month=None, currency=None):
     for_merchant = rule_finder({k: c for k, c in saved.items() if not k.startswith(WORDING)})
     overrides = {r['txn_id']: r['category'] for r in db.run('SELECT txn_id, category FROM txn_categories')}
     friends = {r['txn_id']: r for r in db.run('SELECT txn_id, friend, theirs_minor, settled FROM txn_friends')}
+    peers = {r['txn_id']: r for r in db.run('SELECT * FROM peer_links WHERE blocked = 0')}
     # The salary you entered on the Plan tab: a credit within 10% of it, in its currency, is your salary even when the
     # bank's SMS doesn't say 'salary'.
     pay = db.run("SELECT value FROM settings WHERE key = 'salary'")
@@ -415,9 +420,11 @@ def transactions(db, month=None, currency=None):
             'merchant': merchant,
             'account': acct[r['id']], 'statement': bool(r['statement_id']), 'linked': linked.get(r['id']), 'fixed': r['id'] in overrides,
             'friend': f['friend'] if f else '', 'theirs': theirs / 100, 'settled': bool(f and f['settled']),
+            'peer': {'who': peers[r['id']]['who'], 'account': peers[r['id']]['their_account'], 'day': peers[r['id']]['their_day']} if r['id'] in peers else None,
             'category': overrides.get(r['id']) or (OWN_TRANSFER if r['id'] in own else None)
                         or (merchant and for_merchant(merchant))
                         or (not merchant and by_wording.get(wording(r['body'])))
+                        or (r['id'] in peers and 'Family')
                         or (r['id'] not in own and is_pay(r) and not REFUND.search(r['body']) and 'Salary')
                         or categorize(merchant, r['body'], rules, 'Income' if r['direction'] == 'credit' and not REFUND.search(r['body']) else 'Uncategorized'),
         })
@@ -701,6 +708,10 @@ def trail(db, first=None, last=None):
                 flow(t['account'], found[0], 'loan', t, t, found[1])
             elif found := why_payee(t):
                 flow(t['account'], found[0], 'payee', t, t, found[1])
+        if t.get('peer') and not t['linked'] and inside(t):  # money with someone on this app
+            who = f"👤 {t['peer']['who']}"
+            why = f"arrived in {t['peer']['who']}’s {t['peer']['account']} on {t['peer']['day']}" if t['direction'] == 'debit' else f"sent from {t['peer']['who']}’s {t['peer']['account']} on {t['peer']['day']}"
+            flow(*((t['account'], who) if t['direction'] == 'debit' else (who, t['account'])), 'family', t, t, why)
     # Journeys: after money arrives in an account, the next transfer/loan payment out of it.
     out_of = defaultdict(list)
     for t in sorted(every, key=lambda t: t['received_at']):
@@ -808,7 +819,7 @@ def unmatched(every, inside):
         d, c = (a, b) if a['direction'] == 'debit' else (b, a)
         rng = FX_RATIO.get((d['currency'], c['currency']))
         return bool(rng) and rng[0] <= c['amount'] / d['amount'] <= rng[1]
-    open_ = [t for t in every if not t['linked'] and t['category'] != IGNORED and transfer_like(t) and not PURCHASE.search(t['body'])]
+    open_ = [t for t in every if not t['linked'] and not t.get('peer') and t['category'] != IGNORED and transfer_like(t) and not PURCHASE.search(t['body'])]
     out = []
     for t in sorted((t for t in open_ if inside(t)), key=lambda t: t['received_at'], reverse=True)[:40]:
         day = date.fromisoformat(t['received_at'][:10])
@@ -901,6 +912,8 @@ def set_contact(db, name, email):
     db.run('DELETE FROM contacts WHERE LOWER(name) = :n', n=name.lower())
     db.run('INSERT INTO contacts (name, email) VALUES (:n, :e)', n=name, e=email)
     share(db, [r['txn_id'] for r in db.run('SELECT txn_id FROM txn_friends WHERE LOWER(friend) = :n', n=name.lower())])
+    if email:
+        peers_quietly(db)
 
 
 def share(db, txn_ids):
@@ -951,6 +964,89 @@ def relink(pub, email):
                 share(theirs, [r['txn_id'] for r in theirs.run('SELECT txn_id FROM txn_friends WHERE LOWER(friend) = :n', n=n.lower())])
         finally:
             theirs.close()
+
+
+PEER_DAYS, PEER_FX_DAYS = 1, LINK_DAYS
+
+
+def peers_of(db):
+    """People on the app who have you saved with your email, as you have them: [(your name for them, their space,
+    their name for you)]. Linking needs both, so no one is matched against a stranger's data."""
+    mine = {r['email']: r['name'] for r in db.run("SELECT name, email FROM contacts WHERE email != ''")}
+    if not mine:
+        return []
+    pub = public_of(db)
+    try:
+        me = pub.run('SELECT email FROM app_users WHERE space = :s', s=db.space)
+        people = [(u['email'], u['space']) for u in pub.run("SELECT email, space FROM app_users WHERE space != '' AND space != :s", s=db.space) if u['email'] in mine]
+    finally:
+        pub.close()
+    out = []
+    for email, space in people if me else []:
+        theirs = DB(db.url if db.pg else db.main_file, space)
+        try:
+            back = theirs.run('SELECT name FROM contacts WHERE email = :e', e=me[0]['email'])
+        finally:
+            theirs.close()
+        if back:
+            out.append((mine[email], space, back[0]['name']))
+    return out
+
+
+def link_peers(db):
+    """Pair money leaving one person's account with the same money arriving in the other's (same amount, or the same
+    at an exchange rate), close in time, and only when nothing else could be it on either side. Both sides keep the
+    link. shortcut: compares all unlinked transactions of both people each time; limit to recent ones if it gets slow."""
+    for name, space, my_name in peers_of(db):
+        other = DB(db.url if db.pg else db.main_file, space)
+        try:
+            when = lambda t: datetime.fromisoformat(t['received_at'])
+            def open_(d):
+                taken = {r['txn_id'] for r in d.run('SELECT txn_id FROM peer_links')}
+                return [t for t in transactions(d) if t['id'] not in taken and not t['linked'] and t['category'] != IGNORED
+                        and not PURCHASE.search(t['body'])]
+            A, B = open_(db), open_(other)
+
+            def fits(x, y):  # x and y opposite ways: the same money?
+                d, c = (x, y) if x['direction'] == 'debit' else (y, x)
+                gap = (when(c) - when(d)).total_seconds()
+                if d['currency'] == c['currency']:
+                    return d['amount'] == c['amount'] and abs(gap) <= PEER_DAYS * 86400
+                rng = FX_RATIO.get((d['currency'], c['currency']))
+                return bool(rng) and rng[0] <= c['amount'] / d['amount'] <= rng[1] and 0 <= gap <= PEER_FX_DAYS * 86400
+            for a in A:
+                cands = [b for b in B if b['direction'] != a['direction'] and fits(a, b) and (transfer_like(a) or transfer_like(b))]
+                if len(cands) != 1 or len([x for x in A if x['direction'] == a['direction'] and fits(x, cands[0])]) != 1:
+                    continue  # nothing, or more than one thing it could be: leave it
+                b = cands[0]
+                db.run('INSERT INTO peer_links (txn_id, who, their_space, their_txn, their_account, their_day) VALUES (:i, :w, :s, :t, :a, :d) ON CONFLICT (txn_id) DO NOTHING',
+                       i=a['id'], w=name, s=space, t=b['id'], a=b['account'], d=b['received_at'][:10])
+                other.run('INSERT INTO peer_links (txn_id, who, their_space, their_txn, their_account, their_day) VALUES (:i, :w, :s, :t, :a, :d) ON CONFLICT (txn_id) DO NOTHING',
+                          i=b['id'], w=my_name, s=db.space, t=a['id'], a=a['account'], d=a['received_at'][:10])
+                B.remove(b)
+        finally:
+            other.close()
+
+
+def unlink_peer(db, txn_id):
+    """Not the same money after all: unlinked on both sides, and never linked again."""
+    found = db.run('SELECT * FROM peer_links WHERE txn_id = :id', id=txn_id)
+    if not found:
+        raise KeyError('not linked')
+    db.run('UPDATE peer_links SET blocked = 1 WHERE txn_id = :id', id=txn_id)
+    other = DB(db.url if db.pg else db.main_file, found[0]['their_space'])
+    try:
+        other.run('UPDATE peer_links SET blocked = 1 WHERE txn_id = :id', id=found[0]['their_txn'])
+    finally:
+        other.close()
+
+
+def peers_quietly(db):
+    """Linking with the other person is extra: an error there must never lose the SMS that was just saved."""
+    try:
+        link_peers(db)
+    except Exception as e:
+        print(f'link_peers failed: {type(e).__name__}: {e}', file=sys.stderr)
 
 
 def shared(db):
@@ -2153,6 +2249,11 @@ def _app(environ, start_response):
             paid = (str(paid['from']), str(paid['currency']))
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
+    elif (method, path) == ('POST', '/api/peer/unlink'):
+        try:
+            unpeer = int(read_json(environ, MAX_BODY)['id'])
+        except (ValueError, KeyError, TypeError) as e:
+            return respond('400 Bad Request', {'error': f'bad request: {e}'})
     elif (method, path) == ('POST', '/api/contact'):
         try:
             contact = read_json(environ, MAX_BODY)
@@ -2296,7 +2397,9 @@ def _app(environ, start_response):
             return respond('200 OK', result)
         if path == '/api/statement':
             try:
-                return respond('200 OK', import_statement(db, *upload))
+                done = import_statement(db, *upload)
+                peers_quietly(db)
+                return respond('200 OK', done)
             except StatementError as e:
                 return respond('422 Unprocessable Entity', {'error': str(e)})
             except Exception as e:  # a file the readers choke on: say so instead of a bare 500
@@ -2328,6 +2431,12 @@ def _app(environ, start_response):
             except KeyError as e:
                 return respond('400 Bad Request', {'error': str(e.args[0])})
             return respond('200 OK', shared(db))
+        if path == '/api/peer/unlink':
+            try:
+                unlink_peer(db, unpeer)
+            except KeyError:
+                return respond('404 Not Found', {'error': 'not linked'})
+            return respond('200 OK', {'saved': True, **refreshed(db, query)})
         if path == '/api/contact':
             try:
                 set_contact(db, *contact)
@@ -2347,9 +2456,13 @@ def _app(environ, start_response):
                 card_statement(db, body, received_at)
             if environ.get('HTTP_AUTHORIZATION', '').startswith('Bearer '):  # the Expense Sync phone app (the import page uses the login cookie)
                 record_delivery(db, 'Phone sync', f'{len(stored)} new of {len(batch)} checked')
+            if stored:
+                peers_quietly(db)
             return respond('200 OK', {'received': len(batch), 'stored': len(stored)})
         if method == 'POST':
             stored = store_sms(db, *sms)
+            if stored:
+                peers_quietly(db)
             advert = bool(AD_SENDER.search(sms[0].strip()))
             skipped = not stored and not advert and not parse(sms[1])
             card = skipped and card_statement(db, sms[1], sms[2])

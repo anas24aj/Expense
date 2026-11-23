@@ -361,6 +361,43 @@ class StoreMixin:
                 server.drop_space(db, d.space)
                 d.close()
 
+    def test_money_between_two_people_links_both_sides(self):
+        db = self.db
+        hid, sid = server.new_user(db, 'hari@example.com', 'hari-pass-1'), server.new_user(db, 'silpa@example.com', 'silpa-pass-1')
+        space = lambda uid: db.run('SELECT space FROM app_users WHERE id = :id', id=uid)[0]['space']
+        hari, silpa = server.DB(self.url, space(hid)), server.DB(self.url, space(sid))
+        try:
+            server.store_sms(hari, 'SAB', 'Outgoing Transfer\nAmount: SAR 1,500.00\nTo: SILPA\nOn: 2026-10-05 08:06', '2026-10-05T08:06:00+03:00')
+            server.store_sms(silpa, 'D360', 'Incoming Internal transfer: D360 Bank\nAmount: SAR 1,500.00\nFrom: HARISH MOHAN\nIBAN: ****0440\nOn: 2026-10-05 08:07', '2026-10-05T08:07:00+03:00')
+            server.store_sms(hari, 'D360', 'International transfer\nAmount: INR 25,000.00 (SAR 992.06)\nTo: silpa\nCountry:India', '2026-10-10T10:00:00+03:00')
+            server.store_sms(silpa, 'JD-IDFCFB-S', 'Your a/c no. XXXXXXXX777 is credited by Rs. 25000.00 on 10-Oct-26 (IMPS Ref no 600000000009 ).', '2026-10-10T15:00:00+05:30')
+            server.set_contact(hari, 'Silpa', 'silpa@example.com')
+            server.link_peers(hari)
+            self.assertEqual([t['peer'] for t in server.transactions(hari)], [None, None])  # she hasn't saved him yet: nothing linked
+            server.set_contact(silpa, 'Harish', 'hari@example.com')  # now both have: all history links
+            his, hers = server.transactions(hari), server.transactions(silpa)
+            self.assertEqual(sorted((t['amount'], t['currency'], t['peer']['who'], t['category']) for t in his),
+                             [(992.06, 'SAR', 'Silpa', 'Family'), (1500.0, 'SAR', 'Silpa', 'Family')])
+            self.assertEqual(sorted((t['amount'], t['peer']['who'], t['peer']['account'], t['category']) for t in hers),
+                             [(1500.0, 'Harish', 'SAB', 'Family'), (25000.0, 'Harish', 'D360', 'Family')])
+            self.assertIn(('SAB', '👤 Silpa'), {(f['from'], f['to']) for f in server.trail(hari)['flows']})
+            self.assertIn(('👤 Harish', 'D360'), {(f['from'], f['to']) for f in server.trail(silpa)['flows']})
+            # Unlink on her side: gone on both, and a later check doesn't link it again.
+            server.unlink_peer(silpa, next(t['id'] for t in hers if t['amount'] == 1500))
+            server.link_peers(hari)
+            self.assertEqual(sorted(t['amount'] for t in server.transactions(hari) if t['peer']), [992.06])
+            self.assertEqual(sorted(t['amount'] for t in server.transactions(silpa) if t['peer']), [25000.0])
+            # Two arrivals it could be: it leaves both alone.
+            server.store_sms(hari, 'SAB', 'Outgoing Transfer\nAmount: SAR 700.00\nTo: SILPA', '2026-10-20T08:00:00+03:00')
+            server.store_sms(silpa, 'D360', 'Incoming Internal transfer: D360 Bank\nAmount: SAR 700.00\nFrom: HARISH MOHAN', '2026-10-20T08:01:00+03:00')
+            server.store_sms(silpa, 'D360', 'Incoming Internal transfer: D360 Bank\nAmount: SAR 700.00\nFrom: SISTER', '2026-10-20T09:00:00+03:00')
+            server.link_peers(hari)
+            self.assertFalse(any(t['peer'] for t in server.transactions(silpa) if t['amount'] == 700))
+        finally:
+            for d in (hari, silpa):
+                server.drop_space(db, d.space)
+                d.close()
+
     def test_data_spaces_are_separate(self):
         db = self.db
         theirs = server.DB(self.url, 'u_901')
@@ -783,7 +820,7 @@ class PostgresStoreTest(StoreMixin, unittest.TestCase):
     def setUp(self):
         server.DB._schema_ready.discard(self.url)
         cleanup = server.DB(self.url)
-        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements, txn_links, app_users, shared_splits, contacts')
+        cleanup.run('DROP TABLE IF EXISTS transactions, merchant_categories, txn_categories, txn_friends, deleted_sms, holdings, loan_payments, plan_actions, settings, snapshots, accounts, statements, txn_links, app_users, shared_splits, contacts, peer_links')
         cleanup.close()
         server.DB._schema_ready.discard(self.url)
         super().setUp()
@@ -938,6 +975,26 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.call('GET', '/api/latest', **other)[0], 401)
         self.assertEqual(login('hari.m', 'hari-pass-1'), '')
         self.assertIn('session=', login('hari.m', 'new-pass-123'))
+
+    def test_phone_sms_link_two_people_as_they_arrive(self):
+        db = server.DB()
+        try:
+            server.new_user(db, 'hari@example.com', 'hari-pass-1')
+            server.new_user(db, 'silpa@example.com', 'silpa-pass-1')
+            keys = [u['sync_key'] for u in db.run('SELECT sync_key FROM app_users ORDER BY id')]
+        finally:
+            db.close()
+        def login(who, pw):
+            self.call('POST', '/login', urlencode({'email': who, 'password': pw}).encode(), auth='', content_type='application/x-www-form-urlencoded')
+            return dict(auth='', cookie=self.headers['Set-Cookie'].split(';')[0])
+        hari, silpa = login('hari@example.com', 'hari-pass-1'), login('silpa@example.com', 'silpa-pass-1')
+        self.call('POST', '/api/contact', json.dumps({'name': 'Silpa', 'email': 'silpa@example.com'}).encode(), **hari)
+        self.call('POST', '/api/contact', json.dumps({'name': 'Harish', 'email': 'hari@example.com'}).encode(), **silpa)
+        sms = lambda key, body, at: self.call('POST', '/sms', json.dumps({'sender': 'B', 'body': body, 'received_at': at}).encode(), auth=f'Bearer {key}')
+        sms(keys[0], 'Outgoing Transfer\nAmount: SAR 1,500.00\nTo: SILPA', '2025-03-05T08:06:00+03:00')  # an old date, as from a backup
+        sms(keys[1], 'Incoming Internal transfer: D360 Bank\nAmount: SAR 1,500.00\nFrom: HARISH MOHAN', '2025-03-05T08:07:00+03:00')
+        hers = json.loads(self.call('GET', '/api/search', query='q=harish', **silpa)[1])['results'][0]
+        self.assertEqual((hers['peer']['who'], hers['category']), ('Harish', 'Family'))
 
     def test_no_one_sees_anyone_elses_data(self):
         db = server.DB()

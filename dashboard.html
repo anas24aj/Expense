@@ -1080,6 +1080,7 @@ function monthBars(list, endMonth, P, { mini = false, received = false, href = t
 }
 // 'Al Rajhi → HDFC': the other end of a transfer between your accounts (when it is in the list being shown).
 function linkNote(t) {
+  if (t.peer) return ` ${t.direction === 'debit' ? '→' : '←'} 👤 ${esc(t.peer.who)}’s ${esc(t.peer.account)}`;
   if (!t.linked) return '';
   const o = (state.all || []).find(x => x.id === t.linked);
   return ` ${t.direction === 'debit' ? '→' : '←'} ${o ? esc(o.account) : 'your other account'}`;
@@ -1721,6 +1722,8 @@ function friendForm(t) {
         .map(([v, label]) => `<option value="${v}" ${v === split ? 'selected' : ''}>${label}</option>`).join('') + '</select></label>' +
       `<label ${split === 'custom' ? '' : 'hidden'}>Their share<input type="text" name="theirs" inputmode="decimal" pattern="[0-9.,]+" value="${split === 'custom' ? (t._t / 100).toFixed(2) : ''}"></label>` : '') +
     `<div class="actions"><button>${t.friend ? 'Update' : 'Save'}</button>${t.friend ? '<button type="button" class="link" data-unfriend>Remove tag</button>' : ''}</div></form>` +
+    (t.peer ? `<div class="fix"><p class="muted small">${t.direction === 'debit' ? 'Arrived in' : 'Sent from'} ${esc(t.peer.who)}’s ${esc(t.peer.account)} on ${esc(dayLabel(t.peer.day))}.</p>` +
+      `<button type="button" class="link" data-unpeer="${t.id}">Not the same money? Unlink</button></div>` : '') +
     `<div class="fix delete"><button type="button" class="link danger" data-delete="${t.id}">🗑 Delete this transaction</button></div>`;
 }
 // What each friend owes you in this currency: their unsettled shares, less what they paid back. Negative: you owe them.
@@ -1743,7 +1746,7 @@ const curs = o => Object.entries(o || {}).filter(([, v]) => v).map(([c, v]) => i
 function flowMap(flows) {
   if (!flows.length) return '';
   const val = f => Object.entries(f.sent).reduce((a, [c, v]) => a + toInr(v, c), 0);
-  const names = [...new Set(flows.flatMap(f => [f.from, f.to]))], loanSet = new Set(flows.filter(f => f.kind === 'loan' || f.kind === 'payee').map(f => f.to));
+  const names = [...new Set(flows.flatMap(f => [f.from, f.to]))], loanSet = new Set(flows.filter(f => f.kind === 'loan' || f.kind === 'payee' || f.kind === 'family' && f.to.startsWith('👤')).map(f => f.to));
   const payees = new Set(flows.filter(f => f.kind === 'payee').map(f => f.to));
   const depth = Object.fromEntries(names.map(n => [n, 0]));
   for (let k = 0; k < names.length; k++) for (const f of flows) if (f.from !== f.to) depth[f.to] = Math.max(depth[f.to], Math.min(depth[f.from] + 1, 5));
@@ -1774,11 +1777,11 @@ function flowMap(flows) {
     return `<g class="band" data-flow="${esc(f.from)}→${esc(f.to)}"><path d="${d}" fill="${c}"><title>${esc(f.from)} → ${esc(f.to)}: ${esc(curs(f.sent))}</title></path>${dots}</g>`;
   }).join('');
   // Each label sits above its bar, so neighbouring columns don't overlap: left-aligned in the first column, right in the last.
-  const nodes = names.map(n => { const p = pos[n], c = n === 'Salary' ? '#d4a017' : payees.has(n) ? '#e0518b' : loanSet.has(n) ? 'var(--good, #0f7b3e)' : color[n], col = depth[n];
+  const nodes = names.map(n => { const p = pos[n], c = n === 'Salary' ? '#d4a017' : n.startsWith('👤') ? '#8b5cf6' : payees.has(n) ? '#e0518b' : loanSet.has(n) ? 'var(--good, #0f7b3e)' : color[n], col = depth[n];
     const [x, anchor] = col === 0 ? [p.x, 'start'] : col === cols - 1 ? [p.x + bar, 'end'] : [p.x + bar / 2, 'middle'];
     return `<rect x="${f1(p.x)}" y="${f1(p.y)}" width="${bar}" height="${f1(p.h)}" rx="3" fill="${c}"/>` +
       // labels alternate under / above the bars column by column (the last column under), so neighbours never collide
-      `<text x="${f1(x)}" y="${f1((cols - 1 - col) % 2 === 0 && cols > 1 ? p.y + p.h + 11 : p.y - 15)}" text-anchor="${anchor}">${loanSet.has(n) ? (payees.has(n) ? '💝 ' : '🏠 ') + esc(n.slice(0, 20)) : n === 'Salary' ? '💰 Salary' : esc(short(n))}</text>` +
+      `<text x="${f1(x)}" y="${f1((cols - 1 - col) % 2 === 0 && cols > 1 ? p.y + p.h + 11 : p.y - 15)}" text-anchor="${anchor}">${n.startsWith('👤') ? esc(n.slice(0, 20)) : loanSet.has(n) ? (payees.has(n) ? '💝 ' : '🏠 ') + esc(n.slice(0, 20)) : n === 'Salary' ? '💰 Salary' : esc(short(n))}</text>` +
       `<text class="amt" x="${f1(x)}" y="${f1((cols - 1 - col) % 2 === 0 && cols > 1 ? p.y + p.h + 22 : p.y - 4)}" text-anchor="${anchor}">${esc(short_inr(size(n)))}</text>`; }).join('');
   return `<div class="sk"><svg viewBox="-2 -30 ${W + 4} ${H + 56}" role="img" aria-label="Money flow between your accounts">${bands}${nodes}</svg></div>` +
     '<p class="muted small">Band width is the money moved, in ₹ (SAR at today’s rate). Tap a band for its messages.</p>';
@@ -1954,7 +1957,7 @@ function trailPage(rt, P) {
     `<div class="ev-t"><b>${t.direction === 'debit' ? '−' : '+'}${esc(inCur(t.amount, t.currency))}</b><span>${esc(t.account)} · ${esc(dayLabel(t.day))}</span><pre>${esc(t.body)}</pre>` +
     `<form class="unlink"><input type="hidden" name="id" value="${t.id}"><label>Not right? What was this?<select name="category" required><option value="" selected disabled>Choose…</option>` +
     `${cats.map(c => `<option>${esc(c)}</option>`).join('')}<option value="${IGNORED}">Not a real transaction (advert)</option></select></label><button class="btn">Save</button></form></div>`).join('')}</div>`).join('');
-  const flows = T.flows.map(f => `<details class="fl"><summary>` + rk({ icon: f.kind === 'loan' ? '🏠' : f.kind === 'payee' ? '💝' : f.kind === 'salary' ? '💰' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
+  const flows = T.flows.map(f => `<details class="fl"><summary>` + rk({ icon: f.kind === 'loan' ? '🏠' : f.kind === 'payee' ? '💝' : f.kind === 'salary' ? '💰' : f.kind === 'family' ? '👪' : '🔁', nameHtml: `<b class="wrap">${esc(f.from)} → ${esc(f.to)}</b>`,
     sub: `${plural(f.count, f.kind === 'transfer' ? 'transfer' : f.kind === 'salary' ? 'salary' : 'payment')} · last ${esc(dayLabel(f.last))}`,
     valueText: esc(curs(f.sent)), vsub: Object.keys(f.got).join() !== Object.keys(f.sent).join() ? `→ ${esc(curs(f.got))}` : '' }) +
     `</summary><p class="muted small">The messages behind this, newest first. If one is wrong, say what it was: it stops being matched.</p>${evidence(f)}</details>`).join('');
@@ -2707,6 +2710,13 @@ document.addEventListener('click', async e => {
   const mo = e.target.closest('[data-motion]')?.dataset.motion;
   if (mo) { try { localStorage.setItem('motion', mo); } catch {} applyMotion(); render(); return; }
   if (e.target.closest('[data-unfriend]')) { saveFriend(e.target.closest('form'), true); return; }
+  const unpeer = e.target.closest('[data-unpeer]');
+  if (unpeer) {
+    unpeer.disabled = true;
+    if (await postAndRedraw('/api/peer/unlink', { id: Number(unpeer.dataset.unpeer) })) toast('Unlinked on both sides. It won’t be linked again.');
+    else unpeer.disabled = false;
+    return;
+  }
   const del = e.target.closest('[data-delete]');
   if (del) {
     if (!confirm("Delete this transaction? It won't come back, even if the phone sends the SMS again.")) return;
