@@ -136,6 +136,26 @@ class AuthTest(unittest.TestCase):
         self.assertEqual(self.sms(TOKEN, 'SAR 15.00 paid to OWNER SHOP'), 201)
         self.assertEqual(json.loads(self.call('GET', '/api/latest', cookie=cookie)[1])['count'], 2)
 
+    def test_works_with_no_secrets_configured(self):
+        """A fresh deploy: no EXPENSE_TOKEN, no ADMIN_PASSWORD. The server makes its own signing key, the first
+        account is the owner and opens the admin page, and phones use keys made in the app."""
+        for k in ('EXPENSE_TOKEN', 'ADMIN_PASSWORD'):
+            os.environ.pop(k, None)
+        server._SECRET.clear()
+        try:
+            location, owner = self.signup('owner@example.com')
+            self.assertEqual(location, '/setup')
+            self.assertEqual(self.call('GET', '/api/admin/users', cookie=owner)[0], 200)  # the first account is the admin
+            _, second = self.signup('second@example.com')
+            self.assertEqual(self.call('GET', '/api/admin/users', cookie=second)[0], 401)
+            key = json.loads(self.call('POST', '/api/devices', b'{"name":"iPhone","platform":"iphone"}', cookie=owner)[1])['key']
+            self.assertEqual(self.sms(key, 'SAR 20.00 paid to CAFE ONE'), 201)
+            self.assertEqual(self.sms('', 'SAR 20.00 paid to CAFE ONE'), 401)
+            self.assertEqual(self.form('/login', password='anything-at-all')[0], '/login?error=1')  # no site password exists
+            self.assertEqual(self.form('/login', email='owner@example.com', password='new-pass-123')[0], '/')
+        finally:
+            server._SECRET.clear()
+
     def test_service_worker_is_public(self):
         status, out = self.call('GET', '/sw.js')
         self.assertEqual((status, self.headers['Content-Type']), (200, 'text/javascript'))

@@ -1548,14 +1548,44 @@ def refreshed(db, query, every=None):
 
 
 def _token():
+    """The optional legacy site password (EXPENSE_TOKEN): opens the pre-accounts 'public' data. None when unset."""
     token = os.environ.get('EXPENSE_TOKEN', '').strip()  # a space pasted into Vercel's value box shouldn't lock you out
     return token if len(token) >= MIN_PASSWORD else None
+
+
+_SECRET = []
+
+
+def _secret():
+    """The key that signs sessions and reset links. EXPENSE_TOKEN when set (so old cookies stay valid); otherwise a
+    random key the server makes on first use and keeps in the database, so nobody has to configure one."""
+    if _token():
+        return _token()
+    if not _SECRET:
+        db = DB()
+        try:
+            db.run('CREATE TABLE IF NOT EXISTS app_secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            db.run("INSERT INTO app_secrets (name, value) VALUES ('signing', :v) ON CONFLICT (name) DO NOTHING", v=secrets.token_hex(32))
+            _SECRET.append(db.run("SELECT value FROM app_secrets WHERE name = 'signing'")[0]['value'])  # the first writer wins
+        finally:
+            db.close()
+    return _SECRET[0]
+
+
+def owner_space():
+    """The first account made is the owner: it gets the admin page without an ADMIN_PASSWORD."""
+    db = DB()
+    try:
+        found = db.run("SELECT space FROM app_users WHERE space != '' ORDER BY id LIMIT 1")
+    finally:
+        db.close()
+    return found[0]['space'] if found else None
 
 
 def _sign(expires, space='public', pw_hash=''):
     # The owner's (public) cookie keeps its old form; a person's also signs their password hash, so a reset logs them out.
     what = f'session:{expires}' if space == 'public' and not pw_hash else f'session:{space}:{expires}:{pw_hash[-24:]}'
-    return hmac.new(_token().encode(), what.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(_secret().encode(), what.encode(), hashlib.sha256).hexdigest()
 
 
 def new_session(space='public', pw_hash=''):
@@ -1607,7 +1637,9 @@ def sign_in(environ, given, email='', key=False, admin=False):
             if found and found[0]['space'] and password_matches(given, found[0]['pw_hash']):
                 db.run('UPDATE app_users SET last_seen = :t WHERE id = :id', t=datetime.now(timezone.utc).isoformat(timespec='seconds'), id=found[0]['id'])
                 return 'ok', found[0]['space'], found[0]['pw_hash']
-        elif hmac.compare_digest(given.encode(), _token().encode()):
+        elif not key and _token() and hmac.compare_digest(given.encode(), _token().encode()):
+            return 'ok', 'public', ''
+        elif key and _token() and hmac.compare_digest(given.encode(), _token().encode()):
             return 'ok', 'public', ''
         elif key and len(given) >= 20:
             found = db.run("SELECT space FROM app_users WHERE sync_key = :k AND space != ''", k=given)
@@ -1632,7 +1664,7 @@ def bearer_space(environ):
     """The phone authenticates with 'Authorization: Bearer <EXPENSE_TOKEN or a person's sync key>': whose data, or None.
     Guesses here count toward the lockout too."""
     header = environ.get('HTTP_AUTHORIZATION', '')
-    if not (_token() and header.startswith('Bearer ')):
+    if not header.startswith('Bearer '):
         return None
     result, space, _ = sign_in(environ, header[7:], key=True)
     return space if result == 'ok' else None
@@ -1647,7 +1679,7 @@ def session_space(environ):
     password hash, so a deleted person, or one whose password was reset, is signed out."""
     cookie = SimpleCookie(environ.get('HTTP_COOKIE', '')).get('session')
     parts = (cookie.value if cookie else '').split('.')
-    if not _token() or len(parts) not in (2, 3):
+    if len(parts) not in (2, 3):
         return None
     space, expires, sig = parts if len(parts) == 3 else ('public', *parts)
     if not (SPACE.match(space) and expires.isdigit() and int(expires) > time.time()):
@@ -1677,13 +1709,16 @@ def _admin_password():
 
 def _admin_sign(expires):
     # signs the admin password's hash too: changing ADMIN_PASSWORD ends admin sessions
-    return hmac.new(_token().encode(), f'admin:{expires}:{hashlib.sha256(_admin_password().encode()).hexdigest()[:16]}'.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(_secret().encode(), f'admin:{expires}:{hashlib.sha256(_admin_password().encode()).hexdigest()[:16]}'.encode(), hashlib.sha256).hexdigest()
 
 
 def admin_ok(environ):
     cookie = SimpleCookie(environ.get('HTTP_COOKIE', '')).get('admin')
     expires, _, sig = (cookie.value if cookie else '').partition('.')
-    return bool(_token() and _admin_password()) and expires.isdigit() and int(expires) > time.time() and hmac.compare_digest(sig, _admin_sign(expires))
+    if _admin_password() and expires.isdigit() and int(expires) > time.time() and hmac.compare_digest(sig, _admin_sign(expires)):
+        return True
+    space = session_space(environ)  # or the owner, signed in to the app as usual
+    return bool(space) and space == owner_space()
 
 
 def new_user(db, email, password, owner=False):
@@ -1744,7 +1779,7 @@ def _sha(text):
 
 
 def _reset_token(salt):
-    return hmac.new(_token().encode(), f'reset:{salt}'.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(_secret().encode(), f'reset:{salt}'.encode(), hashlib.sha256).hexdigest()
 
 
 def signup_open():
@@ -2026,7 +2061,7 @@ def _admin(environ, method, path, query, respond, redirect):
     if path == '/admin' and method == 'GET':
         return respond('200 OK', (HERE / 'admin.html').read_bytes(), 'text/html; charset=utf-8')
     if (method, path) == ('POST', '/admin/login'):
-        if not (_token() and _admin_password()):
+        if not _admin_password():
             return redirect('/admin?error=off')
         result = sign_in(environ, read_form(environ).get('password', ''), admin=True)[0]
         if result != 'ok':
@@ -2036,7 +2071,7 @@ def _admin(environ, method, path, query, respond, redirect):
     if (method, path) == ('POST', '/admin/logout'):
         return redirect('/admin', admin='')
     if not admin_ok(environ):
-        return respond('401 Unauthorized', {'error': 'admin sign-in needed' if _admin_password() else 'the admin page is off: set ADMIN_PASSWORD in Vercel'})
+        return respond('401 Unauthorized', {'error': 'sign in to the app with the owner account (the first account made) to use the admin page'})
     body = read_json(environ, MAX_IMPORT_BODY if path == '/api/admin/import' else MAX_BODY) if method == 'POST' else {}
     space = body.get('space') or query.get('space') or 'public'
     if not SPACE.match(str(space)):
@@ -2122,8 +2157,6 @@ def _account(environ, method, path, respond, redirect):
             return respond('405 Method Not Allowed', {'error': 'GET or POST'})
         form = read_form(environ)
         again = f"/reset?t={quote(form.get('t', ''))}&" if path == '/reset' else f'{path}?'
-        if not _token():
-            return redirect(f'{again}error=setup')
         pub = DB()
         try:
             if throttled(pub, environ):
@@ -2401,7 +2434,7 @@ def _mcp(environ, method, path, respond):
         return respond('405 Method Not Allowed', {'error': 'POST JSON-RPC messages here'}, headers=[('Allow', 'POST')])
     header = environ.get('HTTP_AUTHORIZATION', '')
     key = path[len('/mcp/'):] if path.startswith('/mcp/') else header[7:] if header.startswith('Bearer ') else ''
-    result, space, _ = sign_in(environ, unquote(key), key=True) if key and _token() else ('wrong', None, '')
+    result, space, _ = sign_in(environ, unquote(key), key=True) if key else ('wrong', None, '')
     if result != 'ok':
         return respond('401 Unauthorized', {'error': 'use your connector link from Settings (it has your key in it)'})
     try:
@@ -2454,8 +2487,6 @@ def _app(environ, start_response):
         return respond('200 OK', (HERE / path.lstrip('/')).read_bytes(), PUBLIC[path])
     if path == '/login':
         if method == 'POST':
-            if not _token():  # says only that setup is incomplete, nothing about the password itself
-                return redirect('/login?error=setup')
             form = read_form(environ)
             result, space, pw_hash = sign_in(environ, form.get('password', ''), email=form.get('email', ''))
             if result == 'ok':
@@ -2862,8 +2893,6 @@ def _app(environ, start_response):
 
 if __name__ == '__main__':
     from wsgiref.simple_server import make_server
-    if not _token():
-        raise SystemExit(f'Set EXPENSE_TOKEN to a password of at least {MIN_PASSWORD} characters.')
     host, port = os.environ.get('HOST', '127.0.0.1'), int(os.environ.get('PORT', '8000'))
     print(f'Listening on http://{host}:{port}')
     make_server(host, port, app).serve_forever()

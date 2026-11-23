@@ -27,3 +27,9 @@ permission declaration). iOS App Store adds nothing over PWA + Shortcut since SM
 ## ADR-007 Merchant data from open brand data
 Use OpenStreetMap's name-suggestion-index (BSD-3) for India and Saudi brands plus curated keywords; no third-party
 transaction categorization API (privacy, cost).
+
+## ADR-008 No secrets to configure (2026-11-23)
+The owner shouldn't type passwords into the host. The signing key is generated on first start and stored in the
+`app_secrets` table (EXPENSE_TOKEN still wins when set, so old sessions survive). The first account to sign up is the
+owner and opens /admin while signed in; ADMIN_PASSWORD is optional. Phone tokens are made per device in the app
+(/setup) and copied for the Shortcut; the login password is never a phone token.

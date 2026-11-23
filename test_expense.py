@@ -953,7 +953,7 @@ class AppTest(unittest.TestCase):
     def test_people_get_their_own_data_and_the_admin_manages_them(self):
         browser = dict(auth='')
         os.environ.pop('ADMIN_PASSWORD', None)
-        self.assertIn('off', json.loads(self.call('GET', '/api/admin/users', **browser)[1])['error'])
+        self.assertIn('owner', json.loads(self.call('GET', '/api/admin/users', **browser)[1])['error'])
         os.environ['ADMIN_PASSWORD'] = 'admin-pass-123'
         try:
             self.assertEqual(self.call('GET', '/api/admin/users', **browser)[0], 401)
@@ -1132,7 +1132,7 @@ class AppTest(unittest.TestCase):
         os.environ['EXPENSE_TOKEN'] = f' {TOKEN}\n'  # pasted into Vercel with whitespace
         self.assertEqual(self.login(f'{TOKEN} ')[:2], (303, '/'))  # keyboard added a trailing space
         os.environ['EXPENSE_TOKEN'] = 'short'  # 5 characters: below the minimum of 6
-        self.assertEqual(self.login('short')[:2], (303, '/login?error=setup'))
+        self.assertEqual(self.login('short')[:2], (303, '/login?error=1'))  # too short to be a site password: just wrong
         os.environ['EXPENSE_TOKEN'] = 'abc123'  # 6 characters is allowed
         self.assertEqual(self.login('abc123')[:2], (303, '/'))
         os.environ['EXPENSE_TOKEN'] = TOKEN

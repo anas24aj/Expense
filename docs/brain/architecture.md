@@ -65,7 +65,7 @@ Business numbers are computed **only** in `engine.py`, so the UI, the API and MC
 
 ## Auth
 
-- Email + password (PBKDF2, existing), self sign-up (owner can switch to invite-only), sessions per device.
+- Email + password (PBKDF2), self sign-up (SIGNUP=closed for invite-only), sessions per device. No secrets to configure: signing key generated and kept in `app_secrets`; first account = owner = admin (ADR-008).
 - Forgot password: emailed one-time link (30 min, only an HMAC-derived hash stored) via Resend (`RESEND_API_KEY`, `MAIL_FROM`); until then the admin
   page issues reset links.
 - MCP: per-person secret URL (works as a Claude custom connector) or bearer header.
