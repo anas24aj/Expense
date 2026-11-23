@@ -880,6 +880,48 @@ class AppTest(unittest.TestCase):
         finally:
             os.environ.pop('ADMIN_PASSWORD', None)
 
+    def test_no_one_sees_anyone_elses_data(self):
+        db = server.DB()
+        try:
+            a_id = server.new_user(db, 'a@example.com', 'a-pass-123')
+            b_id = server.new_user(db, 'b@example.com', 'b-pass-123')
+            key = {u['id']: u['sync_key'] for u in db.run('SELECT id, sync_key FROM app_users')}
+        finally:
+            db.close()
+        login = lambda email, pw: (self.call('POST', '/login', urlencode({'email': email, 'password': pw}).encode(), auth='',
+                                             content_type='application/x-www-form-urlencoded'), self.headers['Set-Cookie'].split(';')[0])[1]
+        a, b = dict(auth='', cookie=login('a@example.com', 'a-pass-123')), dict(auth='', cookie=login('b@example.com', 'b-pass-123'))
+        # A's money: an SMS, a loan, a salary, a friend split; B adds one ordinary purchase.
+        self.call('POST', '/sms', json.dumps({'sender': 'B', 'body': 'SAR 777.77 paid to SECRETSHOP', 'received_at': '2026-11-05T10:00:00+03:00'}).encode(), auth=f'Bearer {key[a_id]}')
+        self.call('POST', '/sms', json.dumps({'sender': 'B', 'body': 'SAR 5.00 paid to BAKERY', 'received_at': '2026-11-05T10:00:00+03:00'}).encode(), auth=f'Bearer {key[b_id]}')
+        self.call('POST', '/api/money', json.dumps({'kind': 'loan', 'name': 'SECRETLOAN', 'currency': 'INR', 'balance': '4242424', 'rate': '9', 'emi': '31313',
+                                                   'due_day': 5, 'match': '', 'as_of': '2026-11-01'}).encode(), **a)
+        self.call('POST', '/api/settings', json.dumps({'key': 'salary', 'value': {'amount': 98765, 'day': 25, 'currency': 'SAR'}}).encode(), **a)
+        tid = json.loads(self.call('GET', '/api/search', query='q=secretshop', **a)[1])['results'][0]['id']
+        self.call('POST', '/api/friend', json.dumps({'id': tid, 'friend': 'SECRETFRIEND', 'theirs': '100'}).encode(), **a)
+        secrets_of_a = ('SECRETSHOP', 'SECRETLOAN', 'SECRETFRIEND', '777.77', '98765', '4242424', 'a@example.com')
+        pages = ['/api/summary', '/api/transactions', '/api/search?q=secret', '/api/latest', '/api/money', '/api/plan', '/api/settings',
+                 '/api/statements', '/api/trail', '/api/balances', '/api/me', '/api/shared']
+        seen_by_a = b''.join(self.call('GET', p.split('?')[0], query=(p.split('?') + [''])[1], **a)[1] for p in pages)
+        self.assertTrue(all(x.encode() in seen_by_a for x in secrets_of_a[:4]))  # the check can see them where they belong
+        for p in pages:
+            status, out = self.call('GET', p.split('?')[0], query=(p.split('?') + [''])[1], **b)
+            self.assertEqual(status, 200, p)
+            for x in secrets_of_a:
+                self.assertNotIn(x.encode(), out, f'{x} leaked to B through {p}')
+        # And through every MCP tool, with B's connector link.
+        for name in server.MCP_TOOLS:
+            if not server.MCP_TOOLS[name][3]:
+                continue  # read-only tools; the write ones act on B's own data
+            args = {'query': 'secret'} if name == 'search_transactions' else {}
+            out = self.call('POST', f'/mcp/{key[b_id]}', json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}}).encode(), auth='')[1]
+            for x in secrets_of_a:
+                self.assertNotIn(x.encode(), out, f'{x} leaked to B through MCP {name}')
+        # B changing a category by A's transaction id only ever touches B's own transaction with that id (or none).
+        self.call('POST', f'/mcp/{key[b_id]}', json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                                         'params': {'name': 'set_category', 'arguments': {'transaction_id': tid, 'category': 'Hacked'}}}).encode(), auth='')
+        self.assertNotIn(b'Hacked', self.call('GET', '/api/transactions', **a)[1])
+
     def test_mcp_for_claude_and_chatgpt(self):
         rpc = lambda path, msg, **kw: self.call('POST', path, json.dumps(msg).encode(), **{'auth': '', **kw})
         call = lambda path, name, args=None, **kw: json.loads(rpc(path, {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': name, 'arguments': args or {}}}, **kw)[1])['result']

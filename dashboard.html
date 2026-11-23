@@ -542,7 +542,7 @@ const cache = {
 };
 // Session expired or signed out elsewhere: back to the login page.
 const api = url => fetch(url).then(async r => {
-  if (r.status === 401) { cache.clear(); location.href = '/login'; return new Promise(() => {}); }
+  if (r.status === 401) { cache.clear(); try { ['buy', 'extraInr'].forEach(k => localStorage.removeItem(k)); } catch {} location.href = '/login'; return new Promise(() => {}); }
   if (!r.ok) {  // include the server's reason, so a screenshot of the error bar says what broke
     const why = await r.json().then(j => j.error).catch(() => '');
     throw new Error(`the server answered ${r.status}${why ? `: ${why}` : ''}`);
@@ -2394,7 +2394,7 @@ function settings() {
     card('Animations', '', '<p class="muted">Moving charts and effects. Follow phone turns them down to a fade when the phone is set to reduce or remove animations.</p>' +
       `<div class="seg" role="group" aria-label="Animations">${[['on', 'On'], ['auto', 'Follow phone'], ['off', 'Off']].map(([k, label]) =>
         `<button type="button" data-motion="${k}" aria-pressed="${motionMode() === k}">${label}</button>`).join('')}</div>`) +
-    `<section class="card"><form method="post" action="/logout" onsubmit="cache.clear()"><button class="btn">Sign out</button></form></section>` +
+    `<section class="card"><form method="post" action="/logout" onsubmit="cache.clear(); try { localStorage.removeItem('buy'); localStorage.removeItem('extraInr'); } catch {}"><button class="btn">Sign out</button></form></section>` +
     `<p class="version">Version ${esc(state.sum.version || 'unknown')}</p>` };
 }
 function searchPage() {

@@ -149,7 +149,11 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b || b.closest('form')) return;
   try {
-    if (b.dataset.do === 'open') { await api('/api/admin/open', { space: b.dataset.space }); location.href = '/'; return; }
+    if (b.dataset.do === 'open') {
+      await api('/api/admin/open', { space: b.dataset.space });
+      try { Object.keys(localStorage).filter(k => k.startsWith('expense:') || ['buy', 'extraInr'].includes(k)).forEach(k => localStorage.removeItem(k)); } catch {}  // not the last person's figures
+      location.href = '/'; return;
+    }
     if (b.dataset.do === 'password') {
       const pw = prompt('New password (8 or more characters):');
       if (!pw) return;
