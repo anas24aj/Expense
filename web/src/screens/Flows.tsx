@@ -5,7 +5,7 @@ import type { Account, Coverage, Flows, FlowNode, HouseholdFull, Txn } from '../
 import { fmt, monthLabel, shiftMonth, shortDate, thisMonth, today } from '../lib/format';
 import { Chip, EmptyState, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
-import { KIND_LABEL, KIND_TILE } from './More';
+import { EditAccountSheet, KIND_LABEL, KIND_TILE } from './More';
 
 /* ---------- Money flow (Sankey) ---------- */
 const COLOR: Record<FlowNode['kind'], string> = { inflow: '#30d158', account: '#0a84ff', spending: '#ff9f0a', outflow: '#bf5af2' };
@@ -221,12 +221,14 @@ export function AccountPage() {
   const txns = useApi<{ items: Txn[] }>('/transactions', { account_id: id, limit: 15 });
   const hh = useApi<HouseholdFull>('/households/current');
   const [open, setOpen] = useState<Txn | null>(null);
+  const [editing, setEditing] = useState(false);
   const a = accounts.data?.items.find(x => x.id === id);
   const c = cov.data?.items.find(x => x.account_id === id);
   const owner = hh.data?.members.find(m => m.id === a?.owner_member_id)?.display_name;
   const [icon, color] = KIND_TILE[a?.kind || 'bank'] || KIND_TILE.bank;
   return (
-    <Page title={a ? `${a.institution}${a.last4 ? ' ··' + a.last4 : ''}` : 'Account'} back="/more/accounts">
+    <Page title={a ? `${a.institution}${a.last4 ? ' ··' + a.last4 : ''}` : 'Account'} back="/more/accounts"
+      trail={a && <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>}>
       {accounts.isLoading ? <PageSkeleton /> : !a ? <EmptyState icon="bank" title="Account not found" /> : (
         <div className="grid-desktop stack">
           <section className="glass hero span-2">
@@ -257,6 +259,7 @@ export function AccountPage() {
         </div>
       )}
       <TxnSheet txn={open} onClose={() => setOpen(null)} />
+      {a && <EditAccountSheet key={a.id} a={a} open={editing} onClose={() => setEditing(false)} />}
     </Page>
   );
 }

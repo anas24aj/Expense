@@ -130,8 +130,16 @@ def load(req):
             e['theirs_minor'] = max(e['theirs_minor'], round(t['amount_minor'] * min(100, asset_share[t['id']]) / 100))
         txns.append(e)
 
+    milestones = hh.run('SELECT * FROM asset_milestones WHERE household_id = :hid ORDER BY due_on, id')
+    asset_cur = {a['id']: a['currency'] for a in hh.run('SELECT id, currency FROM assets WHERE household_id = :hid')}
+    tranches = defaultdict(list)  # liability id -> its milestones: a construction loan, paid out in tranches
+    for m in milestones:
+        if m['liability_id']:
+            tranches[m['liability_id']].append(m)
     for l in liabs:
-        l.update(_liability_calc(l, txns, r))
+        stones = [(m['disbursed_on'], round(engine.conv(m['amount_minor'], asset_cur.get(m['asset_id'], l['currency']), l['currency'], r)), m)
+                  for m in tranches[l['id']] if m['disbursed_on']] if l['id'] in tranches else None
+        l.update(_liability_calc(l, txns, r, stones, today))
     interest = {tid: i for l in liabs for tid, i in l['interest_by_txn'].items()}
     eng_txns = []  # an EMI's interest part is spending (a fee); the rest pays the loan down
     for e in txns:
@@ -175,27 +183,31 @@ def load(req):
                       'saved_minor': sum(m['amount_minor'] for m in moves[f['id']] if m['on_day'] > since)})
 
     loans = [{'id': l['id'], 'name': l['name'], 'kind': 'card' if l['kind'] == 'credit_card' else 'loan', 'balance_now': l['outstanding_minor'],
-              'rate_bp': l['rate_bp'], 'emi_minor': l['emi_minor'], 'currency': l['currency'], 'pattern': l['match_pattern'], 'liability_kind': l['kind']}
+              'rate_bp': l['rate_bp'], 'emi_minor': l['emi_minor'], 'currency': l['currency'], 'pattern': l['match_pattern'], 'liability_kind': l['kind'],
+              'pre_emi_minor': (l['construction'] or {}).get('pre_emi', 0), 'emi_from': l['emi_from'] if l['construction'] else ''}
              for l in liabs if not l['closed_at'] and l['outstanding_minor'] > 0]
     s = settings(hh)
     eng_settings = {'salary': s['salary_minor'] / 100 if s['salary_minor'] else None, 'salary_currency': s['salary_currency'] or cur,
                     'emergency_months': s['emergency_months'], 'debt_strategy': s['debt_strategy'],
-                    'extra_to_debt': s['extra_to_debt_minor'], 'extra_currency': cur}
+                    'extra_to_debt': s['extra_to_debt_minor'], 'extra_currency': cur,
+                    'salary_history': hh.run('SELECT * FROM salary_history WHERE household_id = :hid ORDER BY from_month, created_at')}
     return {'hh': hh, 'cur': cur, 'rate': rate, 'r': r, 'today': today, 'house': house, 'rows': rows, 'by_id': by_id, 'txns': eng_txns,
             'raw_txns': txns, 'status_txns': status_txns, 'liabs': liabs, 'commits': eng_commits, 'status': status, 'shares': shares,
             'payments': pays, 'funds': funds, 'loans': loans, 'assets': assets, 'costs': costs, 'asset_sharers': sharers,
             'settings': s, 'eng_settings': eng_settings, 'claimed': claimed, 'claim_part': claim_part,
             'trips': hh.run('SELECT * FROM trips WHERE household_id = :hid ORDER BY start_on DESC, id'), 'trip_tags': trip_tags,
             'claim_table': hh.run('SELECT * FROM claims WHERE household_id = :hid ORDER BY created_at DESC, id'),
-            'milestones': hh.run('SELECT * FROM asset_milestones WHERE household_id = :hid ORDER BY due_on, id'),
+            'milestones': milestones,
             'accounts_cash': hh.run("SELECT currency, last_balance_minor FROM accounts WHERE household_id = :hid AND archived_at IS NULL "
                                     "AND kind IN ('bank', 'wallet', 'cash')")}
 
 
-def _liability_calc(l, txns, r):
+def _liability_calc(l, txns, r, tranches=None, today=''):
     """Outstanding from the opening balance and the payments after it. A loan payment pays the month's interest
-    (outstanding × rate / 12) first and the rest is principal. A card with its account follows that account's lines."""
-    bal, rate, interest, pays = l['opening_balance_minor'], l['rate_bp'] / 120000, {}, []
+    (outstanding × rate / 12) first and the rest is principal (engine.loan_walk). A card with its account follows that
+    account's lines. A construction loan (`tranches`: milestones disbursed from it) owes what was disbursed, not the
+    opening balance, and every payment counts (pre-EMI payments are interest only)."""
+    bal, interest, pays, cons = l['opening_balance_minor'], {}, [], None
     after = [t for t in txns if t['day'] > l['as_of']]
     if l['kind'] in ('credit_card', 'bnpl') and l['account_id']:
         for t in after:
@@ -205,15 +217,20 @@ def _liability_calc(l, txns, r):
                 if t['direction'] == 'credit':
                     pays.append({'txn_id': t['id'], 'day': t['day'], 'amount': amt, 'interest': 0})
     else:
-        for t in after:
-            if t['liability_id'] == l['id'] and t['direction'] == 'debit':
-                amt = round(engine.conv(t['amount_minor'], t['currency'], l['currency'], r))
-                i = min(amt, round(max(bal, 0) * rate))
-                if t['currency'] == l['currency']:
-                    interest[t['id']] = i
-                bal -= amt - i
-                pays.append({'txn_id': t['id'], 'day': t['day'], 'amount': amt, 'interest': i})
-    return {'outstanding_minor': max(0, bal), 'interest_by_txn': interest, 'payments': pays}
+        mine = [t for t in (txns if tranches is not None else after) if t['liability_id'] == l['id'] and t['direction'] == 'debit']
+        walk = [{'id': t['id'], 'day': t['day'], 'amount': round(engine.conv(t['amount_minor'], t['currency'], l['currency'], r))} for t in mine]
+        out = [(d, a) for d, a, _ in tranches or () if d <= today]
+        bal, split = engine.loan_walk(0 if tranches is not None else bal, l['rate_bp'], walk, out)
+        for t, w in zip(mine, walk):
+            if t['currency'] == l['currency']:
+                interest[t['id']] = split[t['id']]
+            pays.append({'txn_id': t['id'], 'day': t['day'], 'amount': w['amount'], 'interest': split[t['id']]})
+        if tranches is not None:
+            cons = engine.construction(l['principal_minor'] or l['opening_balance_minor'], out, max(0, bal), l['rate_bp'], l['emi_minor'],
+                                       l['emi_from'], today)
+            cons['tranches'] = sorted(({'milestone_id': m['id'], 'asset_id': m['asset_id'], 'name': m['name'], 'day': d, 'amount_minor': a,
+                                        'future': d > today} for d, a, m in tranches), key=lambda x: x['day'])
+    return {'outstanding_minor': max(0, bal), 'interest_by_txn': interest, 'payments': pays, 'construction': cons}
 
 
 def M(minor, cur):
@@ -319,6 +336,24 @@ def review_count(ctx):
     return sum(1 for t in ctx['rows'] if t['purpose'] is None or (t['set_by'] != 'user' and (t['confidence'] or 0) < 0.6))
 
 
+def loan_alerts(ctx):
+    """A loan whose EMI (or pre-EMI, before a construction loan's full EMIs) for one of the last months has no payment
+    linked to it: bounced, returned or forgotten. Months before the loan was tracked (as_of) are not checked."""
+    out = []
+    for l in ctx['liabs']:
+        cons = l['construction']
+        pre = cons and cons['phase'] == 'pre_emi'
+        due = cons['pre_emi'] if pre else l['emi_minor']
+        if l['kind'] != 'loan' or l['closed_at'] or l['outstanding_minor'] <= 0 or not due:
+            continue
+        asset = next((a['id'] for a in ctx['assets'] if a['liability_id'] == l['id']), None)
+        for m in engine.missed_months(l['due_day'], [p['day'] for p in l['payments']], l['as_of'], ctx['today']):
+            out.append({'level': 'bad', 'link': f'/more/assets/{asset}' if asset else '/plan', 'liability_id': l['id'], 'month': m,
+                        'text': f"{l['name']}: no {'pre-EMI' if pre else 'EMI'} payment seen for {m} ({engine.fmt(due, l['currency'])}). "
+                                'Bounced? Pay it and link the payment to the loan.'})
+    return out
+
+
 def home(req, ctx):
     from api import plan
     m = month(req, ctx, ctx['today'][:7])
@@ -329,6 +364,7 @@ def home(req, ctx):
     alerts += [{'level': 'warn', 'text': f"{r['month']}: {w}", 'link': '/plan/lookahead'} for r in la['months'] for w in r['warnings'] if w.startswith('Short')]
     alerts += [{'level': 'info', 'text': f"Claim {c['name']} pending for {c['age_days']} days", 'link': f"/plan/claims/{c['id']}"}
                for c in plan.claim_rows(ctx) if c['status'] not in ('paid', 'rejected') and c['age_days'] > 30]
+    alerts += loan_alerts(ctx)
     return {'month': m, 'next_dues': [c for c in commits if c['status'] != 'paid'][:5], 'lookahead': la,
             'review_count': review_count(ctx), 'alerts': alerts}
 
@@ -362,3 +398,8 @@ def advice_route(req):
 @route('GET', '/api/insights/home')
 def home_route(req):
     return home(req, load(req))
+
+
+@route('GET', '/api/alerts')
+def alerts_route(req):
+    return {'items': home(req, load(req))['alerts']}

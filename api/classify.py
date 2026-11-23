@@ -22,6 +22,10 @@ RULES = compile_rules(json.loads((Path(__file__).parent.parent / 'rules.json').r
 KIND_PURPOSE = {'emi': 'loan_payment', 'support': 'support', 'milestone': 'asset'}
 KIND_CATEGORY = {'rent': 'Rent & EMI', 'emi': 'Rent & EMI', 'bill': 'Bills & Utilities', 'subscription': 'Subscriptions',
                  'insurance': 'Insurance', 'school': 'Education', 'support': 'Family'}
+# A bounced/returned EMI or cheque: the bank's charge for it is a fee, even when the text names the loan.
+BOUNCE = re.compile(r'bounce|dishono?u?r|insufficient (?:funds|bal)|\b(?:ecs|ach|nach|si|chq|cheque|emi|mandate)[ -]?(?:return|rtn|rej)'
+                    r'|\breturn(?:ed)? (?:emi|ecs|ach|nach|chq|cheque|mandate|debit)', re.I)
+CHARGE = re.compile(r'charge|\bchg|\bchrg|\bfee|penal', re.I)
 SELECT = ('SELECT t.*, r.body AS raw_body, a.kind AS account_kind FROM transactions t '
           'LEFT JOIN raw_messages r ON r.id = t.raw_message_id AND r.household_id = t.household_id '
           'LEFT JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id ')
@@ -107,6 +111,8 @@ def infer(hh, t, ctx):
                       fx_rate=None if d['currency'] == c['currency'] else round(c['amount_minor'] / d['amount_minor'], 6))
             ctx.setdefault('also', []).append(other['id'])
             return out('transfer', OWN_TRANSFER, 0.95)
+    if debit and BOUNCE.search(text) and CHARGE.search(text):
+        return out('fee', FEES, 0.9)
     if debit:
         for c in ctx['commitments']:
             if c['match_pattern'] and c['match_pattern'].lower() in text and c['currency'] == t['currency'] \

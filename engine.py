@@ -79,8 +79,27 @@ def income_of(txns, month, cur, rate):
                if t['day'].startswith(month) and t['direction'] == 'credit' and t['purpose'] == 'income' and t.get('category') != 'Ignored')
 
 
+def salary_in(settings, month, cur, rate):
+    """(base, extra) from the salary history for `month`: base = each member's latest `base` entry from on or before the
+    month, summed (None when nobody has one yet); extra = `arrears`/`bonus` entries paid in that month (one-offs)."""
+    latest, extra = {}, 0
+    for e in sorted(settings.get('salary_history') or (), key=lambda e: e['from_month']):
+        amt = conv(e['amount_minor'], e['currency'], cur, rate)
+        if e['kind'] == 'base' and e['from_month'] <= month:
+            latest[e.get('member_id')] = amt
+        elif e['kind'] != 'base' and e['from_month'] == month:
+            extra += amt
+    return (sum(latest.values()) if latest else None), extra
+
+
 def expected_income(settings, txns, month, cur, rate):
-    """The salary you set, else the median monthly salary credit of the last 3 months, else the average income."""
+    """Salary history for the month (+ one-off arrears/bonus), else the old single salary setting, else the median
+    monthly salary credit of the last 3 months, else the average income."""
+    base, extra = salary_in(settings, month, cur, rate)
+    return (base if base is not None else _income_guess(settings, txns, month, cur, rate)) + extra
+
+
+def _income_guess(settings, txns, month, cur, rate):
     if settings.get('salary'):
         return conv(round(float(settings['salary']) * 100), settings.get('salary_currency') or 'SAR', cur, rate)
     months = [add_months(month, -k) for k in (1, 2, 3)]
@@ -198,7 +217,66 @@ def interest_per_month(loans):
 
 def to_cur(loans, cur, rate):
     return [{**l, 'balance_now': round(conv(l['balance_now'], l['currency'], cur, rate)),
-             'emi_minor': round(conv(l['emi_minor'], l['currency'], cur, rate)), 'currency': cur} for l in loans]
+             'emi_minor': round(conv(l['emi_minor'], l['currency'], cur, rate)),
+             'pre_emi_minor': round(conv(l.get('pre_emi_minor') or 0, l['currency'], cur, rate)), 'currency': cur} for l in loans]
+
+
+def emi_in(l, month):
+    """What a loan takes in `month`: the full EMI, or before a construction loan's `emi_from` only the pre-EMI interest
+    (shortcut: the pre-EMI is today's; a tranche disbursed later raises it, add it when tranches get planned dates)."""
+    return l['emi_minor'] if not l.get('emi_from') or month >= l['emi_from'][:7] else l.get('pre_emi_minor') or 0
+
+
+# ---------- loans: amortisation, construction tranches, missed EMIs ----------
+
+def emi(principal, rate_bp, months):
+    """The equal monthly instalment for a loan (reducing balance)."""
+    r = rate_bp / 120000
+    return principal / months if not r else principal * r * (1 + r) ** months / ((1 + r) ** months - 1)
+
+
+def loan_walk(opening, rate_bp, payments, tranches=()):
+    """Walk a loan in day order. Each tranche (day, minor) adds to the balance on its day (before a payment that day);
+    each payment {id, day, amount} pays the month's interest (balance × rate / 12) first and the rest is principal.
+    So on a construction loan, a pre-EMI payment (interest on what is disbursed so far) leaves the balance as it is.
+    → (balance, {payment id: interest})."""
+    bal, rate, interest = opening, rate_bp / 120000, {}
+    events = sorted([(d, 0, a, None) for d, a in tranches] + [(p['day'], 1, p['amount'], p['id']) for p in payments], key=lambda e: e[:2])
+    for day, kind, amt, pid in events:
+        if kind == 0:
+            bal += amt
+            continue
+        i = min(amt, round(max(bal, 0) * rate))
+        interest[pid] = i
+        bal -= amt - i
+    return bal, interest
+
+
+def construction(sanctioned, tranches, outstanding, rate_bp, emi_minor, emi_from, today):
+    """A loan paid out in tranches while a property is built: disbursed so far, what the bank still holds back, the
+    monthly pre-EMI (interest only on what is out: outstanding × rate / 12) and whether full EMIs have started."""
+    disbursed = sum(a for d, a in tranches if d <= today)
+    phase = 'emi' if emi_from and today >= emi_from else 'pre_emi'
+    return {'disbursed': disbursed, 'undisbursed': max(0, sanctioned - disbursed), 'pre_emi': round(max(outstanding, 0) * rate_bp / 120000),
+            'phase': phase, 'emi_from': emi_from or None, 'monthly': emi_minor if phase == 'emi' else round(max(outstanding, 0) * rate_bp / 120000)}
+
+
+def missed_months(due_day, paid_days, since, today, grace=3, back=3):
+    """Months (of the last `back`) whose due date is after `since` (tracking start) and at least `grace` days past,
+    with no payment that month: a bounced or forgotten EMI. due_day 0 = end of month."""
+    out = []
+    for k in range(back - 1, -1, -1):
+        m = add_months(today[:7], -k)
+        due = f'{m}-{min(due_day or 31, _days_in(m)):02d}'
+        if due <= since or (date.fromisoformat(today) - date.fromisoformat(due)).days < grace:
+            continue
+        if not any(d.startswith(m) for d in paid_days):
+            out.append(m)
+    return out
+
+
+def _days_in(month):
+    return (date.fromisoformat(add_months(month, 1) + '-01') - timedelta(days=1)).day
 
 
 def _emi_commitment(c, loans):
@@ -211,21 +289,23 @@ def lookahead(txns, commitments, funds, loans, settings, today, cur, rate, month
     """Each month from this one: expected income, commitments due (monthly and one-off; longer cycles come out of
     their fund), fund set-asides, everyday spending (trailing 3-month average without commitments) → free money."""
     first = today[:7]
-    income = expected_income(settings, txns, first, cur, rate)
+    guess = _income_guess(settings, txns, first, cur, rate)  # anchored on this month: future months have no credits yet
     everyday = everyday_avg(txns, first, cur, rate)
     funded = {f['commitment_id'] for f in funds if f.get('commitment_id')}
-    base = to_cur(loans, cur, rate)
+    loans_cur = to_cur(loans, cur, rate)
     as_is = {}
-    if base:
+    if loans_cur:
         import server
-        as_is = server.plan([l for l in base if l['balance_now'] > 0], 0)['payoff']
+        as_is = server.plan([l for l in loans_cur if l['balance_now'] > 0], 0)['payoff']
     sets = [fund_projection(f, first, months) for f in funds]
     out = []
     for k in range(months):
         m = add_months(first, k)
+        base, extra = salary_in(settings, m, cur, rate)
+        income = (base if base is not None else guess) + extra
         committed = sum(conv(your_share(c), c['currency'], cur, rate) * len(dues(c, m, m))
                         for c in commitments if c['id'] not in funded and not _emi_commitment(c, loans))
-        committed += sum(l['emi_minor'] for l in base if l['kind'] == 'loan' and l['balance_now'] > 0 and (as_is.get(l['id']) or 10 ** 6) > k)
+        committed += sum(emi_in(l, m) for l in loans_cur if l['kind'] == 'loan' and l['balance_now'] > 0 and (as_is.get(l['id']) or 10 ** 6) > k)
         put = sum(conv(s[k], f['currency'], cur, rate) for s, f in zip(sets, funds))
         free = income - committed - put - everyday
         warnings = [f'{c["name"]} due: {fmt(your_share(c), c["currency"])} (from its fund)'
@@ -238,9 +318,9 @@ def lookahead(txns, commitments, funds, loans, settings, today, cur, rate, month
     extra = max(0, sum(frees) / len(frees)) if frees else 0
     if settings.get('extra_to_debt') is not None:  # the extra a month you chose, instead of the average free money
         extra = conv(settings['extra_to_debt'], settings.get('extra_currency') or cur, cur, rate)
-    df = debt_free(base, extra, today, settings.get('debt_strategy') or 'avalanche')
+    df = debt_free(loans_cur, extra, today, settings.get('debt_strategy') or 'avalanche')
     return {'months': out, 'debt_free': {'month': df['month'], 'months': df['months']},
-            'interest_per_month': money(interest_per_month(base), cur), 'extra_to_debt': money(extra, cur)}
+            'interest_per_month': money(interest_per_month(loans_cur), cur), 'extra_to_debt': money(extra, cur)}
 
 
 def fmt(minor, cur):

@@ -2,7 +2,7 @@
 // Loaded only behind import.meta.env.DEV / VITE_MOCK in main.tsx, so production builds never include it.
 import type {
   Account, Asset, Claim, Commitment, Contact, DetectedCommitment, Device, Fund, Invite, Liability, Member, Money,
-  Person, ReviewTxn, Settings, Trip, TripStatus, Txn,
+  Person, ReviewTxn, SalaryEntry, Settings, Trip, TripStatus, Txn,
 } from './types';
 
 const SAR = (v: number): Money => ({ minor: Math.round(v * 100), currency: 'SAR' });
@@ -407,6 +407,9 @@ on('POST', '/funds/{id}/move', (m, b) => { const f = funds.find(x => x.id === m[
 on('GET', '/assets', () => ({ items: assets }));
 on('GET', '/assets/{id}', m => assets.find(a => a.id === m[1]));
 on('POST', '/assets/{id}/costs', (m, b) => { if (!b.txn_id || !b.cost_type) throw new Err(400, 'cost_type is required (fuel, service, insurance…)'); return assets.find(a => a.id === m[1]); });
+on('POST', '/assets', (_m, b) => { const M0 = { minor: 0, currency: b.currency }; const a: Asset = { id: id(), kind: b.kind, name: b.name, currency: b.currency, cost: { minor: b.cost_minor || 0, currency: b.currency },
+  value: { minor: b.value_minor || 0, currency: b.currency }, paid: M0, financed: M0, remaining: M0, milestones: [], next_milestone: null, monthly_cost: M0, my_monthly_cost: M0,
+  costs_by_type: {}, sharers: [], liability_id: null, details: {} }; assets.push(a); return a; });
 on('GET', '/claims', () => ({ items: claims, pending: [SAR(2912)] }));
 on('POST', '/claims', (_m, b) => { const c: Claim = { id: id(), name: b.name, payer: b.payer || 'Company', status: 'draft', member_id: 'm1', items: [], expected: SAR(0), received: SAR(0), age_days: 0, submitted_on: null }; claims.unshift(c); return c; });
 on('POST', '/claims/{id}/items', (m, b) => { const c = claims.find(x => x.id === m[1])!; for (const tid of b.txn_ids) { const t = txns.find(x => x.id === tid)!; t.purpose = 'claim'; t.claim_id = c.id; c.items.push(t); c.expected = { ...c.expected, minor: c.expected.minor + t.amount.minor }; } return c; });
@@ -461,6 +464,11 @@ on('GET', '/accounts/coverage', () => {
     : make(a, [], a.id === 'a7' ? 18 : 0, (_m, i) => (i < 3 ? ['statement'] : ['sms']))) };
 });
 on('GET', '/settings', () => settings);
+const salary: SalaryEntry[] = [];
+on('GET', '/salary', () => ({ items: salary, expected_this_month: salary.find(e => e.kind === 'base')?.amount || settings.salary || SAR(0) }));
+on('POST', '/salary', (_m, b) => { const e: SalaryEntry = { id: id(), member_id: b.member_id || 'm1', member_name: 'Arjun', from_month: b.from_month, amount: { minor: b.amount_minor, currency: b.currency },
+  kind: b.kind || 'base', note: b.note || '' }; salary.unshift(e); return e; });
+on('DELETE', '/salary/{id}', m => { salary.splice(salary.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('PUT', '/settings', (_m, b) => (settings = { ...settings, ...b, salary: b.salary_minor !== undefined ? { minor: b.salary_minor, currency: b.salary_currency || 'SAR' } : settings.salary }));
 
 on('GET', '/insights/month', () => month());
