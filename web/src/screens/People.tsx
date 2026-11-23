@@ -33,8 +33,22 @@ function Family({ people, me }: { people: Person[]; me: Me }) {
   const [inviting, setInviting] = useState(false);
   const support = people.filter(p => p.kind === 'member' && (p.support_plan || p.support_month));
   const admin = me.member.role === 'owner' || me.member.role === 'admin';
+  const owing = people.filter(p => p.kind === 'member' && (p.owes_you.length || p.you_owe.length));
+  const [open, setOpen] = useState<Person | null>(null);
   return (
     <>
+      {owing.length > 0 && (
+        <Section title="Money between you">
+          <List>
+            {owing.map(p => (
+              <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub="lent, borrowed and paid back"
+                end={p.owes_you.length ? <span className="pos"><Monies items={p.owes_you} /></span> : <span className="neg"><Monies items={p.you_owe} /></span>}
+                endSub={p.owes_you.length ? 'owes you' : 'you owe'} onClick={() => setOpen(p)} />
+            ))}
+          </List>
+        </Section>
+      )}
+      <SettleSheet person={open} onClose={() => setOpen(null)} />
       {support.length > 0 && (
         <Section title="Family support">
           <div className="glass card stack">
