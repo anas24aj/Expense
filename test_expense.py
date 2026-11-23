@@ -837,6 +837,58 @@ class StatementReaderTest(unittest.TestCase):
         with self.assertRaisesRegex(statement.StatementError, 'no table'):
             statement.read_statement(b'just,some\ntext,here\n')
 
+    def test_saudi_card_export_signed_amount_and_transaction_date(self):
+        got = statement.read_statement(xlsx([
+            ['Card statement'], ['Billing Amount (SAR)', 'Transaction Description', 'Transaction Amount', 'Posting Date', 'Transaction Date'],
+            ['-50.25', 'Total Demo Fuel', '-50.25 SAR', '03-01-2026', '02-01-2026'],  # starts with 'Total' but is a purchase
+            ['200.00', 'Auto Debit Payment', '200.00 SAR', '05-01-2026', '04-01-2026'],
+            ['0.0', 'Pending Demo Shop', '-9.00 SAR', '06-01-2026', '06-01-2026'],
+            ['Total', None, None, None, '07-01-2026']]))  # a real totals row has nothing else to say
+        self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in got['rows']],
+                         [('2026-01-02', 5025, 'debit'), ('2026-01-04', 20000, 'credit')])
+
+    def test_axis_rs_header_means_inr(self):
+        got = statement.read_statement(xlsx([['Charges Total(RS).'], ['Tran Date', 'PARTICULARS', 'DR', 'CR', 'BAL'],
+                                             ['01-03-2025', 'UPI/DEMO', '100.00', None, '900.00']]))
+        self.assertEqual((got['currency'], len(got['rows'])), ('INR', 1))
+
+    def test_sbi_card_suffixes_emi_and_undated_gst_lines(self):
+        lines = ['Credit Limit      Statement Date', '9,000.00        19 Mar 2026',
+                 'Date          Transaction Details                                Amount ( ` )',
+                 '                IGST CR @ 18.00%                                      5.00      C',  # before any transaction
+                 '02 Mar 26     DEMO STORE          PUNE      IN                      1,250.00      D',
+                 '03 Mar 26     PAYMENT RECEIVED 123                                  2,000.00      C',
+                 '04 Mar 26     FP EMI 1/3(EXCL TAX 9.99)                               750.00      M',
+                 '                IGST DB @ 18.00%                                      3.50      D']
+        rows = statement.read_statement(pdf(lines))['rows']
+        self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in rows],
+                         [('2026-03-19', 500, 'credit'), ('2026-03-02', 125000, 'debit'), ('2026-03-03', 200000, 'credit'),
+                          ('2026-03-04', 75000, 'debit'), ('2026-03-04', 350, 'debit')])
+
+    def test_pdf_locked_with_an_empty_password_opens(self):
+        from reportlab.lib.pdfencrypt import StandardEncryption
+        data = pdf(['02 Mar 26     DEMO STORE          1,250.00      D'], StandardEncryption('', ownerPassword='owner'))
+        self.assertEqual(len(statement.read_statement(data)['rows']), 1)
+
+    def test_barq_wrapped_dates_and_repeated_transaction_ids(self):
+        row = lambda d, i, text, dr, cr, bal: f'{d:<14}{i:<17}{text:<26}{dr:>10}{cr:>12}{bal:>15}'
+        lines = [row('Date', 'Transaction Id', 'Transaction Details', 'Dr. (SAR)', 'Cr. (SAR)', 'Balance (SAR)'),
+                 row('12 Nov', 'CSO000001-', 'Outgoing local transfer', '100.00', '', '900.00'), '2026          AAAA1111BB',
+                 row('09 Nov 2026', 'CSI000002-', 'Wallet Top up via Card', '', '500.00', '1,000.00'), '              CCCC2222DD',
+                 row('09 Nov 2026', 'CSI000002-', 'Wallet Top up via Card', '', '500.00', '1,000.00'), '              CCCC2222DD']
+        rows = statement.read_statement(pdf(lines))['rows']
+        self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in rows],
+                         [('2026-11-12', 10000, 'debit'), ('2026-11-09', 50000, 'credit')])  # the repeated id is one row
+
+    def test_tiqmo_rows_run_right_to_left_and_the_balance_says_the_way(self):
+        row = lambda bal, amt, when, n: f'{bal:>10}{amt:>12}      Txn ID:      {when}   {n}'
+        lines = ['      Balance      Credit      Debit      Transaction Description', '                    Demo Topup',
+                 row('2000.00', '2000.00', '2026-01-26  15:46:15', 1), '                    Demo Payment',
+                 row('500.00', '1500.00', '2026-01-26  15:50:00', 2), row('800.00', '300.00', '2026-01-27  09:00:00', 3)]
+        rows = statement.read_statement(pdf(lines))['rows']
+        self.assertEqual([(r['day'], r['amount_minor'], r['direction']) for r in rows],
+                         [('2026-01-26', 200000, 'credit'), ('2026-01-26', 150000, 'debit'), ('2026-01-27', 30000, 'credit')])
+
 
 class DirectConnectionTest(unittest.TestCase):
     def test_neon_pooler_address_becomes_direct(self):
