@@ -12,6 +12,7 @@ the domain model or the plan changes. Code says *how*; the brain says *what* and
 | [ux.md](ux.md) | Navigation, screens, the "no questions" principle and how each feature surfaces. |
 | [decisions.md](decisions.md) | Architecture decision records: what we chose and why. Append, don't rewrite. |
 | [roadmap.md](roadmap.md) | Build phases, each with its definition of done. |
+| [schema-v3.md](schema-v3.md) | Draft household-first database design (replaces schema per person). |
 
 ## The one-paragraph version
 
