@@ -36,7 +36,7 @@ Conventions
 | GET | /shared | (any signed-in user) splits other households recorded with you as their contact, matched by your email → `{items: [{household, you_owe: [Money], owed_to_you: [Money], lines: [{day, what, your_share}]}]}` |
 | GET | /people | → `{items: [{kind: member|contact, id, name, relation, role, on_app, owes_you: [Money], you_owe: [Money], support_month: Money|null, support_plan: Money|null}]}` |
 | GET | /devices | → `{items: [{id, name, platform, member_id, created_at, last_seen}]}` |
-| POST | /devices | `{name, platform: iphone|android|other}` → `{device, key, sms_url, setup: "<json string {url,key}>", shortcut_url}` (key shown once) |
+| POST | /devices | `{name, platform: iphone|android|other}` → `{device, key, sms_url (the batch route), setup: "<json string {url,key}>", shortcut_url}` (key shown once). GET /devices also returns `shortcut_url` (SHORTCUT_URL, else `/ledger-sms.shortcut` when that signed file is in web/public) |
 | DELETE | /devices/{id} | revoke |
 | GET | /mcp-key | → `{url}` personal MCP connector link (POST rotates) |
 
@@ -62,7 +62,7 @@ Txn: `{id, day, occurred_at, amount: Money, direction, merchant, category, purpo
 
 ## Ingestion (`api/ingest.py`)
 | POST | /ingest/sms | device auth. `{sender, body, received_at?}` → 201 `{stored: true, transaction: Txn}` / 200 `{stored: false, reason}` |
-| POST | /ingest/sms/batch | session auth. `{messages: [{sender, body, received_at}]}` (paste/import) → `{received, stored}` |
+| POST | /ingest/sms/batch | session auth (web paste) or device Bearer key (Android app, iOS Shortcut). `{messages: [{sender, body, received_at}]}` or one flat `{sender?, body, received_at?}`; `received_at` ISO-8601 or epoch ms → `{received, stored}` |
 | POST | /ingest/statement | `{account_id, file_name, data_base64, password?}` → `{statement, rows, new, duplicates}` (reuses statement.py) |
 | GET | /ingest/statements | → `{items: [{id, account_id, file_name, period_from, period_to, rows, imported_at}]}`; DELETE /ingest/statements/{id} |
 | GET | /ingest/log | → `{items: [{at, device, sender, outcome}]}` last 50 deliveries (for "is my phone sending?") |

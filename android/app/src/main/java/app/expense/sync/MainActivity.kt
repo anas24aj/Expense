@@ -2,6 +2,7 @@ package app.expense.sync
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -17,11 +18,15 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
 
-/** One settings screen: server address, password, permissions, and the sync status. */
+/**
+ * One settings screen: the setup from the website's Phones page (address + this phone's key), permissions, and the
+ * sync status. The setup arrives by "Paste setup" or by tapping the link expensesync://setup?url=..&key=.. (the Phones page shows it).
+ */
 class MainActivity : Activity() {
     private lateinit var server: EditText
-    private lateinit var token: EditText
+    private lateinit var key: EditText
     private lateinit var status: TextView
     private lateinit var sms: Button
     private lateinit var battery: Button
@@ -36,24 +41,26 @@ class MainActivity : Activity() {
 
         column.addView(TextView(this).apply {
             text = "Sends your bank SMS to your Expenses website. It reads the SMS inbox every 15 minutes and " +
-                "whenever an SMS arrives, so messages that came in while the phone kept it asleep are sent later too."
+                "whenever an SMS arrives, so messages that came in while the phone kept it asleep are sent later too.\n\n" +
+                "On the website: More → Phones → Android → Copy setup for this phone. Then tap Paste setup here."
         })
+        column.addView(button("Paste setup") { pasteSetup() })
         column.addView(label("Website address"))
         server = EditText(this).apply {
-            setText(p.getString("server", "https://expense-beige-alpha.vercel.app"))
+            setText(p.getString("server", Sync.DEFAULT_SERVER))
             inputType = InputType.TYPE_TEXT_VARIATION_URI
         }
         column.addView(server)
-        column.addView(label("Password (the one you sign in with)"))
-        token = EditText(this).apply {
-            setText(p.getString("token", ""))
+        column.addView(label("Phone key (from the setup, not your password)"))
+        key = EditText(this).apply {
+            setText(p.getString("key", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        column.addView(token)
-        column.addView(button("Save and sync now") {
-            p.edit().putString("server", server.text.toString()).putString("token", token.text.toString()).apply()
-            Sync.schedule(this)
-            Toast.makeText(this, "Syncing…", Toast.LENGTH_SHORT).show()
+        column.addView(key)
+        column.addView(button("Save and sync now") { save(server.text.toString(), key.text.toString()) })
+        column.addView(button("Send last 90 days") {
+            Sync.sendFrom(this, System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000)
+            Toast.makeText(this, "Sending the last 90 days of bank SMS…", Toast.LENGTH_SHORT).show()
         })
         sms = button("Allow reading SMS") {
             requestPermissions(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS), 1)
@@ -69,6 +76,39 @@ class MainActivity : Activity() {
         column.addView(button("Refresh status") { refresh() })
         setContentView(ScrollView(this).apply { addView(column, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) })
         Sync.schedule(this)
+        fromLink(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        fromLink(intent)
+    }
+
+    private fun fromLink(intent: Intent?) {
+        val u = intent?.data ?: return
+        if (u.scheme == "expensesync") save(u.getQueryParameter("url") ?: "", u.getQueryParameter("key") ?: "")
+    }
+
+    /** The website's "Copy setup" puts {"url": "...", "key": "..."} on the clipboard. */
+    private fun pasteSetup() {
+        val text = getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
+        val setup = try { JSONObject(text.trim()) } catch (e: Exception) { null }
+        if (setup == null || setup.optString("key").isEmpty())
+            return Toast.makeText(this, "Copy the setup on the website's Phones page first", Toast.LENGTH_LONG).show()
+        save(setup.optString("url"), setup.optString("key"))
+    }
+
+    /** Keeps only the site address and this phone's key (revocable on the website); never a password. */
+    private fun save(url: String, newKey: String) {
+        val site = url.trim().substringBefore("/api/").trimEnd('/')
+        if (!site.startsWith("https://") || newKey.isBlank())
+            return Toast.makeText(this, "The setup needs an https:// address and a key", Toast.LENGTH_LONG).show()
+        Sync.prefs(this).edit().putString("server", site).putString("key", newKey.trim()).remove("token").apply()
+        server.setText(site)
+        key.setText(newKey.trim())
+        Sync.schedule(this)
+        Toast.makeText(this, "Saved · syncing…", Toast.LENGTH_SHORT).show()
+        refresh()
     }
 
     override fun onResume() {

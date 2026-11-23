@@ -2,7 +2,7 @@
 
 Modules register routes with @route. Handler: fn(req) -> body | (status, body). Raise ApiError for 4xx.
 Auth levels: 'public' | 'user' (signed in) | 'member' (signed in + current household) | 'admin' (household owner/admin)
-| 'device' (phone: Authorization: Bearer <device key>)."""
+| 'device' (phone: Authorization: Bearer <device key>) | 'phone' (device key when a Bearer is sent, else 'member')."""
 import importlib
 import json
 import mimetypes
@@ -90,6 +90,8 @@ def _authorize(req, level):
     from api import auth  # owned by api/auth.py: current_user, current_household, device_from_bearer
     if level == 'public':
         return
+    if level == 'phone':
+        level = 'device' if req.header('Authorization').startswith('Bearer ') else 'member'
     if level == 'device':
         req.device = auth.device_from_bearer(req)
         if not req.device:

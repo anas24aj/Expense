@@ -815,47 +815,65 @@ export function ImportPage() {
 }
 
 /* ---------- Phones & Shortcut ---------- */
+const APK_URL = 'https://github.com/anas24aj/Expense/releases/latest';
+
 export function DevicesPage() {
-  const q = useApi<{ items: Device[] }>('/devices');
+  const q = useApi<{ items: Device[]; shortcut_url: string }>('/devices');
   const log = useApi<{ items: { at: string; device: string; sender: string; outcome: string }[] }>('/ingest/log');
   const [platform, setPlatform] = useState<'iphone' | 'android'>(/android/i.test(navigator.userAgent) ? 'android' : 'iphone');
   const [made, setMade] = useState<DeviceCreated | null>(null);
   const add = useWrite<Record<string, unknown>, DeviceCreated>('POST', '/devices');
   const del = useWrite<{ id: string }>('DELETE', b => `/devices/${b.id}`);
   const toast = useToast();
+  const shortcut = made?.shortcut_url || q.data?.shortcut_url;
   const create = async () => {
     const r = await add.mutateAsync({ name: platform === 'iphone' ? 'iPhone' : 'Android phone', platform });
     setMade(r);
-    copy(r.setup, toast, 'Setup copied — now open the Shortcut');
+    copy(r.setup, toast, 'Setup copied');
   };
   return (
     <Page title="Phones" back="/more" subtitle="Bank SMS go straight in. Each phone gets its own key.">
-      <Segmented label="Phone type" value={platform} onChange={setPlatform} options={[{ value: 'iphone', label: 'iPhone' }, { value: 'android', label: 'Android' }]} />
+      <Segmented label="Phone type" value={platform} onChange={p => { setPlatform(p); setMade(null); }} options={[{ value: 'iphone', label: 'iPhone' }, { value: 'android', label: 'Android' }]} />
       {platform === 'iphone' ? (
         <div className="glass card stack">
-          <div className="steps">
-            <div className="step"><span className="n">1</span><div><b>Copy your setup</b><p className="caption">Tap below — it copies a private key for this phone.</p></div></div>
-            <div className="step"><span className="n">2</span><div><b>Install the Shortcut</b><p className="caption">It reads the setup from your clipboard once.</p></div></div>
-            <div className="step"><span className="n">3</span><div><b>Add a Messages automation</b><p className="caption">Shortcuts → Automation → New → <b>Message</b> → Sender contains your bank (e.g. <i>AlRajhi</i>, <i>HDFCBK</i>) → Run Immediately → <b>Ledger: Send SMS</b>.</p>
-              <div className="illus row-flex" aria-hidden><Icon name="bubble" size={20} /><Icon name="chevR" size={14} /><Icon name="sparkle" size={20} /><Icon name="chevR" size={14} /><img src="/icon.svg" width={22} height={22} alt="" style={{ borderRadius: 6 }} /><span className="caption">SMS → Shortcut → Ledger</span></div></div></div>
-          </div>
-          {made ? (
-            <>
-              <button className="btn block secondary" onClick={() => copy(made.setup, toast, 'Setup copied')}><Icon name="copy" />Copy setup again</button>
-              {made.shortcut_url && <a className="btn block" href={made.shortcut_url}><Icon name="download" />Install Shortcut</a>}
-              <p className="footnote">The key is shown once. If you lose it, remove this phone and add it again.</p>
-            </>
-          ) : <button className="btn block" onClick={create} disabled={add.isPending}><Icon name="copy" />Copy setup for this iPhone</button>}
+          {!made ? <>
+            <p className="caption">First make a key for this iPhone. Then add one Messages automation per currency word. Bank senders aren’t contacts, so the automation matches the words in the message, not the sender.</p>
+            <button className="btn block" onClick={create} disabled={add.isPending}><Icon name="copy" />Make a key for this iPhone</button>
+          </> : <>
+            <div className="steps">
+              <div className="step"><span className="n">1</span><div><b>New automation</b><p className="caption">Shortcuts → Automation → <b>+</b> → <b>Message</b> → <b>Message Contains</b> <i>SAR</i>. Leave Sender as Any. Choose <b>Run Immediately</b> → Next → <b>New Blank Automation</b>.</p></div></div>
+              <div className="step"><span className="n">2</span><div><b>Add “Format Date”</b><p className="caption">Date: <b>Current Date</b>. Date Format: <b>ISO 8601</b>, Include Time on.</p></div></div>
+              <div className="step"><span className="n">3</span><div><b>Add “Get Contents of URL”</b><p className="caption">Paste the address. Tap ▸: Method <b>POST</b>; add the header; Request Body <b>JSON</b> with three Text fields:</p>
+                <ul className="caption" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  <li><b>sender</b> → Shortcut Input → <b>Sender</b></li>
+                  <li><b>body</b> → <b>Shortcut Input</b></li>
+                  <li><b>received_at</b> → <b>Formatted Date</b></li>
+                </ul></div></div>
+              <div className="step"><span className="n">4</span><div><b>Repeat for INR and Rs</b><p className="caption">Same steps with Message Contains <i>INR</i>, then <i>Rs</i>. Test by texting yourself “SAR 1.00 test” — it shows under Recent deliveries. (“Rs” also matches words like “hours”; the server skips messages with no amount.)</p></div></div>
+            </div>
+            <button className="btn block secondary" onClick={() => copy(made.sms_url, toast, 'Address copied')}><Icon name="copy" />Copy address</button>
+            <button className="btn block secondary" onClick={() => copy('Authorization', toast, 'Header name copied')}><Icon name="copy" />Copy header name: Authorization</button>
+            <button className="btn block secondary" onClick={() => copy(`Bearer ${made.key}`, toast, 'Header value copied')}><Icon name="copy" />Copy header value (Bearer key)</button>
+            <p className="footnote">The key is shown once. If you lose it, remove this phone and add it again.</p>
+          </>}
+          {shortcut && <>
+            <p className="caption">Or install the ready Shortcut: it asks for the setup once (paste it), then in step 1 pick <b>Run Shortcut → Ledger Send SMS</b> with <b>Shortcut Input</b> instead of steps 2–3.</p>
+            <a className="btn block" href={shortcut}><Icon name="download" />Install Shortcut</a>
+            {made && <button className="btn block secondary" onClick={() => copy(made.setup, toast, 'Setup copied')}><Icon name="copy" />Copy setup for the Shortcut</button>}
+          </>}
         </div>
       ) : (
         <div className="glass card stack">
           <div className="steps">
-            <div className="step"><span className="n">1</span><div><b>Install the Ledger SMS app</b><p className="caption">From the link your household owner shares (APK).</p></div></div>
-            <div className="step"><span className="n">2</span><div><b>Paste the setup</b><p className="caption">Open the app → Paste setup. Allow SMS access when asked.</p></div></div>
-            <div className="step"><span className="n">3</span><div><b>That’s it</b><p className="caption">New bank SMS arrive here within seconds. Old ones: tap “Send last 90 days”.</p></div></div>
+            <div className="step"><span className="n">1</span><div><b>Install the Ledger SMS app</b><p className="caption">Download <b>expense-sync.apk</b> from the latest release and open it (allow installing from your browser when asked).</p></div></div>
+            <div className="step"><span className="n">2</span><div><b>Paste the setup</b><p className="caption">Copy the setup below, open the app → Paste setup. Allow SMS access when asked.</p></div></div>
+            <div className="step"><span className="n">3</span><div><b>That’s it</b><p className="caption">New bank SMS arrive here within minutes. Old ones: tap “Send last 90 days”.</p></div></div>
           </div>
-          {made ? <button className="btn block secondary" onClick={() => copy(made.setup, toast, 'Setup copied')}><Icon name="copy" />Copy setup again</button>
-            : <button className="btn block" onClick={create} disabled={add.isPending}><Icon name="copy" />Copy setup for this phone</button>}
+          <a className="btn block secondary" href={APK_URL} target="_blank" rel="noreferrer"><Icon name="download" />Download the Android app</a>
+          {made ? <>
+            <button className="btn block secondary" onClick={() => copy(made.setup, toast, 'Setup copied')}><Icon name="copy" />Copy setup again</button>
+            <a className="btn block" href={`expensesync://setup?url=${encodeURIComponent(made.sms_url)}&key=${encodeURIComponent(made.key)}`}>Open in the app (on this phone)</a>
+          </> : <button className="btn block" onClick={create} disabled={add.isPending}><Icon name="copy" />Copy setup for this phone</button>}
         </div>
       )}
       <Section title="Connected phones">

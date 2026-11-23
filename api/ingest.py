@@ -161,7 +161,7 @@ def _message(m):
     if not isinstance(body, str) or not body.strip() or len(body) > MAX_BODY:
         raise ApiError(400, f'body must be the SMS text (at most {MAX_BODY} characters)')
     at = valid.when(m['received_at']) if m.get('received_at') else datetime.now(timezone.utc)
-    return valid.text(m.get('sender'), 'sender', 60), body.strip(), at
+    return valid.text(m.get('sender') or 'SMS', 'sender', 60), body.strip(), at  # an iOS Shortcut may not pass the sender
 
 
 @route('POST', '/api/ingest/sms', auth='device')
@@ -174,16 +174,17 @@ def sms(req):
     return 201, {'stored': True, 'transaction': ledger.txn_views(req.hh, ledger.visible_txns(req.hh, req.device['member_id'], 'AND t.id = :tid', tid=tid))[0]}
 
 
-@route('POST', '/api/ingest/sms/batch')
+@route('POST', '/api/ingest/sms/batch', auth='phone')  # the web paste (cookie) or a phone (device key)
 def sms_batch(req):
-    msgs = req.json.get('messages')
+    msgs = req.json.get('messages', [req.json] if 'body' in req.json else None)  # one flat {sender, body, received_at} too (iOS Shortcut)
     if not isinstance(msgs, list) or len(msgs) > MAX_BATCH:
         raise ApiError(400, f'messages must be a list of at most {MAX_BATCH}')
     checked = [_message(m) for m in msgs]
     stored = 0
+    device_id, member_id = (req.device['id'], req.device['member_id']) if req.device else (None, req.member['id'])
     for s, b, at in checked:
         with req.db.tx():
-            stored += ingest_sms(req.hh, s, b, at, None, req.member['id'])[0]
+            stored += ingest_sms(req.hh, s, b, at, device_id, member_id)[0]
     return {'received': len(msgs), 'stored': stored}
 
 

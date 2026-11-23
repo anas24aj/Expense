@@ -12,10 +12,17 @@
         android:label="Expense Sync"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
 
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- expensesync://setup?url=..&key=.. from the website's Phones page -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="expensesync" android:host="setup" />
             </intent-filter>
         </activity>
 

@@ -354,11 +354,11 @@ on('PATCH', '/contacts/{id}', (m, b) => { const c = contacts.find(x => x.id === 
 on('DELETE', '/contacts/{id}', m => { contacts.splice(contacts.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('GET', '/people', () => ({ items: people() }));
 on('GET', '/shared', () => ({ items: [] }));
-on('GET', '/devices', () => ({ items: devices }));
+on('GET', '/devices', () => ({ items: devices, shortcut_url: '' }));
 on('POST', '/devices', (_m, b) => { const d: Device = { id: id(), name: b.name, platform: b.platform, member_id: 'm1', created_at: new Date().toISOString(), last_seen: null };
   devices.push(d); const key = 'dk_' + Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 14);
-  const sms_url = location.origin + '/api/ingest/sms';
-  return { device: d, key, sms_url, setup: JSON.stringify({ url: sms_url, key }), shortcut_url: b.platform === 'iphone' ? 'https://www.icloud.com/shortcuts/demo' : null }; });
+  const sms_url = location.origin + '/api/ingest/sms/batch';
+  return { device: d, key, sms_url, setup: JSON.stringify({ url: sms_url, key }), shortcut_url: '' }; });
 on('DELETE', '/devices/{id}', m => { devices.splice(devices.findIndex(x => x.id === m[1]), 1); return { id: m[1], deleted: true }; });
 on('GET', '/mcp-key', () => ({ url: location.origin + '/mcp/mk_7f3a9c21d84e4b0a' }));
 on('POST', '/mcp-key', () => ({ url: location.origin + '/mcp/mk_' + Math.random().toString(16).slice(2, 18) }));

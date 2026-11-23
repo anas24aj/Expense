@@ -31,7 +31,8 @@ import java.util.concurrent.TimeUnit
 object Sync {
     // Same pre-filter as before: only SMS that show an amount in SAR or INR ever leave the phone.
     private val MONEY = Regex("(?i)(rs\\.?|inr|₹|sar|sr|ريال)\\s*:?\\s*[0-9٠-٩]|[0-9٠-٩]\\s*(sar|sr|ريال)")
-    private const val BATCH = 200
+    const val DEFAULT_SERVER = "https://expense-six-indol.vercel.app"
+    private const val BATCH = 50  // small posts finish well inside the server's time limit
     private const val OVERLAP_MS = 6 * 60 * 60 * 1000L  // look a little further back each time, in case the inbox was written late
 
     fun prefs(ctx: Context) = ctx.getSharedPreferences("sync", Context.MODE_PRIVATE)
@@ -52,34 +53,44 @@ object Sync {
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
     }
 
+    /** Send again everything from [fromMs] on (the server skips SMS it already has), e.g. the last 90 days. */
+    fun sendFrom(ctx: Context, fromMs: Long) {
+        prefs(ctx).edit().putLong("last", fromMs + OVERLAP_MS).apply()
+        schedule(ctx)
+    }
+
     /** One pass over the inbox. Throws IOException when the server can't be reached, so the work is retried. */
     fun run(ctx: Context) {
         val p = prefs(ctx)
         val server = p.getString("server", "")!!.trim().trimEnd('/')
-        val token = p.getString("token", "")!!.trim()
-        if (server.isEmpty() || token.isEmpty()) return setStatus(ctx, "Enter the address and password first")
+        val key = p.getString("key", "")!!.trim()
+        if (server.isEmpty() || key.isEmpty()) return setStatus(ctx, "Paste the setup from the website's Phones page first")
         if (ctx.checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED)
             return setStatus(ctx, "Needs permission to read SMS")
 
-        val since = (p.getLong("last", 0L) - OVERLAP_MS).coerceAtLeast(0L)
+        // First run: only new SMS (older ones on request with "Send last 90 days").
+        val last = p.getLong("last", 0L).takeIf { it > 0 } ?: System.currentTimeMillis()
+        val since = last - OVERLAP_MS
         val found = mutableListOf<JSONObject>()
-        var newest = p.getLong("last", 0L)
+        var newest = last
         ctx.contentResolver.query(Uri.parse("content://sms/inbox"), arrayOf("address", "body", "date"),
             "date > ?", arrayOf(since.toString()), "date ASC")?.use { c ->
             while (c.moveToNext()) {
                 val body = c.getString(1) ?: continue
                 val date = c.getLong(2)
                 newest = maxOf(newest, date)
-                if (MONEY.containsMatchIn(body))
-                    found += JSONObject().put("sender", c.getString(0) ?: "").put("body", body).put("received_at", date.toString())
+                // Shaped to the server's limits (sender 1-60, body up to 2000), so one odd SMS can't block the batch forever.
+                if (MONEY.containsMatchIn(body) && body.length <= 2000)
+                    found += JSONObject().put("sender", (c.getString(0) ?: "").trim().ifEmpty { "SMS" }.take(60))
+                        .put("body", body).put("received_at", date)  // epoch ms
             }
         }
 
         var added = 0
         for (chunk in found.chunked(BATCH)) {
-            val (code, reply) = post("$server/api/import", token, JSONObject().put("messages", JSONArray(chunk)).toString())
+            val (code, reply) = post("$server/api/ingest/sms/batch", key, JSONObject().put("messages", JSONArray(chunk)).toString())
             when {
-                code == 401 -> return setStatus(ctx, "Wrong password: check it matches the website's")
+                code == 401 -> return setStatus(ctx, "Key not accepted: this phone was removed on the website. Copy a new setup and paste it")
                 code !in 200..299 -> throw IOException("server answered $code")
             }
             added += JSONObject(reply).optInt("stored")

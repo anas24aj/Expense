@@ -70,11 +70,13 @@ def month(v):
 
 
 def when(v, field='received_at'):
-    """An ISO-8601 time as an aware UTC datetime (no zone given: UTC)."""
+    """An ISO-8601 time, or epoch milliseconds (Android's SMS date), as an aware UTC datetime (no zone given: UTC)."""
     try:
+        if isinstance(v, int) and not isinstance(v, bool) or isinstance(v, str) and v.isdigit():
+            return datetime.fromtimestamp(int(v) / 1000, timezone.utc)
         t = datetime.fromisoformat(v.replace('Z', '+00:00'))
-    except (AttributeError, ValueError):
-        raise ApiError(400, f'{field} must be an ISO-8601 time')
+    except (AttributeError, ValueError, OverflowError, OSError):
+        raise ApiError(400, f'{field} must be an ISO-8601 time or epoch milliseconds')
     return (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 

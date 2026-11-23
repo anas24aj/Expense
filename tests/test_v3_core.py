@@ -303,6 +303,40 @@ class IngestTest(Base):
         self.assertEqual(self.c.call('POST', '/api/ingest/sms/batch', {'messages': 'nope'})[0], 400)
         self.assertEqual(Client().call('POST', '/api/ingest/sms', {'sender': 'X', 'body': 'y'}, bearer='wrong')[0], 401)
 
+    def test_batch_with_device_key_and_epoch_ms(self):
+        url = json.loads(self.c.ok('POST', '/api/devices', {'name': 'Pixel 2', 'platform': 'android'})['setup'])['url']
+        self.assertTrue(url.endswith('/api/ingest/sms/batch'))
+        msgs = [{'sender': 'STCPay2', 'body': 'Purchase SAR 21.00 at HERFY', 'received_at': 1763542800000},  # 2025-11-19T09:00Z
+                {'sender': 'STCPay2', 'body': 'Purchase SAR 22.00 at HERFY', 'received_at': '1763542800000'},
+                {'sender': 'STCPay2', 'body': 'Purchase SAR 23.00 at HERFY', 'received_at': '2025-11-19T12:00:00+03:00'}]
+        code, out = Client().call('POST', '/api/ingest/sms/batch', {'messages': msgs}, bearer=self.key)
+        self.assertEqual((code, out), (200, {'received': 3, 'stored': 3}))
+        days = {i['amount']['minor']: i['day'] for i in self.c.ok('GET', '/api/transactions?q=HERFY')['items']}
+        self.assertEqual(days, {2100: '2025-11-19', 2200: '2025-11-19', 2300: '2025-11-19'})
+        log = self.c.ok('GET', '/api/ingest/log')['items']
+        self.assertEqual({l['device'] for l in log if l['sender'] == 'STCPay2'}, {'Pixel'})  # attributed to the phone, not the signed-in member
+        self.assertEqual(Client().call('POST', '/api/ingest/sms/batch', {'messages': msgs}, bearer='wrong')[0], 401)
+        self.assertEqual(Client().call('POST', '/api/ingest/sms/batch', {'messages': msgs})[0], 401)
+        one = {'sender': 'AlRajhiBank', 'body': 'Purchase SAR 24.00 at HERFY', 'received_at': '2025-11-19T13:00:00Z'}  # the iOS Shortcut's flat shape
+        self.assertEqual(Client().call('POST', '/api/ingest/sms/batch', one, bearer=self.key), (200, {'received': 1, 'stored': 1}))
+        no_sender = {'body': 'Purchase SAR 25.00 at HERFY'}  # the Shortcut couldn't read the sender
+        self.assertEqual(Client().call('POST', '/api/ingest/sms/batch', no_sender, bearer=self.key), (200, {'received': 1, 'stored': 1}))
+        self.assertEqual(self.c.ok('GET', '/api/devices')['shortcut_url'], '')
+        bad = [{'sender': 'X', 'body': 'SAR 1', 'received_at': 'yesterday'}]
+        self.assertEqual(Client().call('POST', '/api/ingest/sms/batch', {'messages': bad}, bearer=self.key)[0], 400)
+
+    def test_ios_shortcut_plist(self):
+        import importlib.util, plistlib
+        spec = importlib.util.spec_from_file_location('make_shortcut', Path(__file__).parent.parent / 'scripts' / 'make_shortcut.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        d = plistlib.loads(plistlib.dumps(mod.shortcut(), fmt=plistlib.FMT_BINARY))
+        post = d['WFWorkflowActions'][-1]['WFWorkflowActionParameters']
+        self.assertEqual((post['WFHTTPMethod'], post['WFHTTPBodyType']), ('POST', 'JSON'))
+        keys = [i['WFKey']['Value']['string'] for i in post['WFJSONValues']['Value']['WFDictionaryFieldValueItems']]
+        self.assertEqual(keys, ['sender', 'body', 'received_at'])
+        self.assertEqual(d['WFWorkflowImportQuestions'][0]['ActionIndex'], 0)  # the key comes at install, never in the file
+
 
 class LedgerTest(Base):
     def test_people_photos(self):

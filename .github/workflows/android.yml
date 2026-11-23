@@ -1,9 +1,9 @@
-# Builds the Expense Sync Android app and publishes it at a fixed download link:
-# https://github.com/silpachandran08-web/Expense/releases/download/android-latest/expense-sync.apk
+# Builds the Expense Sync Android app and attaches it to this repository's latest release:
+# https://github.com/anas24aj/Expense/releases/latest (file: expense-sync.apk), linked from the web Phones screen.
 name: Android sync app
 on:
   push:
-    branches: [main]
+    branches: [main, v3]
     paths: ['android/**', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:

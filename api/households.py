@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from api import auth, emailer, valid
-from api.app import ApiError, route
+from api.app import DIST, ApiError, route
 from api.db import Scoped, new_id, now
 
 RELATIONS = {'self', 'spouse', 'parent', 'child', 'sibling', 'other'}
@@ -377,9 +377,15 @@ def shared_with_me(req):
     return {'items': items}
 
 
+def shortcut_url():
+    """The iOS Shortcut to install: SHORTCUT_URL (e.g. an iCloud link), else the signed file in web/public when it was built in."""
+    return os.environ.get('SHORTCUT_URL', '') or ('/ledger-sms.shortcut' if (DIST / 'ledger-sms.shortcut').is_file() else '')
+
+
 @route('GET', '/api/devices')
 def list_devices(req):
-    return {'items': [device_view(d) for d in req.hh.run('SELECT * FROM devices WHERE household_id = :hid AND revoked_at IS NULL ORDER BY created_at')]}
+    return {'items': [device_view(d) for d in req.hh.run('SELECT * FROM devices WHERE household_id = :hid AND revoked_at IS NULL ORDER BY created_at')],
+            'shortcut_url': shortcut_url()}
 
 
 @route('POST', '/api/devices')
@@ -389,9 +395,9 @@ def add_device(req):
     key = secrets.token_urlsafe(32)
     d = req.hh.insert('devices', user_id=req.user['id'], member_id=req.member['id'], name=name, platform=platform,
                       key_hash=auth.sha(key), created_at=now(), last_seen='')
-    url = auth.base_url(req) + '/api/ingest/sms'
+    url = auth.base_url(req) + '/api/ingest/sms/batch'  # phones post {messages: [...]} here with the key
     return 201, {'device': device_view(req.hh.get('devices', d['id'])), 'key': key, 'sms_url': url,
-                 'setup': json.dumps({'url': url, 'key': key}), 'shortcut_url': os.environ.get('SHORTCUT_URL', '')}
+                 'setup': json.dumps({'url': url, 'key': key}), 'shortcut_url': shortcut_url()}
 
 
 @route('DELETE', '/api/devices/{id}')
