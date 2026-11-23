@@ -216,7 +216,7 @@ def login(req):
         raise ApiError(429, 'too many wrong tries: wait 15 minutes')
     who = b.get('login') if isinstance(b.get('login'), str) else ''
     who, password = who.strip().lower()[:254], b.get('password') if isinstance(b.get('password'), str) else ''
-    user = who and db.one('SELECT * FROM users WHERE email = :w OR username = :w', w=who)
+    user = who and (db.one('SELECT * FROM users WHERE email = :w OR username = :w', w=who) or _from_v2(db, who, password[:200]))
     if not user or not password_matches(password[:200], user['pw_hash']):
         db.run('DELETE FROM login_failures WHERE at <= :since', since=t - LOCKOUT_SECONDS)
         db.run('INSERT INTO login_failures (ip, at) VALUES (:ip, :at)', ip=ip, at=t)
@@ -224,6 +224,21 @@ def login(req):
     hid = _join(db, user, b['invite']) if b.get('invite') else None
     _sign_in(req, user, hid)
     return {'user': public_user(user)}
+
+
+def _from_v2(db, email, password):
+    """An account made on the old app (app_users, same PBKDF2 hashes) moves over the first time it signs in with its password."""
+    there = "SELECT to_regclass('app_users') IS NOT NULL AS ok" if db.pg else "SELECT COUNT(*) AS ok FROM sqlite_master WHERE name = 'app_users'"
+    old = db.one(there)['ok'] and db.one('SELECT email, pw_hash FROM app_users WHERE email = :e', e=email)
+    if not old or not password_matches(password, old['pw_hash']):
+        return None
+    with db.tx():
+        uid = new_id()
+        db.run('INSERT INTO users (id, email, name, pw_hash, created_at) VALUES (:id, :e, :n, :h, :t)',
+               id=uid, e=old['email'], n=old['email'].split('@')[0], h=old['pw_hash'], t=now())
+        user = db.one('SELECT * FROM users WHERE id = :id', id=uid)
+        create_household(db, user, f"{user['name']}'s family")
+    return user
 
 
 @route('POST', '/api/auth/logout', auth='public')

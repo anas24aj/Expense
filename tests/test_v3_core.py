@@ -146,6 +146,20 @@ class AuthTest(Base):
         self.assertIsNone(auth.mcp_user(key))
 
 
+class V2CarryOverTest(Base):
+    def test_old_account_signs_in_once_and_moves_over(self):
+        from server import hash_password
+        db = dbmod.DB()
+        db.run("CREATE TABLE app_users (id TEXT, email TEXT, pw_hash TEXT, space TEXT, sync_key TEXT, created_at TEXT, last_seen TEXT)")
+        db.run("INSERT INTO app_users (id, email, pw_hash) VALUES ('1', 'old@x.com', :h)", h=hash_password('old password'))
+        self.assertEqual(Client().call('POST', '/api/auth/login', {'login': 'old@x.com', 'password': 'wrong one'})[0], 401)
+        c = Client()
+        c.ok('POST', '/api/auth/login', {'login': 'old@x.com', 'password': 'old password'})
+        self.assertEqual(c.ok('GET', '/api/auth/me')['member']['role'], 'owner')
+        Client().ok('POST', '/api/auth/login', {'login': 'old@x.com', 'password': 'old password'})  # second time: plain v3 login
+        self.assertEqual(db.one("SELECT COUNT(*) AS n FROM users WHERE email = 'old@x.com'")['n'], 1)
+
+
 class HouseholdTest(Base):
     def test_isolation(self):
         a, b = signup('ha@x.com'), signup('hb@x.com', name='B')
