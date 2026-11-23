@@ -38,3 +38,26 @@ Implemented in `domain.py` (routes) and `engine.py` (math). Both the UI and MCP 
 - `GET /whatif?amount=5000&currency=SAR&pay=cash|card` → `{debt_free_before, debt_free_after, delay_months, extra_interest, month_free_after, verdict: ok|tight|no, why}`
 - `GET /advice?currency=SAR` → `{emergency_fund: {months_covered, target}, steps: [{title, why, amount}]}` (rules-based, plain words)
 - `GET /settings` / `POST /settings` `{salary, salary_currency, salary_day, home_currency, emergency_months}`
+
+## Implementation notes (Stream A: where the code is more specific than the contract above)
+- `GET /claims` returns an object: `{claims: [...], pending_total: [money]}` (a list can't carry the total).
+- `GET /whatif`: `debt_free_before` / `debt_free_after` are `{month|null, months|null}` like `lookahead.debt_free`;
+  `delay_months` is null when the purchase would mean the debt never closes.
+- Debt-free (lookahead, whatif) assumes the look-ahead's average free money goes to debt, highest rate first
+  (avalanche); that amount is `lookahead.extra_to_debt`. `month: null` = never at these payments; `months: 0` = no debt.
+- `GET /month` also returns `month`, `currency` and `other_out` (EMIs, lending, asset and saving payments: not spending,
+  but money gone). `free = income − spent − other_out − committed_due − set_aside`. For this and future months `income`
+  is at least the expected salary. Every amount is converted to `currency` at `rate`.
+- Commitments with `cycle_months > 1` get a fund row automatically (kept in step on save; when the payment is matched
+  the fund rolls to the next due date and starts empty). Their payment is not also counted in `committed_due` or the
+  look-ahead's `commitments`. Look-ahead `commitments` includes the EMIs of loans on the Debt tab (an `emi` commitment
+  with the loan's name or pattern is not counted twice).
+- `GET /settings`: `salary` is a number in major units or null; `POST /settings` also writes the old `salary` key so
+  salary detection keeps working.
+- `GET /people` also lists friends tagged on transactions who aren't saved as people yet (`id: null`).
+- `GET /assets` also returns `milestones`, `loan_liability` (a holdings id) and `match`; transactions whose text contains
+  `match` get purpose `asset` and add to `paid_cash`. Running costs are monthly averages of the last 3 full months.
+- Commitment sharers carry `share_minor` (in the commitment's currency).
+- Transactions also carry `person_id`, and when matched `commitment_id`, `claim_id`, `asset_id`.
+- A claim with no reimbursement set is matched to the first later credit of exactly its total.
+- Deletes return `{id, deleted: true}`.

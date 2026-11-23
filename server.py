@@ -440,6 +440,8 @@ def transactions(db, month=None, currency=None):
                         or (r['id'] not in own and is_pay(r) and not REFUND.search(r['body']) and 'Salary')
                         or categorize(merchant, r['body'], rules, 'Income' if r['direction'] == 'credit' and not REFUND.search(r['body']) else 'Uncategorized'),
         })
+    import domain  # purpose (spend, fee, transfer, claim…) and confidence on every row: docs/brain/domain-model.md
+    domain.annotate(db, result)
     return result
 
 
@@ -1993,7 +1995,8 @@ MCP_LIST_MAX = 200
 
 def _brief(t):
     out = {'id': t['id'], 'date': t['received_at'][:10], 'amount': t['amount'], 'currency': t['currency'],
-           'direction': 'spent' if t['direction'] == 'debit' else 'received', 'merchant': t['merchant'], 'category': t['category'], 'account': t['account']}
+           'direction': 'spent' if t['direction'] == 'debit' else 'received', 'merchant': t['merchant'], 'category': t['category'], 'account': t['account'],
+           'purpose': t.get('purpose')}
     if t.get('friend'):
         out.update(friend=t['friend'], friend_share=t['theirs'], settled=t['settled'])
     return out
@@ -2107,6 +2110,14 @@ def mcp_categorize(db, a):
     return {'transaction': _brief(t) if t else None}
 
 
+def _v2(name):
+    """An MCP tool over the v2 domain API (domain.py): the same numbers the app shows."""
+    def call(db, a):
+        import domain
+        return getattr(domain, name)(db, a)
+    return call
+
+
 _S = lambda props, req=(): {'type': 'object', 'properties': props, 'required': list(req), 'additionalProperties': False}
 _MONTH = {'type': 'string', 'description': 'YYYY-MM, e.g. 2026-10. Leave out for the current month.'}
 _CUR = {'type': 'string', 'enum': ['SAR', 'INR', 'USD'], 'description': 'Only this currency (amounts are never mixed).'}
@@ -2133,6 +2144,29 @@ MCP_TOOLS = {
     'set_category': ('Change a transaction’s category (and optionally every transaction from that merchant). Only when the user asks.',
                      _S({'transaction_id': {'type': 'integer'}, 'category': {'type': 'string'}, 'all_from_merchant': {'type': 'boolean'}},
                         ['transaction_id', 'category']), mcp_categorize, False),
+    'get_month': ('A month in one currency (others converted at the stated rate): income, spending, commitments paid and still due, fund set-asides, '
+                  'free money, totals by purpose, what you owe (loans, cards, pay-later, people) and are owed (people, claims), interest this month.',
+                  _S({'month': _MONTH, 'currency': _CUR}), _v2('month'), True),
+    'get_lookahead': ('The next months: expected income, commitments, fund set-asides, everyday spending and free money per month, warnings, '
+                      'the debt-free month and the interest paid per month.',
+                      _S({'months': {'type': 'integer', 'minimum': 1, 'maximum': 36}, 'currency': _CUR}), _v2('lookahead'), True),
+    'what_if': ('What spending an amount now does: the delay to being debt-free, the extra interest, free money left this month and a verdict (ok, tight, no).',
+                _S({'amount': {'type': 'number', 'exclusiveMinimum': 0}, 'currency': _CUR, 'pay': {'type': 'string', 'enum': ['cash', 'card']}}, ['amount']),
+                _v2('whatif'), True),
+    'get_commitments': ('Bills, rent, subscriptions, EMIs, family support and milestones: amount, cycle, next due date, paid/due/overdue, sharers and whether they paid.',
+                        _S({}), _v2('commitments_list'), True),
+    'get_people': ('Family, friends and colleagues: what each owes you and you owe them, and family support this month against the plan.',
+                   _S({}), _v2('people_list'), True),
+    'get_claims': ('Company reimbursement claims: items, expected, received, status, age, and the total still pending.', _S({}), _v2('claims_view'), True),
+    'get_assets': ('Property, vehicles and investments: cost, paid in cash, financed, still to pay, next milestone, monthly running cost and your share.',
+                   _S({}), _v2('assets_list'), True),
+    'get_advice': ('Rules-based steps for this month’s free money: emergency fund, costly debt first, funds, cheap debt vs an NRE FD, investing. Not financial advice.',
+                   _S({'currency': _CUR}), _v2('advice'), True),
+    'set_purpose': ('Say what a transaction was for (spend, fee, transfer, income, support, lend, repaid, borrow, repay, loan_payment, claim, reimbursement, asset, saving), '
+                    'optionally for every transaction from that merchant. Only when the user asks.',
+                    _S({'txn_id': {'type': 'integer'}, 'purpose': {'type': 'string', 'enum': ['spend', 'fee', 'transfer', 'income', 'support', 'lend', 'repaid', 'borrow',
+                                                                                         'repay', 'loan_payment', 'claim', 'reimbursement', 'asset', 'saving']},
+                        'person_id': {'type': 'integer'}, 'all_from_merchant': {'type': 'boolean'}}, ['txn_id', 'purpose']), _v2('set_purpose'), False),
 }
 
 
