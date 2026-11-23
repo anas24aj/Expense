@@ -184,6 +184,8 @@
   details.lb .rk .nm b, details.lb .rk .nm small { white-space: normal; overflow-wrap: anywhere; }
   details.lb .rk .v { font-size: 13px; } details.lb .rk .v small { font-size: 11px; }
   .banner.warn { border-color: #d97706; }
+  .kind-tag { display: inline-block; font-size: 12px; font-weight: 600; color: var(--text-2); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; margin: 2px 0 6px; }
+  .kind-tag small { font-weight: 400; color: var(--muted); }
   details.acct-edit { margin-top: 10px; } details.acct-edit > summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; }
   form.acct-form { display: grid; gap: 10px; margin-top: 10px; } form.acct-form label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
   form.acct-form input, form.acct-form select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-width: 0; max-width: 100%; }
@@ -1802,20 +1804,25 @@ function balancesPage(rt, P) {
   if (state.acctUrl !== url) { state.acctMonth = null; state.acctUrl = url; }
   if (!state.acctMonth) return waitFor('Accounts & cards', [['acctMonth', () => fetchInto('acctMonth', url, () => { if (location.hash.startsWith('#/balances')) render(); })]]);
   const A = state.acctMonth.accounts, prev = monthName(addM(m, -1), 'short'), cur = (v, c) => esc(owed(Math.round(v * 100), c));
-  const info = n => (state.acctMonth.all || []).find(x => x.name === n) || { name: n, currency: '', added: false, transactions: 0 };
+  const info = n => (state.acctMonth.all || []).find(x => x.name === n) || { name: n, currency: '', added: false, transactions: 0, kind: 'bank', how: 'name' };
+  const KINDS = [['card', '💳 Credit card'], ['debit', '🏧 Debit card'], ['bank', '🏦 Bank account'], ['wallet', '👛 Wallet'], ['bnpl', '🧾 Pay later'], ['loan', '🏠 Loan']];
+  const kindTag = n => { const x = info(n), k = KINDS.find(([v]) => v === x.kind);
+    const card = x.kind === 'card' || x.kind === 'debit';
+    return k ? `<span class="kind-tag">${k[1]}${card && x.how === 'sms' ? ' <small>(detected)</small>' : card && x.how === 'name' ? ' <small>(not sure, set it under Edit)</small>' : ''}</span>` : ''; };
   // Edit: rename, type its balance now, remove (or delete one you added)
   const editor = (n, currency) => { const x = info(n);
     return `<details class="acct-edit"><summary>Edit</summary><form class="acct-form" data-label="${esc(n)}"><label>Name<input type="text" name="name" maxlength="60" required value="${esc(n)}"></label>` +
+      `<label>Type<select name="kind">${KINDS.map(([v, l]) => `<option value="${v}" ${v === x.kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` +
       `<label>Balance now <small class="muted">(only if its SMS don’t show it)</small><input type="text" name="balance" inputmode="decimal" placeholder="${esc(currency || x.currency || '')}"></label>` +
       `<div class="actions"><button class="btn">Save</button><button type="button" class="link danger" data-acct-remove="${esc(n)}" data-added="${x.added && !x.transactions}">${x.added && !x.transactions ? 'Delete' : 'Remove'}</button></div>` +
       '<p class="muted small">Remove hides it and stops counting its messages (for things like provident-fund SMS). You can show it again below.</p></form></details>'; };
-  const rows = A.map(a => `<section class="card"><h2>${splitAcct(a.account)}<span>${esc(a.currency)}</span></h2>` +
+  const rows = A.map(a => `<section class="card"><h2>${splitAcct(a.account)}<span>${esc(a.currency)}</span></h2>${kindTag(a.account)}` +
     `<div class="big"><span class="muted">Balance now · ${a.typed ? 'you entered it' : 'bank said'} on ${esc(dayLabel(a.as_of))}</span><b>${cur(a.current, a.currency)}</b></div>` +
     `<dl class="carry"><dt>Carried from ${esc(prev)}</dt><dd>${cur(a.opening, a.currency)}</dd>` +
     `<dt>+ Money in</dt><dd class="in">${cur(a.in, a.currency)}</dd><dt>− Money out</dt><dd class="out">${cur(a.out, a.currency)}</dd>` +
     `<dt><b>${m === today().slice(0, 7) ? 'So far this month' : `Closing ${esc(monthName(m, 'short'))}`}</b></dt><dd><b>${cur(a.closing, a.currency)}</b></dd></dl>${editor(a.account, a.currency)}</section>`).join('');
   const withBal = new Set(A.map(a => a.account)), rest = (state.acctMonth.all || []).filter(x => !withBal.has(x.name));
-  const others = rest.length ? card('Other accounts &amp; cards', 'no balance in their SMS', rest.map(x => `<div class="acct-row"><div>${splitAcct(x.name)}<small class="muted"> · ${plural(x.transactions, 'transaction')}${x.currency ? ' · ' + esc(x.currency) : ''}</small></div>${editor(x.name, x.currency)}</div>`).join(''), '') : '';
+  const others = rest.length ? card('Other accounts &amp; cards', 'no balance in their SMS', rest.map(x => `<div class="acct-row"><div>${splitAcct(x.name)}<small class="muted"> · ${plural(x.transactions, 'transaction')}${x.currency ? ' · ' + esc(x.currency) : ''}</small></div>${kindTag(x.name)}${editor(x.name, x.currency)}</div>`).join(''), '') : '';
   const hidden = (state.acctMonth.hidden || []).length ? card('Removed', 'not counted', state.acctMonth.hidden.map(n => `<div class="acct-row"><div>${esc(n)}</div><button type="button" class="link" data-acct-show="${esc(n)}">Show again</button></div>`).join(''), '') : '';
   const add = '<section class="card"><h2>Add an account</h2><form class="acct-form" data-label=""><label>Name <small class="muted">(end it with the last 4 digits so its SMS join it, e.g. “SNB salary 7788”)</small><input type="text" name="name" maxlength="60" required></label>' +
     '<div class="two"><label>Currency<select name="currency"><option>SAR</option><option>INR</option><option>USD</option></select></label><label>Balance now<input type="text" name="balance" inputmode="decimal" placeholder="optional"></label></div>' +
@@ -1829,7 +1836,7 @@ document.addEventListener('submit', async e => {
   const f = e.target, btn = f.querySelector('button');
   btn.disabled = true;
   try {
-    await post('/api/account', { label: f.dataset.label, name: f.name.value, balance: f.balance.value.trim() || null, currency: f.currency?.value || '' });
+    await post('/api/account', { label: f.dataset.label, name: f.name.value, balance: f.balance.value.trim() || null, currency: f.currency?.value || '', kind: f.kind?.value || '' });
     toast(f.dataset.label ? 'Saved.' : 'Added.'); state.acctMonth = null; state.acctUrl = null; await load(true); render();
   } catch (err) { btn.disabled = false; toast(`Not saved: ${err.message}`); }
 });

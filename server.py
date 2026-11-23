@@ -88,7 +88,7 @@ DELETED_SCHEMA = 'CREATE TABLE IF NOT EXISTS deleted_sms (body TEXT PRIMARY KEY)
 # Your bank accounts, cards, wallets (STC Pay, PhonePe…), buy-now-pay-later (Tamara, Tabby) and loan accounts, named when
 # you import a statement. digits: the account's or card's last 4, so its SMS ('A/c XX1234') show under the same name.
 ACCOUNTS_SCHEMA = "CREATE TABLE IF NOT EXISTS accounts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, currency TEXT NOT NULL, digits TEXT NOT NULL DEFAULT '')"
-ACCOUNT_KINDS = {'bank', 'card', 'wallet', 'bnpl', 'loan'}
+ACCOUNT_KINDS = {'bank', 'card', 'debit', 'wallet', 'bnpl', 'loan'}  # card: a credit card; debit: a debit (mada/ATM) card
 # People using this app. Each has their own data space: a Postgres schema ('u_12') with every table above, so no query
 # can see another person's data; 'public' holds the data from before accounts existed (the owner's). Only the admin
 # adds people. sync_key: what their phone app sends instead of a password. pw_hash: PBKDF2, never the password.
@@ -840,13 +840,34 @@ def save_account(db, label, name, currency='', balance=None, hidden=None, kind='
         if r['name'] != name and not r['label']:  # an account from a statement: its rows carry the name
             db.run('UPDATE transactions SET sender = :n WHERE statement_id IS NOT NULL AND sender = :o', n=name, o=r['name'])
             db.run('UPDATE statements SET account = :n WHERE account = :o', n=name, o=r['name'])
-        db.run('UPDATE accounts SET name = :n, hidden = :h WHERE name = :o', n=name, h=r['hidden'] if hidden is None else int(hidden), o=r['name'])
+        db.run('UPDATE accounts SET name = :n, hidden = :h, kind = :k WHERE name = :o', n=name, h=r['hidden'] if hidden is None else int(hidden),
+               k=kind if kind in ACCOUNT_KINDS else r['kind'], o=r['name'])
     else:
         db.run('INSERT INTO accounts (name, kind, currency, digits, label, hidden) VALUES (:n, :k, :c, :d, :l, :h)',
-               n=name, k=kind or ('card' if 'Card' in (label or '') else 'bank'), c=currency or 'SAR', d='' if label else digits, l=label, h=int(bool(hidden)))
+               n=name, k=kind if kind in ACCOUNT_KINDS else '', c=currency or 'SAR', d='' if label else digits, l=label, h=int(bool(hidden)))  # '': not chosen, detect it
     if balance is not None:
         db.run('UPDATE accounts SET balance_minor = :b, balance_at = :t WHERE name = :n', b=round(Decimal(str(balance)) * 100), t=now, n=name)
     return name
+
+
+CREDIT_CARD = re.compile(r'credit\s*card|\b(?:avl|avbl|available)\.?\s*(?:credit\s+)?(?:limit|lmt)\b|credit\s+limit|بطاقة\s*(?:ال)?ائتمان', re.I)
+DEBIT_CARD = re.compile(r'debit\s*card|\bmada\b|مدى|\batm\s*card\b|بطاقة\s*(?:ال)?صراف', re.I)
+
+
+def account_kinds(every, typed):
+    """{account: (kind, how)}, how: 'set' by you, 'sms' read from its messages, 'name' only guessed. The type you set (Edit, or at statement upload), else what its SMS say (a credit
+    card: 'credit card', 'Avl Limit'; a debit card: 'debit card', 'mada', 'ATM card'), else card or bank by its name."""
+    votes = defaultdict(lambda: [0, 0])
+    for t in every:
+        votes[t['account']][0] += bool(CREDIT_CARD.search(t['body']))
+        votes[t['account']][1] += bool(DEBIT_CARD.search(t['body']))
+    chosen = {a['name']: a['kind'] for a in typed if a['kind']}
+    out = {}
+    for name in set(votes) | set(chosen):
+        c, d = votes[name]
+        out[name] = ((chosen[name], 'set') if name in chosen else ('card' if c >= d else 'debit', 'sms') if c or d
+                     else ('card' if 'Card' in name else 'bank', 'name'))
+    return out
 
 
 def delete_account(db, name):
@@ -2556,9 +2577,11 @@ def _app(environ, start_response):
                     seen[t['account']]['currency'] = t['currency']
             hidden = {a['name'] for a in typed if a['hidden']}
             names = sorted((set(seen) | {a['name'] for a in typed}) - hidden)
+            kinds = account_kinds(every, typed)
             return respond('200 OK', {'month': month, 'accounts': account_months(every, month, typed),
                                       'all': [{'name': n, 'transactions': seen[n]['count'], 'currency': seen[n]['currency'] or next((a['currency'] for a in typed if a['name'] == n), ''),
-                                               'added': any(a['name'] == n and not a['label'] for a in typed)} for n in names],
+                                               'added': any(a['name'] == n and not a['label'] for a in typed),
+                                               'kind': kinds.get(n, ('bank', 'name'))[0], 'how': kinds.get(n, ('bank', 'name'))[1]} for n in names],
                                       'hidden': sorted(hidden)})
         if path == '/api/balances':
             return respond('200 OK', balances(transactions(db)))

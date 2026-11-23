@@ -510,6 +510,14 @@ class StoreMixin:
         typed = db.run('SELECT * FROM accounts')
         row = next(r for r in server.account_months(server.transactions(db), '2026-12', typed) if r['account'] == 'SNB salary 7788')
         self.assertEqual((row['current'], row['out'], row['closing'], row['typed']), (1000.0, 100.0, 900.0, True))
+        # Credit or debit: read from the card's own SMS, until you set it.
+        server.store_sms(db, 'ICICI', 'INR 3,200.50 spent on ICICI Bank Credit Card XX9012 at AMAZON. Avl Limit: INR 1,20,000.00', '2026-11-20T10:00:00+05:30')
+        server.store_sms(db, 'AlRajhi', 'PoS Purchase\nBy: mada *5678\nAmount: SAR 20.00\nAt: CAFE', '2026-11-20T10:00:00+03:00')
+        kinds = server.account_kinds(server.transactions(db), db.run('SELECT * FROM accounts'))
+        self.assertEqual((kinds['ICICI · Card •9012'], kinds['AlRajhi · Card •5678']), (('card', 'sms'), ('debit', 'sms')))
+        server.save_account(db, 'AlRajhi · Card •5678', 'Al Rajhi mada', kind='card')  # you know better
+        kinds = server.account_kinds(server.transactions(db), db.run('SELECT * FROM accounts'))
+        self.assertEqual(kinds['Al Rajhi mada'], ('card', 'set'))
         server.delete_account(db, 'SNB salary 7788')
         self.assertFalse(db.run("SELECT 1 FROM accounts WHERE name = 'SNB salary 7788'"))
         # An account from a statement keeps its rows when renamed.
