@@ -1,4 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "python"
+  "framework": "python",
+  "regions": [
+    "fra1"
+  ]
 }
