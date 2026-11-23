@@ -33,6 +33,7 @@ The copy is yours: it doesn't pick up later changes to this repository by itself
    |---|---|
    | `EXPENSE_TOKEN` | Your login password, also used by the phone. At least 6 characters; longer is safer. After 10 wrong tries, that device is locked out for 15 minutes. |
    | `EXPENSE_TZ` | Optional. Your time zone, e.g. `Asia/Kolkata` in India or `Asia/Dubai`; defaults to `Asia/Riyadh`. This decides where one day and month end and the next begin. |
+   | `ADMIN_PASSWORD` | Optional. Turns on the admin page at `/admin` (at least 6 characters; longer is safer). There you add people (each with a unique email, a password and their own private data), reset passwords, delete people, browse and delete data, and open the app as any of them. |
 
 5. Go to **Deployments → ⋯ → Redeploy** so the new variables take effect.
 6. Open `https://<your-project>.vercel.app` and sign in on the login page with your `EXPENSE_TOKEN` as the password. You stay signed in for 30 days on that device, until you tap **Sign out**. Changing `EXPENSE_TOKEN` signs out every device.
@@ -112,3 +113,14 @@ DATABASE_URL=postgresql://... EXPENSE_TOKEN=... python3 server.py  # Postgres (p
 python3 -m unittest -v
 TEST_DATABASE_URL=postgresql://... python3 -m unittest -v   # also tests Postgres (drops the transactions table!)
 ```
+
+## More than one person
+
+One site and one database can serve several people, each with private data:
+
+1. Set `ADMIN_PASSWORD` in Vercel → Settings → Environment Variables, then redeploy.
+2. Open `/admin` and sign in with it. Under **Your existing data**, link the data you already have to your email and a password.
+3. **Add a person** with their email and a password. They sign in on the normal page with that email and password.
+4. Their phone sends SMS with their own **sync key** (shown in their Settings) instead of a password: in the Android app's password box, or after `Bearer ` in the iPhone shortcut.
+
+The site password (`EXPENSE_TOKEN`) with the email left empty still opens the original data, and the phones that use it keep working.

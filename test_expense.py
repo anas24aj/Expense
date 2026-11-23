@@ -310,6 +310,30 @@ class StoreMixin:
         self.assertEqual((stored['amount_minor'], stored['currency'], stored['direction']), (2545000, 'SAR', 'credit'))
         self.assertEqual(server.transactions(db)[0]['category'], 'Salary')
 
+    def test_data_spaces_are_separate(self):
+        db = self.db
+        theirs = server.DB(self.url, 'u_901')
+        try:
+            server.store_sms(theirs, 'B', 'SAR 12.00 paid to HER CAFE', '2026-10-05T10:00:00+03:00')
+            server.store_sms(db, 'B', 'SAR 30.00 paid to HIS SHOP', '2026-10-05T10:00:00+03:00')
+            self.assertEqual([t['merchant'] for t in server.transactions(theirs)], ['HER CAFE'])
+        finally:
+            theirs.close()
+        again = server.DB(self.url)  # a pooled connection that was just in u_901 must come back to the owner's data
+        try:
+            self.assertEqual([t['merchant'] for t in server.transactions(again)], ['HIS SHOP'])
+            server.drop_space(again, 'u_901')
+            with self.assertRaises(ValueError):
+                server.drop_space(again, 'public')
+        finally:
+            again.close()
+        fresh = server.DB(self.url, 'u_901')  # dropped: starts empty
+        try:
+            self.assertEqual(server.transactions(fresh), [])
+            server.drop_space(fresh, 'u_901')
+        finally:
+            fresh.close()
+
     def test_card_limit_is_kept(self):
         db = self.db
         server.save_holding(db, {'id': None, 'kind': 'card', 'name': 'Visa card', 'currency': 'SAR', 'balance_minor': 820000, 'rate_bp': 0, 'emi_minor': 0,
@@ -754,6 +778,56 @@ class AppTest(unittest.TestCase):
         self.assertEqual([a['name'] for a in listed['accounts']], ['HDFC'])
         self.assertEqual(self.call('POST', '/api/statement/delete', json.dumps({'id': listed['statements'][0]['id']}).encode())[0], 200)
         self.assertEqual(json.loads(self.call('GET', '/api/trail')[1])['accounts'], [])
+
+    def test_people_get_their_own_data_and_the_admin_manages_them(self):
+        browser = dict(auth='')
+        os.environ.pop('ADMIN_PASSWORD', None)
+        self.assertIn('off', json.loads(self.call('GET', '/api/admin/users', **browser)[1])['error'])
+        os.environ['ADMIN_PASSWORD'] = 'admin-pass-123'
+        try:
+            self.assertEqual(self.call('GET', '/api/admin/users', **browser)[0], 401)
+            self.call('POST', '/admin/login', b'password=wrong-guess', content_type='application/x-www-form-urlencoded', **browser)
+            self.assertEqual(self.headers['Location'], '/admin?error=1')
+            self.call('POST', '/admin/login', b'password=admin-pass-123', content_type='application/x-www-form-urlencoded', **browser)
+            admin = dict(auth='', cookie=self.headers['Set-Cookie'].split(';')[0])
+            add = lambda **u: self.call('POST', '/api/admin/users', json.dumps(u).encode(), **admin)
+            self.assertEqual(add(email='Wife@Example.com', password='wife-pass-1')[0], 200)
+            self.assertEqual(add(email='wife@example.com', password='other-pass-2')[0], 400)  # emails are unique
+            self.assertEqual(add(email='me@example.com', password='owner-pass-1', owner=True)[0], 200)  # links the existing data
+            people = json.loads(self.call('GET', '/api/admin/users', **admin)[1])
+            wife = next(u for u in people['users'] if u['email'] == 'wife@example.com')
+            self.assertEqual((people['owner_linked'], wife['space'].startswith('u_')), (True, True))
+
+            def login(email, password):
+                self.call('POST', '/login', urlencode({'email': email, 'password': password}).encode(), content_type='application/x-www-form-urlencoded', **browser)
+                return dict(auth='', cookie=self.headers.get('Set-Cookie', '').split(';')[0])
+            her = login('WIFE@example.com ', 'wife-pass-1')
+            me = json.loads(self.call('GET', '/api/me', **her)[1])
+            self.assertEqual(me['email'], 'wife@example.com')
+            # Her phone sends with her sync key; the owner's with the site password. Each sees only their own.
+            sms = lambda key, body: self.call('POST', '/sms', json.dumps({'sender': 'B', 'body': body, 'received_at': '2026-10-05T10:00:00+03:00'}).encode(), auth=f'Bearer {key}')
+            self.assertEqual(sms(me['sync_key'], 'SAR 12.00 paid to HER CAFE')[0], 201)
+            self.assertEqual(sms(TOKEN, 'SAR 30.00 paid to HIS SHOP')[0], 201)
+            self.assertEqual(sms(TOKEN, 'SAR 31.00 paid to HIS SHOP 2')[0], 201)
+            count = lambda who: json.loads(self.call('GET', '/api/latest', **who)[1])['count']
+            self.assertEqual((count(her), count(login('me@example.com', 'owner-pass-1')), count(dict(auth=f'Bearer {TOKEN}'))), (1, 2, 2))
+            self.assertEqual(count(login('', TOKEN)), 2)  # the site password alone still opens the owner's data
+            # The admin can browse and delete rows in her data, and open her app.
+            tables = {t['table']: t['rows'] for t in json.loads(self.call('GET', '/api/admin/tables', query=f'space={wife["space"]}', **admin)[1])}
+            self.assertEqual(tables['transactions'], 1)
+            row = json.loads(self.call('GET', '/api/admin/rows', query=f'space={wife["space"]}&table=transactions', **admin)[1])['rows'][0]
+            self.assertEqual(self.call('POST', '/api/admin/rows/delete', json.dumps({'space': wife['space'], 'table': 'transactions', 'key': {'id': row['id']}}).encode(), **admin)[0], 200)
+            self.assertEqual(count(her), 0)
+            self.assertEqual(self.call('GET', '/api/admin/tables', query='space=u_999', **admin)[0], 404)  # nobody: no empty space made
+            # A new password signs her out; deleting her with her data removes it.
+            self.call('POST', '/api/admin/users/password', json.dumps({'id': wife['id'], 'password': 'new-pass-123'}).encode(), **admin)
+            self.assertEqual(self.call('GET', '/api/latest', **her)[0], 401)
+            self.call('POST', '/api/admin/users/delete', json.dumps({'id': wife['id'], 'data': True}).encode(), **admin)
+            self.assertEqual(login('wife@example.com', 'new-pass-123')['cookie'], '')
+            self.assertFalse(any('-u_' in f for f in os.listdir(self.tmp.name)))
+            self.assertEqual(self.call('GET', '/api/admin/users', auth='', cookie='admin=1.bad')[0], 401)
+        finally:
+            os.environ.pop('ADMIN_PASSWORD', None)
 
     def test_login_tolerates_spaces_and_reports_missing_setup(self):
         os.environ['EXPENSE_TOKEN'] = f' {TOKEN}\n'  # pasted into Vercel with whitespace

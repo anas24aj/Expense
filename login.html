@@ -18,6 +18,8 @@
   p { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
   label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
   .field { position: relative; }
+  input[type=email] { width: 100%; font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+  .hint { margin: 6px 0 16px; font-size: 12px; }
   input[type=password], input[type=text] { width: 100%; font: inherit; padding: 12px 64px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
   input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .show { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font: inherit; font-size: 13px; padding: 6px 8px; border: 0; background: none; color: var(--muted); cursor: pointer; }
@@ -32,11 +34,12 @@
   <h1>Expenses</h1>
   <p>Sign in to see your spending.</p>
   <form method="post" action="/login">
-    <!-- Lets Samsung Pass / Google Password Manager save and fill the password. -->
-    <input class="hidden" type="text" name="username" value="expense" autocomplete="username" aria-hidden="true" tabindex="-1">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="you@example.com" autofocus>
+    <p class="hint">The site owner can leave this empty and use the site password.</p>
     <label for="password">Password</label>
     <div class="field">
-      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus aria-describedby="error">
+      <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="error">
       <button class="show" type="button" aria-controls="password" aria-pressed="false">Show</button>
     </div>
     <div id="error" class="error" role="alert"></div>
@@ -49,7 +52,7 @@
     setup: 'Login is not set up yet: in Vercel, add EXPENSE_TOKEN (at least 6 characters) for Production, then redeploy.',
     locked: 'Too many wrong attempts. Try again in 15 minutes.',
   };
-  if (error) document.getElementById('error').textContent = messages[error] || 'Wrong password. Try again.';
+  if (error) document.getElementById('error').textContent = messages[error] || 'Wrong email or password. Try again.';
   const input = document.getElementById('password'), toggle = document.querySelector('.show');
   toggle.addEventListener('click', () => {
     const show = input.type === 'password';

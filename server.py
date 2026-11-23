@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import ssl
 import sys
@@ -88,6 +89,14 @@ DELETED_SCHEMA = 'CREATE TABLE IF NOT EXISTS deleted_sms (body TEXT PRIMARY KEY)
 # you import a statement. digits: the account's or card's last 4, so its SMS ('A/c XX1234') show under the same name.
 ACCOUNTS_SCHEMA = "CREATE TABLE IF NOT EXISTS accounts (name TEXT PRIMARY KEY, kind TEXT NOT NULL, currency TEXT NOT NULL, digits TEXT NOT NULL DEFAULT '')"
 ACCOUNT_KINDS = {'bank', 'card', 'wallet', 'bnpl', 'loan'}
+# People using this app. Each has their own data space: a Postgres schema ('u_12') with every table above, so no query
+# can see another person's data; 'public' holds the data from before accounts existed (the owner's). Only the admin
+# adds people. sync_key: what their phone app sends instead of a password. pw_hash: PBKDF2, never the password.
+USERS_SCHEMA = '''CREATE TABLE IF NOT EXISTS app_users (id {id} PRIMARY KEY, email TEXT NOT NULL UNIQUE, pw_hash TEXT NOT NULL,
+  space TEXT NOT NULL DEFAULT '', sync_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen TEXT NOT NULL DEFAULT '')'''
+SPACE = re.compile(r'(?:public|u_\d{1,9})\Z')
+EMAIL = re.compile(r'[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}\Z')
+MIN_USER_PASSWORD = 8
 # Transfers you linked by hand on the Money trail: the debit in one of your accounts and the credit it became.
 LINKS_SCHEMA = 'CREATE TABLE IF NOT EXISTS txn_links (debit_id BIGINT PRIMARY KEY, credit_id BIGINT NOT NULL UNIQUE)'
 # One row per imported statement file; its transactions carry statement_id, so the import can be undone.
@@ -136,35 +145,51 @@ class DB:
     _idle = {}
     POOL_SIZE = 3
 
-    def __init__(self, url=None):
+    def __init__(self, url=None, space='public'):
+        if not SPACE.match(space):
+            raise ValueError('bad data space')
         url = direct(url if url is not None else os.environ.get('DATABASE_URL_UNPOOLED') or os.environ.get('DATABASE_URL', ''))
-        self.url, self.reused = url, False
+        self.url, self.reused, self.space = url, False, space
         if url.startswith(('postgres://', 'postgresql://')):
             try:
                 self.conn, self.reused = DB._idle.setdefault(url, []).pop(), True
             except IndexError:
                 self.conn = self._connect(url)
             self.pg, schema = True, SCHEMA.format(id='BIGSERIAL')
+            self._enter()
         else:
-            url = url or os.environ.get('EXPENSE_DB', str(HERE / 'expense.db'))
+            url = self.main_file = url or os.environ.get('EXPENSE_DB', str(HERE / 'expense.db'))
+            if space != 'public':  # locally, each person's data is a file next to the main one
+                url = str(Path(url).with_name(f'{Path(url).stem}-{space}{Path(url).suffix or ".db"}'))
             self.conn = sqlite3.connect(url, isolation_level=None)
             self.conn.row_factory = sqlite3.Row
             self.pg, schema = False, SCHEMA.format(id='INTEGER')
-        if url not in DB._schema_ready:  # once per process, not per request
+        ready = url if space == 'public' else (url, space)
+        if ready not in DB._schema_ready:  # once per process, not per request
+            if self.pg and space != 'public':
+                self.run(f'CREATE SCHEMA IF NOT EXISTS {space}')
             self.run(schema)
+            for extra in [USERS_SCHEMA] if space == 'public' else []:
+                self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             for extra in [FAILURES_SCHEMA, *LEARNED_SCHEMAS, DELIVERIES_SCHEMA, SKIPPED_SCHEMA, FRIENDS_SCHEMA, DELETED_SCHEMA, HOLDINGS_SCHEMA, PAYMENTS_SCHEMA, ACTIONS_SCHEMA, SETTINGS_SCHEMA, SNAPSHOTS_SCHEMA, ACCOUNTS_SCHEMA, STATEMENTS_SCHEMA, LINKS_SCHEMA]:
                 self.run(extra.format(id='BIGSERIAL' if self.pg else 'INTEGER'))
             self.migrate()
-            DB._schema_ready.add(url)  # before the re-read: if that fails, requests must still work and not retry it each time
+            DB._schema_ready.add(ready)  # before the re-read: if that fails, requests must still work and not retry it each time
             try:
                 self.reread_amounts()
             except Exception as e:  # a clean-up; never worth failing a request over
                 print(f'reread_amounts failed: {type(e).__name__}: {e}', file=sys.stderr)
 
+    def _enter(self):
+        """Point this connection at this person's data space (pooled connections keep the last one's)."""
+        if getattr(self.conn, 'expense_space', None) != self.space:
+            self.conn.run(f'SET search_path TO {self.space}')
+            self.conn.expense_space = self.space
+
     def migrate(self):
         """Columns added after a table first existed. holdings.auto: the EMI is taken automatically each month
         (loans made before it existed are, as Indian EMIs usually are; cards aren't)."""
-        cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'holdings'")}
+        cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'holdings' AND table_schema = current_schema()")}
                 if self.pg else {r['name'] for r in self.run('PRAGMA table_info(holdings)')})
         if 'auto' not in cols:
             self.run('ALTER TABLE holdings ADD COLUMN auto INTEGER NOT NULL DEFAULT 0')
@@ -172,7 +197,7 @@ class DB:
         if 'limit_minor' not in cols:  # a card's credit limit, for the 70%-used warning
             self.run('ALTER TABLE holdings ADD COLUMN limit_minor BIGINT NOT NULL DEFAULT 0')
         # transactions.statement_id: the statement a row came from (none for SMS)
-        cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions'")}
+        cols = ({r['column_name'] for r in self.run("SELECT column_name FROM information_schema.columns WHERE table_name = 'transactions' AND table_schema = current_schema()")}
                 if self.pg else {r['name'] for r in self.run('PRAGMA table_info(transactions)')})
         if 'statement_id' not in cols:
             self.run('ALTER TABLE transactions ADD COLUMN statement_id BIGINT')
@@ -228,6 +253,7 @@ class DB:
                 # A kept connection went stale (Neon drops them when it sleeps): reconnect once and retry.
                 # Every statement here is safe to repeat (inserts are ON CONFLICT DO NOTHING / upserts).
                 self.conn, self.reused = self._connect(self.url), False
+                self._enter()  # a new connection starts in 'public': back to this person's space first
                 rows = self.conn.run(sql, **params) or []
             names = [c['name'] for c in self.conn.columns or []]
             return [dict(zip(names, r)) for r in rows]
@@ -1175,14 +1201,33 @@ def _token():
     return token if len(token) >= MIN_PASSWORD else None
 
 
-def _sign(expires):
-    return hmac.new(_token().encode(), f'session:{expires}'.encode(), hashlib.sha256).hexdigest()
+def _sign(expires, space='public', pw_hash=''):
+    # The owner's (public) cookie keeps its old form; a person's also signs their password hash, so a reset logs them out.
+    what = f'session:{expires}' if space == 'public' and not pw_hash else f'session:{space}:{expires}:{pw_hash[-24:]}'
+    return hmac.new(_token().encode(), what.encode(), hashlib.sha256).hexdigest()
 
 
-def new_session():
-    """Cookie value '<expiry>.<signature>': stateless, so it works across Vercel instances; changing EXPENSE_TOKEN logs everyone out."""
+def new_session(space='public', pw_hash=''):
+    """Cookie value '<expiry>.<signature>' (the owner) or '<space>.<expiry>.<signature>' (a person): stateless, so it
+    works across Vercel instances; changing EXPENSE_TOKEN logs everyone out."""
     expires = int(time.time()) + SESSION_DAYS * 86400
-    return f'{expires}.{_sign(expires)}'
+    return f'{expires}.{_sign(expires)}' if space == 'public' and not pw_hash else f'{space}.{expires}.{_sign(expires, space, pw_hash)}'
+
+
+PBKDF2_ROUNDS = 200_000
+
+
+def hash_password(password, salt=None):
+    salt = salt or os.urandom(16)
+    return f'pbkdf2${PBKDF2_ROUNDS}${salt.hex()}${hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ROUNDS).hex()}'
+
+
+def password_matches(password, stored):
+    try:
+        _, rounds, salt, digest = stored.split('$')
+        return hmac.compare_digest(hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), int(rounds)).hex(), digest)
+    except ValueError:
+        return False
 
 
 def client_ip(environ):
@@ -1190,36 +1235,169 @@ def client_ip(environ):
     return (environ.get('HTTP_X_FORWARDED_FOR') or environ.get('REMOTE_ADDR') or '?').split(',')[0].strip()
 
 
-def check_password(environ, given):
-    """'ok', 'wrong' or 'locked'. A short password is guessable, so every wrong guess is recorded per IP
-    (in the database, because Vercel instances share no memory) and MAX_FAILURES of them lock that IP out."""
+def sign_in(environ, given, email='', key=False, admin=False):
+    """('ok', space, pw_hash) or ('wrong' | 'locked', None, ''). With an email: that person's password. Without: the site
+    password (EXPENSE_TOKEN: the owner's data), or with key=True a person's phone sync key, or with admin=True the
+    ADMIN_PASSWORD. Every wrong guess is recorded per IP (in the database, because Vercel instances share no memory)
+    and MAX_FAILURES of them lock that IP out."""
     db = DB()
     try:
-        ip, now = client_ip(environ), int(time.time())
+        ip, now, given = client_ip(environ), int(time.time()), given.strip()  # strip: phone keyboards add trailing spaces
         recent = db.run('SELECT COUNT(*) AS n FROM login_failures WHERE ip = :ip AND at > :since',
                         ip=ip, since=now - LOCKOUT_SECONDS)[0]['n']
         if recent >= MAX_FAILURES:
-            return 'locked'
-        if hmac.compare_digest(given.strip().encode(), _token().encode()):  # strip: phone keyboards add trailing spaces
-            return 'ok'
+            return 'locked', None, ''
+        if admin:
+            if _admin_password() and hmac.compare_digest(given.encode(), _admin_password().encode()):
+                return 'ok', None, ''
+        elif email:
+            found = db.run('SELECT * FROM app_users WHERE email = :e', e=email.strip().lower())
+            if found and found[0]['space'] and password_matches(given, found[0]['pw_hash']):
+                db.run('UPDATE app_users SET last_seen = :t WHERE id = :id', t=datetime.now(timezone.utc).isoformat(timespec='seconds'), id=found[0]['id'])
+                return 'ok', found[0]['space'], found[0]['pw_hash']
+        elif hmac.compare_digest(given.encode(), _token().encode()):
+            return 'ok', 'public', ''
+        elif key and len(given) >= 20:
+            found = db.run("SELECT space FROM app_users WHERE sync_key = :k AND space != ''", k=given)
+            if found:
+                return 'ok', found[0]['space'], ''
         db.run('DELETE FROM login_failures WHERE at <= :since', since=now - LOCKOUT_SECONDS)
         db.run('INSERT INTO login_failures (ip, at) VALUES (:ip, :at)', ip=ip, at=now)
-        return 'wrong'
+        return 'wrong', None, ''
     finally:
         db.close()
 
 
-def bearer_ok(environ):
-    """The phone authenticates with 'Authorization: Bearer <EXPENSE_TOKEN>'; guesses here count toward the lockout too."""
+def check_password(environ, given):
+    """'ok', 'wrong' or 'locked' for the site password."""
+    return sign_in(environ, given)[0]
+
+
+def bearer_space(environ):
+    """The phone authenticates with 'Authorization: Bearer <EXPENSE_TOKEN or a person's sync key>': whose data, or None.
+    Guesses here count toward the lockout too."""
     header = environ.get('HTTP_AUTHORIZATION', '')
-    return bool(_token()) and header.startswith('Bearer ') and check_password(environ, header[7:]) == 'ok'
+    if not (_token() and header.startswith('Bearer ')):
+        return None
+    result, space, _ = sign_in(environ, header[7:], key=True)
+    return space if result == 'ok' else None
+
+
+def bearer_ok(environ):
+    return bearer_space(environ) is not None
+
+
+def session_space(environ):
+    """Whose data the browser's login cookie opens, or None. A person's cookie is checked against their current
+    password hash, so a deleted person, or one whose password was reset, is signed out."""
+    cookie = SimpleCookie(environ.get('HTTP_COOKIE', '')).get('session')
+    parts = (cookie.value if cookie else '').split('.')
+    if not _token() or len(parts) not in (2, 3):
+        return None
+    space, expires, sig = parts if len(parts) == 3 else ('public', *parts)
+    if not (SPACE.match(space) and expires.isdigit() and int(expires) > time.time()):
+        return None
+    if len(parts) == 2:
+        return 'public' if hmac.compare_digest(sig, _sign(expires)) else None
+    db = DB()
+    try:
+        found = db.run('SELECT pw_hash FROM app_users WHERE space = :s', s=space)
+    finally:
+        db.close()
+    return space if found and hmac.compare_digest(sig, _sign(expires, space, found[0]['pw_hash'])) else None
 
 
 def session_ok(environ):
-    """The browser authenticates with the cookie set by the login page."""
-    cookie = SimpleCookie(environ.get('HTTP_COOKIE', '')).get('session')
+    return session_space(environ) is not None
+
+
+# ---------- the admin ----------
+ADMIN_HOURS = 12
+
+
+def _admin_password():
+    pw = os.environ.get('ADMIN_PASSWORD', '').strip()
+    return pw if len(pw) >= MIN_PASSWORD else None
+
+
+def _admin_sign(expires):
+    # signs the admin password's hash too: changing ADMIN_PASSWORD ends admin sessions
+    return hmac.new(_token().encode(), f'admin:{expires}:{hashlib.sha256(_admin_password().encode()).hexdigest()[:16]}'.encode(), hashlib.sha256).hexdigest()
+
+
+def admin_ok(environ):
+    cookie = SimpleCookie(environ.get('HTTP_COOKIE', '')).get('admin')
     expires, _, sig = (cookie.value if cookie else '').partition('.')
-    return bool(_token()) and expires.isdigit() and int(expires) > time.time() and hmac.compare_digest(sig, _sign(expires))
+    return bool(_token() and _admin_password()) and expires.isdigit() and int(expires) > time.time() and hmac.compare_digest(sig, _admin_sign(expires))
+
+
+def new_user(db, email, password, owner=False):
+    """Add a person (db: the public space). owner=True links the data from before accounts existed to them."""
+    email = email.strip().lower()
+    if not EMAIL.match(email):
+        raise ValueError('enter a valid email')
+    if len(password) < MIN_USER_PASSWORD:
+        raise ValueError(f'the password needs at least {MIN_USER_PASSWORD} characters')
+    if db.run('SELECT id FROM app_users WHERE email = :e', e=email):
+        raise ValueError('that email already has an account')
+    if owner and db.run("SELECT id FROM app_users WHERE space = 'public'"):
+        raise ValueError('the existing data is already linked to an account')
+    uid = db.run("INSERT INTO app_users (email, pw_hash, sync_key, created_at) VALUES (:e, :h, :k, :t) RETURNING id", e=email, h=hash_password(password),
+                 k=secrets.token_urlsafe(24), t=datetime.now(timezone.utc).isoformat(timespec='seconds'))[0]['id']
+    db.run('UPDATE app_users SET space = :s WHERE id = :id', s='public' if owner else f'u_{uid}', id=uid)
+    return uid
+
+
+def drop_space(db, space):
+    """Delete a person's data for good (never the owner's)."""
+    if space == 'public' or not SPACE.match(space):
+        raise ValueError('the owner’s data can’t be dropped')
+    if db.pg:
+        db.run(f'DROP SCHEMA IF EXISTS {space} CASCADE')
+        DB._schema_ready.discard((db.url, space))
+    else:
+        path = Path(db.main_file).with_name(f'{Path(db.main_file).stem}-{space}{Path(db.main_file).suffix or ".db"}')
+        DB._schema_ready.discard((str(path), space))
+        path.unlink(missing_ok=True)
+
+
+def users(db):
+    out = []
+    for u in db.run('SELECT id, email, space, created_at, last_seen FROM app_users ORDER BY id'):
+        out.append(dict(u))
+    linked = {u['space'] for u in out}
+    return {'users': out, 'owner_linked': 'public' in linked, 'spaces': ['public'] + [u['space'] for u in out if u['space'] != 'public']}
+
+
+# Tables the admin can browse, with the columns that identify a row (to delete it).
+ADMIN_TABLES = {'transactions': ['id'], 'holdings': ['id'], 'loan_payments': ['id'], 'statements': ['id'], 'accounts': ['name'],
+                'merchant_categories': ['merchant'], 'txn_categories': ['txn_id'], 'txn_friends': ['txn_id'], 'txn_links': ['debit_id'],
+                'plan_actions': ['month', 'kind', 'ref'], 'settings': ['key'], 'snapshots': ['month'], 'deleted_sms': ['body'],
+                'phone_deliveries': ['id'], 'skipped_sms': ['delivery_id']}
+ADMIN_PAGE_ROWS = 100
+
+
+def admin_tables(db):
+    return [{'table': t, 'rows': db.run(f'SELECT COUNT(*) AS n FROM {t}')[0]['n'], 'key': k} for t, k in ADMIN_TABLES.items()]
+
+
+def admin_rows(db, table, offset=0):
+    if table not in ADMIN_TABLES:
+        raise KeyError('no such table')
+    order = ', '.join(f'{c} DESC' for c in ADMIN_TABLES[table])
+    rows = db.run(f'SELECT * FROM {table} ORDER BY {order} LIMIT {ADMIN_PAGE_ROWS} OFFSET :o', o=max(0, int(offset)))
+    return {'table': table, 'key': ADMIN_TABLES[table], 'rows': rows, 'offset': offset}
+
+
+def admin_delete_row(db, table, key):
+    if table not in ADMIN_TABLES or set(key) != set(ADMIN_TABLES[table]):
+        raise KeyError('no such table or key')
+    where = ' AND '.join(f'{c} = :{c}' for c in ADMIN_TABLES[table])
+    if table == 'transactions':  # with what hangs off it, as deleting from the app does (but without remembering it as deleted)
+        for t, c in (('txn_categories', 'txn_id'), ('txn_friends', 'txn_id')):
+            db.run(f'DELETE FROM {t} WHERE {c} = :id', id=key['id'])
+        db.run('DELETE FROM txn_links WHERE debit_id = :id OR credit_id = :id', id=key['id'])
+    db.run(f'DELETE FROM {table} WHERE {where}', **key)
 
 
 def read_form(environ):
@@ -1337,6 +1515,85 @@ def read_import(environ):
     return [clean_message(m) for m in messages]
 
 
+def _admin(environ, method, path, query, respond, redirect):
+    """The admin page and its API. Off unless ADMIN_PASSWORD is set; the admin signs in with it alone."""
+    if path == '/admin' and method == 'GET':
+        return respond('200 OK', (HERE / 'admin.html').read_bytes(), 'text/html; charset=utf-8')
+    if (method, path) == ('POST', '/admin/login'):
+        if not (_token() and _admin_password()):
+            return redirect('/admin?error=off')
+        result = sign_in(environ, read_form(environ).get('password', ''), admin=True)[0]
+        if result != 'ok':
+            return redirect(f'/admin?error={"locked" if result == "locked" else "1"}')
+        expires = int(time.time()) + ADMIN_HOURS * 3600
+        return redirect('/admin', admin=f'{expires}.{_admin_sign(expires)}')
+    if (method, path) == ('POST', '/admin/logout'):
+        return redirect('/admin', admin='')
+    if not admin_ok(environ):
+        return respond('401 Unauthorized', {'error': 'admin sign-in needed' if _admin_password() else 'the admin page is off: set ADMIN_PASSWORD in Vercel'})
+    body = read_json(environ, MAX_BODY) if method == 'POST' else {}
+    space = body.get('space') or query.get('space') or 'public'
+    if not SPACE.match(str(space)):
+        return respond('400 Bad Request', {'error': 'bad space'})
+    pub = DB()
+    try:
+        if (method, path) == ('GET', '/api/admin/users'):
+            return respond('200 OK', users(pub))
+        if (method, path) == ('POST', '/api/admin/users'):
+            try:
+                new_user(pub, str(body.get('email', '')), str(body.get('password', '')), bool(body.get('owner')))
+            except ValueError as e:
+                return respond('400 Bad Request', {'error': str(e)})
+            return respond('200 OK', users(pub))
+        found = pub.run('SELECT * FROM app_users WHERE id = :id', id=int(body.get('id') or 0)) if 'id' in body else []
+        if (method, path) == ('POST', '/api/admin/users/password'):
+            if not found or len(str(body.get('password', ''))) < MIN_USER_PASSWORD:
+                return respond('400 Bad Request', {'error': f'pick a person and a password of {MIN_USER_PASSWORD}+ characters'})
+            pub.run('UPDATE app_users SET pw_hash = :h WHERE id = :id', h=hash_password(str(body['password'])), id=found[0]['id'])
+            return respond('200 OK', users(pub))
+        if (method, path) == ('POST', '/api/admin/users/key'):  # a new phone sync key (the old one stops working)
+            if not found:
+                return respond('404 Not Found', {'error': 'no such person'})
+            pub.run('UPDATE app_users SET sync_key = :k WHERE id = :id', k=secrets.token_urlsafe(24), id=found[0]['id'])
+            return respond('200 OK', users(pub))
+        if (method, path) == ('POST', '/api/admin/users/delete'):
+            if not found:
+                return respond('404 Not Found', {'error': 'no such person'})
+            pub.run('DELETE FROM app_users WHERE id = :id', id=found[0]['id'])
+            if body.get('data') and found[0]['space'] != 'public':
+                drop_space(pub, found[0]['space'])
+            return respond('200 OK', users(pub))
+        if (method, path) == ('POST', '/api/admin/open'):  # use the app as this person (to add or delete anything there)
+            known = space == 'public' or pub.run('SELECT pw_hash FROM app_users WHERE space = :s', s=space)
+            if not known:
+                return respond('404 Not Found', {'error': 'no such person'})
+            cookie = new_session() if space == 'public' else new_session(space, known[0]['pw_hash'])
+            return respond('200 OK', {'open': '/'}, headers=[('Set-Cookie', f'session={cookie}; Max-Age={SESSION_DAYS * 86400}; Path=/; HttpOnly; Secure; SameSite=Lax')])
+        spaces = users(pub)['spaces']
+    finally:
+        pub.close()
+    if space not in spaces:  # never create an empty space for someone who isn't there
+        return respond('404 Not Found', {'error': 'no such person'})
+    db = DB(space=space)
+    try:
+        if (method, path) == ('GET', '/api/admin/tables'):
+            return respond('200 OK', admin_tables(db))
+        if (method, path) == ('GET', '/api/admin/rows'):
+            try:
+                return respond('200 OK', admin_rows(db, query.get('table', ''), int(query.get('offset') or 0)))
+            except (KeyError, ValueError) as e:
+                return respond('400 Bad Request', {'error': str(e)})
+        if (method, path) == ('POST', '/api/admin/rows/delete'):
+            try:
+                admin_delete_row(db, str(body.get('table')), dict(body.get('key') or {}))
+            except (KeyError, ValueError, TypeError) as e:
+                return respond('400 Bad Request', {'error': str(e)})
+            return respond('200 OK', {'deleted': True})
+    finally:
+        db.close()
+    return respond('404 Not Found', {'error': 'not found'})
+
+
 def app(environ, start_response):
     """Any unexpected error becomes a 500 that says what went wrong (type and message, no stack or data), so the
     page's error bar can show it; the full trace still goes to the server log."""
@@ -1358,11 +1615,13 @@ def _app(environ, start_response):
                                 ('Cache-Control', 'no-store'), *headers])
         return [data]
 
-    def redirect(location, cookie=None):
+    def redirect(location, cookie=None, admin=None):
         headers = [('Location', location)]
         if cookie is not None:
             max_age = SESSION_DAYS * 86400 if cookie else 0
             headers.append(('Set-Cookie', f'session={cookie}; Max-Age={max_age}; Path=/; HttpOnly; Secure; SameSite=Lax'))
+        if admin is not None:
+            headers.append(('Set-Cookie', f'admin={admin}; Max-Age={ADMIN_HOURS * 3600 if admin else 0}; Path=/; HttpOnly; Secure; SameSite=Strict'))
         return respond('303 See Other', b'', 'text/plain', headers)
 
     method, path = environ['REQUEST_METHOD'], environ.get('PATH_INFO') or '/'
@@ -1374,16 +1633,21 @@ def _app(environ, start_response):
         if method == 'POST':
             if not _token():  # says only that setup is incomplete, nothing about the password itself
                 return redirect('/login?error=setup')
-            result = check_password(environ, read_form(environ).get('password', ''))
+            form = read_form(environ)
+            result, space, pw_hash = sign_in(environ, form.get('password', ''), email=form.get('email', ''))
             if result == 'ok':
-                return redirect('/', new_session())
+                return redirect('/', new_session(space, pw_hash))
             return redirect('/login?error=locked' if result == 'locked' else '/login?error=1')
         return respond('200 OK', (HERE / 'login.html').read_bytes(), 'text/html; charset=utf-8')
     if (method, path) == ('POST', '/logout'):
         return redirect('/login', '')
+    if path == '/admin' or path.startswith(('/admin/', '/api/admin/')):
+        return _admin(environ, method, path, query, respond, redirect)
 
+    space = None
     if (method, path) == ('POST', '/sms'):
-        if not bearer_ok(environ):  # phone only: the cookie isn't accepted here, so no cross-site form can add SMS
+        space = bearer_space(environ)
+        if space is None:  # phone only: the cookie isn't accepted here, so no cross-site form can add SMS
             refused = DB()
             try:
                 record_delivery(refused, '?', 'refused: wrong password in the phone app')
@@ -1399,7 +1663,7 @@ def _app(environ, start_response):
             finally:
                 refused.close()
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif not (session_ok(environ) or bearer_ok(environ)):
+    elif (space := session_space(environ) or bearer_space(environ)) is None:
         return redirect('/login') if method == 'GET' and path in PAGES else respond('401 Unauthorized', {'error': 'unauthorized'})
     elif method == 'GET' and path in PAGES:
         return respond('200 OK', (HERE / PAGES[path]).read_bytes(), 'text/html; charset=utf-8')
@@ -1492,11 +1756,19 @@ def _app(environ, start_response):
             square = str(read_json(environ, MAX_BODY)['friend'])
         except (ValueError, KeyError, TypeError) as e:
             return respond('400 Bad Request', {'error': f'bad request: {e}'})
-    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances')}:
+    elif (method, path) not in {('GET', '/api/summary'), ('GET', '/api/transactions'), ('GET', '/api/health'), ('GET', '/api/search'), ('GET', '/api/latest'), ('GET', '/api/money'), ('GET', '/api/rate'), ('GET', '/api/plan'), ('GET', '/api/settings'), ('GET', '/api/statements'), ('GET', '/api/trail'), ('GET', '/api/balances'), ('GET', '/api/me')}:
         return respond('404 Not Found', {'error': 'not found'})
 
     started = time.perf_counter()
-    db = DB()
+    if path == '/api/me':  # who is signed in, and their phone sync key
+        pub = DB()
+        try:
+            me = pub.run('SELECT email, sync_key FROM app_users WHERE space = :s', s=space)
+        finally:
+            pub.close()
+        return respond('200 OK', {'email': me[0]['email'] if me else None, 'owner': space == 'public',
+                                  'sync_key': me[0]['sync_key'] if me and space != 'public' else None})
+    db = DB(space=space)
     try:
         if path == '/api/health':
             db.run('SELECT 1')

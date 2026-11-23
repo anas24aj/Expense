@@ -2325,8 +2325,12 @@ document.addEventListener('submit', async e => {
 function settings() {
   // Receipts for what the phone sent, so you can check a message arrived (and what happened to it).
   const deliveries = state.sum.deliveries || [], last = deliveries[0];
+  if (!state.me && !state.err.me) fetchInto('me', '/api/me', render);
+  const me = state.me, account = !me ? '' : card('Your account', '', `<p>${me.email ? `Signed in as <b>${esc(me.email)}</b>` : 'Signed in with the site password'}${me.owner ? ' · owner' : ''}.</p>` +
+    (me.sync_key ? `<p class="muted">Your phone sync key: use it in the phone app (or the iPhone shortcut after “Bearer ”) instead of a password. Keep it private.</p><p class="key" style="font:12px/1.4 ui-monospace,monospace;overflow-wrap:anywhere;background:var(--surface-2);border-radius:8px;padding:8px">${esc(me.sync_key)}</p>`
+      : '<p class="muted">Your phone app uses the site password.</p>'));
   return { title: 'Settings', html:
-    installCard() +
+    account + installCard() +
     // The sync app reads the SMS inbox, so SMS that arrived while the phone kept it asleep still come in.
     (iPhone ? iPhoneSmsCard() : card('Phone sync app', 'Android', '<p class="muted">Sends your bank SMS here from the SMS inbox every 15 minutes and on each new SMS, ' +
       'so nothing is missed while the phone sleeps. Replaces the SMS forwarder app.</p>' +
