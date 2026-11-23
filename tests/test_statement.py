@@ -29,6 +29,11 @@ CARD = ['   Opening     Payment/     Purchase/   Finance    Total Dues',
         '      Date              Transaction Description                      Amount (in Rs.)',
         '   02/01/2025 17:00:10  TELE TRANSFER CREDIT                         100.00 Cr',
         '   05/01/2025           SOME SHOP CITY                                45.00']
+SBICARD = ['   Date        Transaction Details                                   Amount ( ` )',
+           '   02 Mar 25   SOME SHOP CITY                                        1,000.00 D',
+           '               FORGN CURR MARKUP DB (EXCL TAX 4.58)                     30.00 D',
+           '               IGST CR @ 18.00%                                          5.40 C',
+           '   19 Mar 25   FP EMI 05/18(EXCL TAX 1.00)                             500.00 M']
 
 
 class NewLayoutsTest(unittest.TestCase):
@@ -48,3 +53,7 @@ class NewLayoutsTest(unittest.TestCase):
     def test_card_amount_column_with_cr_suffix(self):
         rows = statement.read_statement(pdf(CARD))['rows']
         self.assertEqual([(r['amount_minor'], r['direction']) for r in rows], [(10000, 'credit'), (4500, 'debit')])
+
+    def test_sbi_card_markup_lines_and_memo_emi(self):
+        rows = statement.read_statement(pdf(SBICARD))['rows']
+        self.assertEqual([(r['amount_minor'], r['direction']) for r in rows], [(100000, 'debit'), (3000, 'debit'), (540, 'credit')])
