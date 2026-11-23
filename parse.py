@@ -1,6 +1,8 @@
 """Turn a bank/UPI SMS (India: INR, Saudi Arabia: SAR, English or Arabic) into a transaction, and a transaction into a category."""
+import json
 import re
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 ARABIC_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩٫٬', '0123456789.,')
 CURRENCIES = {'rs': 'INR', 'inr': 'INR', '₹': 'INR', 'sar': 'SAR', 'sr': 'SAR', 'ريال': 'SAR', 'ر.س': 'SAR', 'usd': 'USD', 'us$': 'USD', '$': 'USD'}
@@ -114,10 +116,61 @@ def compile_rules(rules):
             for category, keywords in rules.items() if keywords]
 
 
+# Payment gateways and terminal words banks put before the real name: 'POS PANDA', 'PAYTM-ZOMATO', 'RAZORPAY*SWIGGY'.
+NOISE = {'pos', 'upi', 'ecom', 'www', 'paytm', 'razorpay', 'rzp', 'payu', 'cashfree', 'billdesk', 'ccavenue', 'phonepe',
+         'bharatpe', 'pinelabs', 'pine', 'labs', 'sq', 'sumup', 'paypal', 'stripe', 'checkout', 'hyperpay', 'moyasar',
+         'payfort', 'tap', 'geidea', 'paymob', 'mada', 'pur', 'purchase', 'online', 'ecomm', 'in', 'sp', 'the'}
+
+
+def brand_key(name):
+    """'AMAZON.IN', 'netflix.upi@hdfcbank', "McDonald's" → 'amazon in', 'netflix upi', 'mcdonalds': what merchants.json is keyed by."""
+    name = name.lower().partition('@')[0].replace("'", '').replace('\u2019', '')
+    return ' '.join(re.sub(r'[\W_]+', ' ', name).split())
+
+
+def _load_brands(path=Path(__file__).with_name('data') / 'merchants.json'):
+    brands = {}
+    for category, names in json.loads(path.read_text(encoding='utf-8')).items():
+        if not category.startswith('_'):
+            for name in names:
+                key = brand_key(name)
+                brands.setdefault(key, category)
+                brands.setdefault(key.replace(' ', ''), category)  # 'HUNGER STATION' and 'HUNGERSTATION' both find it
+    return brands
+
+
+BRANDS = _load_brands()
+FEES = 'Fees & interest'
+
+
+def brand_category(merchant):
+    """The merchants.json category of the longest brand the merchant name starts with ('STARBUCKS OLAYA 12' → Food), or None.
+    Dict lookups only: thousands of names cost nothing per transaction."""
+    words = brand_key(merchant).split()
+    while words and words[0] in NOISE:
+        words = words[1:]
+    for n in range(min(len(words), 5), 0, -1):
+        head = words[:n]
+        found = BRANDS.get(' '.join(head)) or BRANDS.get(''.join(head))
+        if found:
+            return found
+    return None
+
+
 def categorize(merchant, body, compiled, default='Uncategorized'):
-    """First category whose keyword appears in the merchant (preferred) or the SMS text."""
-    for text in (merchant.lower(), body.lower()):
-        for category, pattern in compiled:
-            if pattern.search(text):
-                return category
+    """A fee or interest charge first (its SMS often names a shop: 'forex markup ... for txn at AMAZON'), then
+    rules.json keywords in the merchant, the brand list (data/merchants.json) on the merchant, and rules.json
+    keywords anywhere in the SMS text."""
+    m, b = merchant.lower(), body.lower()
+    for category, pattern in compiled:
+        if category == FEES and pattern.search(b):
+            return FEES
+    for category, pattern in compiled:
+        if pattern.search(m):
+            return category
+    if found := merchant and brand_category(merchant):
+        return found
+    for category, pattern in compiled:
+        if pattern.search(b):
+            return category
     return default
