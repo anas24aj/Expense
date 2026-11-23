@@ -83,7 +83,8 @@ const dayOf = (v: string) => Math.min(31, Math.max(0, Math.round(Number(v) || 0)
 export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boolean; onClose: () => void }) {
   const hh = useApi<HouseholdFull>('/households/current');
   const [f, setF] = useState(() => ({ name: a.name, institution: a.institution, last4: a.last4 || '', country: countryOf(a), owner: a.owner_member_id || '',
-    limit: a.credit_limit ? String(major(a.credit_limit)) : '', statement_day: a.statement_day ? String(a.statement_day) : '', due_day: a.due_day ? String(a.due_day) : '' }));
+    limit: a.credit_limit ? String(major(a.credit_limit)) : '', statement_day: a.statement_day ? String(a.statement_day) : '', due_day: a.due_day ? String(a.due_day) : '',
+    stmt_due: a.statement_due ? String(major(a.statement_due)) : '', min_due: a.min_due ? String(major(a.min_due)) : '', due_on: a.statement_due_on || '' }));
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   const save = useWrite<Record<string, unknown>>('PATCH', `/accounts/${a.id}`);
   const nav = useNavigate();
@@ -92,7 +93,9 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
   const submit = async () => {
     try {
       await save.mutateAsync({ name: f.name, institution: f.institution, last4: f.last4, country: f.country, owner_member_id: f.owner || null,
-        statement_day: dayOf(f.statement_day), due_day: dayOf(f.due_day), ...(card ? { credit_limit_minor: toMinor(Number(f.limit) || 0, a.currency) } : {}) });
+        statement_day: dayOf(f.statement_day), due_day: dayOf(f.due_day), ...(card ? { credit_limit_minor: toMinor(Number(f.limit) || 0, a.currency),
+          statement_due_minor: f.stmt_due ? toMinor(Number(f.stmt_due), a.currency) : null, min_due_minor: f.min_due ? toMinor(Number(f.min_due), a.currency) : null,
+          statement_due_on: f.due_on || null } : {}) });
       toast('Saved'); onClose();
     } catch { /* shown below */ }
   };
@@ -112,6 +115,11 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
           <Field label="Statement day"><input className="input" inputMode="numeric" maxLength={2} value={f.statement_day} onChange={e => set('statement_day')(e.target.value.replace(/\D/g, ''))} placeholder="—" /></Field>
           <Field label="Due day"><input className="input" inputMode="numeric" maxLength={2} value={f.due_day} onChange={e => set('due_day')(e.target.value.replace(/\D/g, ''))} placeholder="—" /></Field>
         </div>
+        {card && <div className="grid-2">
+          <Field label="Statement total due"><input className="input" inputMode="decimal" value={f.stmt_due} onChange={e => set('stmt_due')(e.target.value.replace(/[^\d.]/g, ''))} placeholder="—" /></Field>
+          <Field label="Minimum due"><input className="input" inputMode="decimal" value={f.min_due} onChange={e => set('min_due')(e.target.value.replace(/[^\d.]/g, ''))} placeholder="—" /></Field>
+        </div>}
+        {card && <Field label="Statement due by"><input className="input" type="date" value={f.due_on} onChange={e => set('due_on')(e.target.value)} /></Field>}
         <Field label="Owner">
           <select className="input" value={f.owner} onChange={e => set('owner')(e.target.value)}>
             <option value="">Nobody in particular</option>

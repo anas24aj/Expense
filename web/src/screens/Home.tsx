@@ -49,7 +49,7 @@ export default function HomePage() {
   const busy = q.isLoading || nw.isLoading || accounts.isLoading || stmts.isLoading || settings.isLoading;
   return (
     <Page title="Home" subtitle={q.data ? monthLabel(q.data.month.month, true) : ' '}
-      trail={<Link to="/more/profile" className="icon-btn" aria-label="Profile"><Icon name="person" /></Link>}>
+      trail={<Link to="/more" className="icon-btn" aria-label="More: people, trips, settings"><Icon name="person" /></Link>}>
       {busy ? <PageSkeleton /> : q.error || nw.error ? <ErrorCard error={q.error || nw.error} retry={() => { q.refetch(); nw.refetch(); }} />
         : <HomeBody h={q.data!} n={nw.data!} setup={setup} payday={daysTo(settings.data?.salary_day ?? null)} trip={trip} hasAccounts={!!accounts.data?.items.length} payoff={payoff.data} plan={plan.data} />}
     </Page>
@@ -80,7 +80,7 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
     <div className="grid-desktop stack">
       {setup && <div className="span-2"><GetStarted steps={setup} /></div>}
 
-      <Link to="/accounts" className="glass hero span-2" style={{ color: 'inherit' }} aria-label="Net worth, open accounts">
+      <Link to="/wealth" className="glass hero span-2" style={{ color: 'inherit' }} aria-label="Net worth, open assets and liabilities">
         <div className="between"><span className="hero-label">Net worth</span><Icon name="chevR" className="chev" size={14} /></div>
         <div className={`hero-amount ${n.net.minor < 0 ? 'neg' : ''}`}>{fmt(n.net)}</div>
         <div className="grid-2" style={{ marginTop: 10 }}>
@@ -155,7 +155,7 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
       ))}</List>}
 
       <nav className="tiles span-2" aria-label="Go to">
-        <Shortcut to="/accounts" icon="bank" color="#0a84ff" title="Accounts" sub="India · Saudi" />
+        <Shortcut to="/more" icon="more" color="#8e8e93" title="More" sub="Settings, import, household" />
         <Shortcut to="/people" icon="people" color="#ff9f0a" title="People" sub="Who owes whom" />
         <Shortcut to={trip ? `/trips/${trip.id}` : '/trips'} icon="plane" color="#32ade6" title={trip ? trip.city : 'Trips'} sub={trip ? 'On a trip now' : 'Work & personal'} />
         <Shortcut to="/activity/review" icon="tag" color={h.review_count ? '#ff9f0a' : '#30d158'} title={h.review_count ? `${h.review_count.toLocaleString()} to sort` : 'All sorted'} sub="Group by shop, one tap" />

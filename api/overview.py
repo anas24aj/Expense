@@ -106,12 +106,12 @@ def _plan_month(req, ctx, accts, m, look, india_cash, people):
     loan_ids = {l['id'] for l in ctx['loans']}
     lines = []
 
-    def line(kind, name, minor, cur, day, account_id, link, paid=False, counted=True, country=None):
+    def line(kind, name, minor, cur, day, account_id, link, paid=False, counted=True, country=None, note=None):
         payer = by_id.get(account_id) if account_id in by_id and by_id[account_id]['kind'] in CASH_KINDS else _main_bank(accts, cur)
         lines.append({'kind': kind, 'name': name, 'amount': _M(minor, cur), 'base': _M(_conv(ctx, minor, cur), base), 'day': day,
                       'country': country or country_of('', cur), 'account_id': payer and payer['id'],
                       'account_name': payer and ledger.bank_label({'account_institution': payer['institution'], 'account_last4': payer['last4'], 'account_name': payer['name']}),
-                      'paid': paid, 'counted': counted and not paid, 'link': link})
+                      'paid': paid, 'counted': counted and not paid, 'link': link, 'note': note})
 
     funded = {f['commitment_id'] for f in ctx['funds'] if f['commitment_id']}
     for c in ctx['commits']:
@@ -140,10 +140,17 @@ def _plan_month(req, ctx, accts, m, look, india_cash, people):
         if a['kind'] != 'credit_card':
             continue
         owed = max(0, -((a['balance'] or {}).get('minor') or 0)) if m == today[:7] else round(_card_spend(ctx, a['id'], m))
+        day = f"{m}-{min(28, a['due_day']):02d}" if a['due_day'] else None
+        note = None
+        if m == today[:7] and a['statement_due'] and a['statement_due_on'] and a['statement_due_on'] >= today:
+            # the statement says what is due and by when; what was paid since takes the balance below it
+            owed, day = min(owed, a['statement_due']['minor']), a['statement_due_on']
+            if a['min_due']:
+                note = (f"Minimum due {engine.fmt(a['min_due']['minor'], a['currency'])}. Paying only the minimum leaves the rest "
+                        'charging interest (about 3% a month): pay it in full.')
         if owed:
-            day = f"{m}-{min(28, a['due_day']):02d}" if a['due_day'] else None
             line('card', f"{a['institution'] or a['name']} card{' ··' + a['last4'] if a['last4'] else ''}", owed, a['currency'], day, None,
-                 f"/accounts/{a['id']}", country=country_of(a['country'], a['currency']))
+                 f"/accounts/{a['id']}", country=country_of(a['country'], a['currency']), note=note)
     for l in ctx['liabs']:  # a card tracked only as a liability (no account)
         if l['kind'] == 'credit_card' and not l['closed_at'] and l['outstanding_minor'] > 0 and l['account_id'] not in by_id and m == today[:7]:
             line('card', l['name'], l['outstanding_minor'], l['currency'], f"{m}-{min(28, l['due_day'] or 28):02d}", None, '/plan#debts')
@@ -396,5 +403,6 @@ def card(req):
     owed = None if a['balance'] is None else max(0, -a['balance']['minor'])
     rate, assumed = insights.card_rate(a['rate_bp'], cur)
     return {'id': aid, 'currency': cur, 'owed': None if owed is None else _M(owed, cur), 'limit': a['credit_limit'], 'used_pct': a['used_pct'],
-            'due_day': a['due_day'] or None, 'next_due': due, 'statement': statement, 'months': months,
+            'due_day': a['due_day'] or None, 'next_due': a['statement_due_on'] or due, 'statement': statement, 'months': months,
+            'statement_due': a['statement_due'], 'min_due': a['min_due'], 'statement_due_on': a['statement_due_on'],
             'rate_bp': rate, 'rate_assumed': assumed, 'interest_month': None if owed is None else _M(owed * rate / 120000, cur)}

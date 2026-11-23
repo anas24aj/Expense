@@ -23,6 +23,7 @@ export interface Account {
   id: string; kind: AccountKind; institution: string; name: string; currency: Currency; country: string; last4: string | null;
   owner_member_id: string | null; visibility: 'household' | 'private'; balance: Money | null; balance_at: string | null;
   credit_limit: Money | null; used_pct: number | null; due_day: number | null; statement_day: number | null; rate_bp: number | null; archived: boolean;
+  statement_due?: Money | null; min_due?: Money | null; statement_due_on?: string | null; // a card's last statement, as the bank states it
 }
 
 export type Purpose = 'spend' | 'fee' | 'transfer' | 'income' | 'support' | 'lend' | 'repaid' | 'borrow' | 'repay'
@@ -163,7 +164,7 @@ export interface NetCountry { code: 'SA' | 'IN' | 'OTHER'; currency: Currency; c
 export interface NetWorth { currency: Currency; fx: { SAR_INR: number; at: string | null }; assets: Money; liabilities: Money; net: Money; countries: NetCountry[];
   losses: { month: Money; year: Money; loan_interest_month: Money; items: Txn[] } }
 export interface PlanLine { kind: 'commitment' | 'emi' | 'card' | 'person' | 'fund'; name: string; amount: Money; base: Money; day: string | null; country: string;
-  account_id: string | null; account_name: string | null; paid: boolean; counted: boolean; link: string }
+  account_id: string | null; account_name: string | null; paid: boolean; counted: boolean; link: string; note?: string | null }
 export interface PlanMonth { month: string; income: Money; out: Money; surplus: Money; short: Money | null; lines: PlanLine[];
   pay_from: { account_id: string; account_name: string; currency: Currency; total: Money; items: { name: string; amount: Money; day: string | null }[] }[];
   move_to_india: { amount: Money; inr: Money; by: string | null; from: string | null; to: string | null } | null; india: { due: Money; cash: Money } }
@@ -179,5 +180,6 @@ export interface CardView {
   id: string; currency: Currency; owed: Money | null; limit: Money | null; used_pct: number | null; due_day: number | null; next_due: string | null;
   statement: { from: string; to: string; billed: Money; paid: Money; left: Money } | null;
   months: { month: string; spent: Money; paid: Money; lost: Money }[]; rate_bp: number; rate_assumed: boolean; interest_month: Money | null;
+  statement_due: Money | null; min_due: Money | null; statement_due_on: string | null;
 }
 export interface MerchantGroup { merchant: string; count: number; direction: 'debit' | 'credit'; totals: Money[]; last_day: string; category: string | null; account_name: string; txn_ids: string[] }

@@ -287,14 +287,17 @@ function CardDetails({ id }: { id: string }) {
       <Section title="This card">
         <dl className="kv glass card">
           <dt>Owed now</dt><dd className={c.owed?.minor ? 'neg' : ''}>{c.owed ? <Money m={c.owed} /> : unknown}</dd>
-          <dt>Last statement</dt><dd>{c.statement ? <>{shortDate(c.statement.to)}: <Money m={c.statement.billed} /></> : unknown}</dd>
+          <dt>Billed last cycle</dt><dd>{c.statement ? <>{shortDate(c.statement.to)}: <Money m={c.statement.billed} /></> : unknown}</dd>
           <dt>Paid since</dt><dd>{c.statement ? <><Money m={c.statement.paid} />{c.statement.left.minor ? <span className="neg"> · <Money m={c.statement.left} /> left</span> : ' · paid in full'}</> : unknown}</dd>
-          <dt>Due</dt><dd>{c.next_due ? shortDate(c.next_due) : unknown}</dd>
+          <dt>Statement due</dt><dd>{c.statement_due ? <Money m={c.statement_due} /> : unknown}</dd>
+          <dt>Minimum due</dt><dd>{c.min_due ? <Money m={c.min_due} /> : unknown}</dd>
+          <dt>Due by</dt><dd>{c.next_due ? shortDate(c.next_due) : unknown}</dd>
           <dt>Limit used</dt><dd>{c.limit && c.used_pct !== null ? <>{c.used_pct}% of <Money m={c.limit} /></> : unknown}</dd>
           <dt>Interest rate</dt><dd>{(c.rate_bp / 100).toFixed(0)}% a year{c.rate_assumed ? ' (assumed)' : ''}</dd>
           <dt>Interest if unpaid</dt><dd className="neg">{c.interest_month ? <><Money m={c.interest_month} />/mo</> : unknown}</dd>
         </dl>
-        {!c.statement && <p className="footnote">Set the statement and due day under Edit to see the statement and the due date.</p>}
+        {c.min_due && <p className="footnote warn">Paying only the minimum leaves the rest charging interest every month. Pay the statement total.</p>}
+        {(!c.statement || !c.statement_due) && <p className="footnote">Fill the statement day, the statement total and minimum due under Edit to see them here.</p>}
       </Section>
       <Section title="Spent on this card, 6 months">
         <div className="glass card stack-sm">

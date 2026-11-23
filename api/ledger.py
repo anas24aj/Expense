@@ -105,7 +105,9 @@ def account_view(hh, a):
     return {'id': a['id'], 'kind': a['kind'], 'institution': a['institution'], 'name': a['name'], 'currency': a['currency'], 'country': a['country'],
             'last4': a['last4'], 'owner_member_id': a['owner_member_id'], 'visibility': a['visibility'],
             'balance': valid.money(bal, a['currency']), 'balance_at': at, 'credit_limit': valid.money(limit, a['currency']), 'used_pct': used,
-            'due_day': a['due_day'], 'statement_day': a['statement_day'], 'rate_bp': a['rate_bp'], 'archived': bool(a['archived_at'])}
+            'due_day': a['due_day'], 'statement_day': a['statement_day'], 'rate_bp': a['rate_bp'], 'archived': bool(a['archived_at']),
+            'statement_due': valid.money(a.get('statement_due_minor'), a['currency']), 'min_due': valid.money(a.get('min_due_minor'), a['currency']),
+            'statement_due_on': a.get('statement_due_on') or None}
 
 
 def account_rows(hh, member_id, archived=False):
@@ -150,6 +152,11 @@ def _account_fields(req, b, partial):
     for k, lo, hi in (('due_day', 0, 31), ('statement_day', 0, 31), ('rate_bp', 0, 100000)):
         if k in b:
             cols[k] = valid.integer(b[k], k, lo, hi)
+    for k in ('statement_due_minor', 'min_due_minor'):  # null clears it
+        if k in b:
+            cols[k] = None if b[k] is None else valid.minor(b[k], k)
+    if 'statement_due_on' in b:
+        cols['statement_due_on'] = valid.day(b['statement_due_on'], 'statement_due_on', required=False) or None
     if 'opening_as_of' in b:
         cols['opening_as_of'] = valid.day(b['opening_as_of'], 'opening_as_of', required=False)
     if 'owner_member_id' in b:

@@ -142,6 +142,23 @@ class CoreFeaturesTest(test_v3_plan.PlanTest):
         self.assertEqual((b['owed'], b['statement'], b['next_due'], b['limit']), (None, None, None, None))
         self.assertEqual(self.call('GET', f'/api/insights/card/{self.bank}')[0], 404)
 
+    def test_statement_due_drives_this_months_card_bill(self):
+        card = self.acct('credit_card', 'SBI', 'INR', 'IN', -200000_00, credit_limit_minor=320000_00)
+        due_on = engine.add_months(self.today, 1)[:8] + '09'
+        self.ok('PATCH', f'/accounts/{card}', {'statement_due_minor': 166569_00, 'min_due_minor': 44676_00, 'statement_due_on': due_on})
+        a = next(x for x in self.ok('GET', '/accounts')['items'] if x['id'] == card)
+        self.assertEqual((a['statement_due'], a['min_due'], a['statement_due_on']), (M(166569_00, 'INR'), M(44676_00, 'INR'), due_on))
+        line = next(x for x in self.ok('GET', '/insights/plan')['months'][0]['lines'] if x['kind'] == 'card')
+        self.assertEqual((line['amount'], line['day']), (M(166569_00, 'INR'), due_on))  # the statement total, not all 2,00,000 owed
+        self.assertIn('Minimum due ₹', line['note'].replace('INR ', '₹'))
+        self.assertIn('interest', line['note'])
+        c = self.ok('GET', f'/insights/card/{card}')
+        self.assertEqual((c['statement_due'], c['min_due'], c['next_due'], c['used_pct']), (M(166569_00, 'INR'), M(44676_00, 'INR'), due_on, 62))
+        self.ok('PATCH', f'/accounts/{card}', {'statement_due_minor': None})  # cleared: back to the full amount owed
+        line = next(x for x in self.ok('GET', '/insights/plan')['months'][0]['lines'] if x['kind'] == 'card')
+        self.assertEqual((line['amount'], line['note']), (M(200000_00, 'INR'), None))
+        self.assertEqual(self.call('PATCH', f'/api/accounts/{card}', {'statement_due_on': 'soon'})[0], 400)
+
     def test_card_due_alert(self):
         due = int(self.today[8:10])
         if due > 28:

@@ -12,18 +12,19 @@ import PlanPage from './screens/Plan';
 import MoneyPage from './screens/Money';
 import MonthPage, { CategoryMonthPage, PayoffPage } from './screens/Month';
 import RecurringPage from './screens/Recurring';
+import WealthPage from './screens/Wealth';
 import { TripPage, TripsPage } from './screens/Trips';
 import { AccountPage, AccountsPage, CoveragePage } from './screens/Accounts';
 import { AssetPage, ClaudePage, DevicesPage, HouseholdPage, ImportPage, MorePage, ProfilePage, SettingsPage } from './screens/More';
 
-// Five tabs (iOS and Material guidance). What you own and owe, the month and the debt-free plan open from Home; people,
-// trips and setup from Home and More.
+// Five tabs (iOS and Material guidance): Home, Activity, Recurring, Plan and Wealth (assets & liabilities). People, trips,
+// More and settings open from Home (its tiles and the top-right profile button).
 const TABS = [
-  { to: '/', label: 'Home', icon: 'home', also: ['/accounts', '/assets', '/money'] },
+  { to: '/', label: 'Home', icon: 'home', also: ['/more', '/people', '/trips'] },
   { to: '/activity', label: 'Activity', icon: 'activity', also: ['/month'] },
-  { to: '/plan', label: 'Plan', icon: 'plan', also: ['/payoff'] },
   { to: '/recurring', label: 'Recurring', icon: 'repeat', also: [] as string[] },
-  { to: '/more', label: 'More', icon: 'more', also: ['/trips', '/people'] },
+  { to: '/plan', label: 'Plan', icon: 'plan', also: ['/payoff'] },
+  { to: '/wealth', label: 'Wealth', icon: 'chart', also: ['/accounts', '/assets', '/money'] },
 ];
 const tabOf = (path: string) => Math.max(0, TABS.findIndex((t, i) => (i === 0 ? path === '/' : [t.to, ...t.also].some(p => path.startsWith(p)))));
 
@@ -107,6 +108,7 @@ function Authed() {
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/payoff" element={<PayoffPage />} />
         <Route path="/recurring" element={<RecurringPage />} />
+        <Route path="/wealth" element={<WealthPage />} />
         <Route path="/month" element={<MonthPage />} />
         <Route path="/month/:ym" element={<MonthPage />} />
         <Route path="/month/:ym/:category" element={<CategoryMonthPage />} />
