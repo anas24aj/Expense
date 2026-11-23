@@ -2266,6 +2266,13 @@ def _app(environ, start_response):
         return redirect('/login') if method == 'GET' and path in PAGES else respond('401 Unauthorized', {'error': 'unauthorized'})
     elif method == 'GET' and path in PAGES:
         return respond('200 OK', (HERE / PAGES[path]).read_bytes(), 'text/html; charset=utf-8')
+    elif path.startswith('/api/v2/'):  # the domain model and engine (docs/brain/api.md)
+        import domain
+        db = DB(space=space)
+        try:
+            return domain.handle(db, environ, method, path, query, respond)
+        finally:
+            db.close()
     elif (method, path) == ('POST', '/api/import'):
         try:
             batch = read_import(environ)
