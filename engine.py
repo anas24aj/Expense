@@ -92,7 +92,7 @@ def your_share(c):
 def dues(c, first, last):
     """Due dates of a commitment between months first..last (inclusive)."""
     out, d, n = [], c['next_due'], 0
-    while d[:7] <= last and n < 600:
+    while d[:7] <= last and n < 600 and not (c.get('end_on') and d > c['end_on']):
         if d[:7] >= first:
             out.append(d)
         if not c['cycle_months']:
@@ -175,14 +175,14 @@ def month_view(txns, commitments, funds, loans, settings, month, today, cur, rat
             'interest_this_month': money(interest_per_month(base), cur)}
 
 
-def debt_free(loans, extra, today):
-    """Avalanche (highest rate first) with `extra` a month on top of the EMIs. {month, months, interest}:
+def debt_free(loans, extra, today, strategy='avalanche'):
+    """Avalanche (highest rate first; or snowball) with `extra` a month on top of the EMIs. {month, months, interest}:
     month None = never at these payments; months 0 = no debt."""
     import server
     live = [l for l in loans if l['balance_now'] > 0]
     if not live:
         return {'month': today[:7], 'months': 0, 'interest': 0}
-    p = server.plan(live, max(0, int(extra)), 'avalanche')
+    p = server.plan(live, max(0, int(extra)), strategy)
     return {'month': add_months(today[:7], p['months']) if p['months'] is not None else None, 'months': p['months'], 'interest': p['interest']}
 
 
@@ -230,7 +230,9 @@ def lookahead(txns, commitments, funds, loans, settings, today, cur, rate, month
                     'everyday': money(everyday, cur), 'free': money(free, cur), 'warnings': warnings})
     frees = [r['free']['minor'] for r in out]
     extra = max(0, sum(frees) / len(frees)) if frees else 0
-    df = debt_free(base, extra, today)
+    if settings.get('extra_to_debt') is not None:  # the extra a month you chose, instead of the average free money
+        extra = conv(settings['extra_to_debt'], settings.get('extra_currency') or cur, cur, rate)
+    df = debt_free(base, extra, today, settings.get('debt_strategy') or 'avalanche')
     return {'months': out, 'debt_free': {'month': df['month'], 'months': df['months']},
             'interest_per_month': money(interest_per_month(base), cur), 'extra_to_debt': money(extra, cur)}
 
@@ -239,26 +241,33 @@ def fmt(minor, cur):
     return f'{cur} {minor / 100:,.0f}'
 
 
-def what_if(loans, extra, month_free, amount, cur, pay, today):
-    """Spend `amount` now: from cash (that money no longer goes to the highest-rate debt) or on a card (a new card
-    debt at the highest card rate you have, else 36%). Reruns the debt-free simulation."""
+def what_if(loans, extra, month_free, amount, cur, pay, today, months=12, rate_bp=0):
+    """Spend `amount` now: from cash (that money no longer goes to the highest-rate debt), on a card (a new card
+    debt at the highest card rate you have, else 36%) or on an EMI plan (`months` instalments at `rate_bp`, 0 = no-cost
+    EMI; the instalment comes out of each month's free money). Reruns the debt-free simulation."""
     before = debt_free(loans, extra, today)
     live = [l for l in loans if l['balance_now'] > 0]
     if pay == 'card':
         rate = max([l['rate_bp'] for l in live if l['kind'] == 'card'] or [CARD_RATE_BP])
         after_loans = live + [{'id': 'what-if', 'name': 'this purchase', 'kind': 'card', 'balance_now': amount, 'rate_bp': rate, 'emi_minor': 0, 'currency': cur}]
         free_after = month_free
+    elif pay == 'emi':
+        n, r = max(1, int(months)), rate_bp / 120000
+        emi = amount / n if not r else amount * r / (1 - (1 + r) ** -n)
+        after_loans = live + [{'id': 'what-if', 'name': 'this purchase', 'kind': 'loan', 'balance_now': amount, 'rate_bp': rate_bp,
+                               'emi_minor': round(emi), 'currency': cur}]
+        free_after = month_free - emi
     else:
         top = max(live, key=lambda l: l['rate_bp'], default=None)
         after_loans = [{**l, 'balance_now': l['balance_now'] + amount} if l is top else l for l in live]
         free_after = month_free - amount
-    after = debt_free(after_loans, extra, today) if live or pay == 'card' else before
+    after = debt_free(after_loans, extra, today) if live or pay in ('card', 'emi') else before
     never = after['months'] is None and before['months'] is not None
     delay = None if never else (after['months'] or 0) - (before['months'] or 0) if before['months'] is not None else 0
     extra_interest = max(0, after['interest'] - before['interest'])
     if never or free_after < 0 and (delay or 0) > 3:
         verdict = 'no'
-    elif free_after < 0 or (delay or 0) > 1 or (pay == 'card' and extra_interest > amount / 20):
+    elif free_after < 0 or (delay or 0) > 1 or (pay in ('card', 'emi') and extra_interest > amount / 20):
         verdict = 'tight'
     else:
         verdict = 'ok'

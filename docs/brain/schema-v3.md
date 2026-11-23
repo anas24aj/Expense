@@ -69,6 +69,8 @@ claims(id, household_id, member_id, name, status, submitted_on, expected_minor)
 claim_items(claim_id, txn_id)
 contacts(id, household_id, name, phone, email, linked_user_id NULL)          -- friends outside the household
 settings(household_id, key, value)
+trips(id, household_id, name, city, country, start_on, end_on, kind business|personal)   -- 004_trips.sql
+trip_txns(trip_id, txn_id, status personal|missed|claimed|unreviewed, set_by)
 ```
 
 ## Why this fixes the complaints

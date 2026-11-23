@@ -132,3 +132,50 @@ Additions and decisions beyond the tables above; the UI may rely on them.
   `ledger.visible_txns(hh, member_id, where='', order=..., limit=None, **params)` + `ledger.txn_views(hh, rows)` → Txn,
   `ledger.get_txn(hh, member_id, id)`, `ledger.account_views(hh, member_id)`, `households.people(hh, db)`,
   `households.balances(hh)`, `households.person_of(req, {kind,id})`, `auth.mcp_user(key, db=None)`, `api/valid.py` checks.
+
+## Implementation notes (plan, insights, MCP)
+Additions and decisions beyond the tables above (all additive unless marked). Math stays in `engine.py`; `api/insights.load()`
+turns v3 rows into engine shapes once per request.
+- **Liability** adds `opening_balance, as_of, member_id, match_pattern, closed, payments: [{txn_id, day, amount, interest, principal}]`.
+  Outstanding = opening − principal of payments after `as_of` (payments: `txn_meta.liability_id`, else debit merchant text contains
+  `match_pattern`). Each payment pays `outstanding × rate/12` interest first; **that interest counts as spending** (purpose `fee`,
+  category *Fees & interest*) in insights. A `credit_card`/`bnpl` with `account_id` follows that account's debits/credits instead.
+  List adds `emi_total`, `outstanding_total` (base currency). PATCH `{closed: bool}`; DELETE removes it (and unlinks txn_meta).
+  `principal_minor` defaults opening; `opening_balance_minor` defaults principal; `as_of` defaults today.
+- **Commitment** adds `my_share` (amount − shares); list adds `monthly_total` (my share / cycle, base). DELETE = soft (`ended_at`).
+  Status comes from matched debits (`txn_meta.commitment_id` or `match_pattern`, up to 15 days early) and from
+  `POST /paid` marks without a sharer payer (a mark counts for the cycle that was due). `POST /paid` with a `payer` contact
+  that isn't a sharer → 400; a member payer who isn't a sharer counts as paying the whole thing. `paid_this_cycle`: a sharer's
+  mark since the cycle start, or a credit from that person ≥ 90% of their share. Sharers' shares are excluded from my spending.
+- **Fund**: commitment funds (cycle > 1) are created/updated/closed automatically; target = my share, `due_on` follows the
+  commitment's next due, `saved` counts only moves in the current cycle. `POST /move` accepts negative amounts, optional
+  `txn_id`, `on_day`. List adds `monthly_total`. DELETE = soft (`closed_at`).
+- **Asset**: `paid` = `details.paid_cash_minor` (paid before tracking) + debits with `txn_meta.asset_id` or `match_pattern`
+  + paid milestones; `financed` = linked liability principal; `remaining` = cost − paid − financed. Milestone:
+  `{id, name, due_on, amount, paid, paid_on, paid_txn_id}`; `next_milestone` = first unpaid. Running costs = average of the last
+  3 full months of `/costs`-tagged txns; `my_monthly_cost` subtracts sharers' `share_pct` per type (`'*'` = all types) and adds
+  the EMI. Sharers' parts of tagged costs are excluded from my spending. Adds `value_as_of, match_pattern`. DELETE = soft (`sold_at`).
+- **Claim** adds `suggestion: {txn_id, day, amount}|null` (an unlinked credit for the outstanding amount ±1%, within 90 days of
+  the last item) and `reimbursement_txn_ids`. `POST /claims` accepts `txn_ids` (status defaults `submitted` with items, else
+  `draft`). `POST /paid` without `txn_id` uses the suggestion, else just marks it paid. Expected = sum of items (no stored
+  expected). DELETE removes the claim and re-classifies its items.
+- **Settings** PUT accepts `salary_minor` + `salary_currency`, or `salary` as Money|null.
+- **Insights**: month adds `other_out` (EMIs, lending, assets, saving). Lookahead adds `extra_to_debt`; `debt_strategy` and
+  `extra_to_debt_minor` from settings drive the debt-free simulation (default: average free money, avalanche). Whatif `pay=emi`
+  takes `months` (default 12) and `rate_bp` (default 0 = no-cost EMI). Advice adds `note` (guidance, not financial advice);
+  emergency cushion = balances of bank/wallet/cash accounts. Home `alerts[].link` are UI paths (`/plan/commitments/{id}`,
+  `/plan/claims/{id}`, `/plan/lookahead`). `review_count`: no meaning yet, or rule-set with confidence < 0.6.
+- **FX**: one `fx_rates` row per day (SAR→INR) from `server.inr_per_sar()`, else the last stored, else 24.9. `engine.conv`
+  only knows SAR/INR/USD: any other currency converts as if INR (a known limit; matters for AED/GBP trips).
+- Other members' `private` accounts are left out of every plan/insights number.
+- **Trips**: Trip adds `currency` (from `country`: ISO-2 or name, e.g. `IN`/`India`; else base); `totals` are Money in the trip
+  currency and `totals_base` the same keys in base currency. The window match is computed (not stored); `trip_txns` holds explicit
+  tags (any txn can be tagged in). Being in a claim always wins (`claimed`). `missed` and tagged `claimed` expenses are excluded
+  from spending but are not added to `owed_to_you.claims` (only real claims are). `POST /trips/{id}/claim` → 201 Claim; 400 when
+  nothing is left. Migration: `004_trips.sql`.
+- **Claim import** → `{claim: Claim|null, matched: [{row, day, description, amount, claimed, txn_id}], unmatched: [same without
+  txn_id]}`; 201 when a claim was made, else 200; 422 unreadable/no header. Also takes `.xls` and `.csv`. Header row found in the
+  first 20 rows by words (date/day, desc/detail/merchant…, curr/ccy, amount/total/cost…, claim/approved/reimburs); the claimed
+  column is informational. With `trip_id` only that trip's expenses are candidates; matched txns already in a claim are skipped.
+- **MCP** tools call the same route handlers in-process as the key's member (`admin` routes still checked);
+  `search_transactions` = `GET /transactions?q=`.
