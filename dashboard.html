@@ -1874,49 +1874,55 @@ function cuts() {
     .map(([c, v]) => ({ c, usual: Math.round(v / 100) * 100, cut: Math.round(v * .25 / 5000) * 5000 })).filter(x => x.cut > 0);
 }
 function afford(q) {
+  // Savings are never used: they're fixed. Only current accounts / debit cards, credit cards, Tabby and Tamara, or saving up from free money.
   const M = state.money, sp = split(), sal = (state.settings?.salary?.amount || 0) * 100;
   const price = Math.round(q.price * 100), cur = q.cur;
   const inSar = cur === 'SAR' ? price : cur === 'USD' ? Math.round(price * 3.75) : sarOf(price), inInr = toInr(price, cur);
   const free = sal ? Math.max(0, sal - (sp.emis + sp.subs + sp.living + sp.savings + othersTotal(sp)) * 100) : Math.max(0, (monthly()?.spare || 0));
-  const C = cuts(), cutTotal = C.reduce((a, x) => a + x.cut, 0), D = dti();
-  // Pay now: an account holding enough (its own currency), and what's left in savings for emergencies.
+  const C = cuts(), cutTotal = C.reduce((a, x) => a + x.cut, 0), D = dti(), avg = monthly();
   const inCurOf = c => c === cur ? price : c === 'SAR' ? inSar : c === 'INR' ? inInr : Math.round(inSar / 3.75);
   const fresh = b => dayNum(today()) - dayNum(b.day) <= 45;  // an old balance isn't what's there today
-  const pots = [...(state.bal || []).filter(b => b.kind === 'balance' && b.account_kind !== 'card' && fresh(b)),  // bank accounts and debit cards (never a credit card's limit), and your cash savings
-    ...M.holdings.filter(h => h.kind === 'saving' && ['SAR', 'INR'].includes(h.currency)).map(h => ({ account: h.name, amount: h.balance_minor / 100, currency: h.currency, day: h.as_of, saving: true }))];
-  const accts = pots.map(b => ({ ...b, need: inCurOf(b.currency), has: Math.round(b.amount * 100) }))
-    .sort((a, b) => (b.has >= b.need) - (a.has >= a.need) || !!a.saving - !!b.saving || b.has / b.need - a.has / a.need);  // an everyday account before savings
-  const fits = accts.filter(a => a.has >= a.need);
-  const saves = M.holdings.filter(h => h.kind === 'saving'), saved = saves.reduce((a, h) => a + worth(h), 0);
-  const avg = monthly(), need = (avg ? toInr(avg.spent, 'SAR') : toInr(sp.living * 100, 'SAR')) + M.holdings.filter(h => isDebt(h) && h.balance_now > 0).reduce((a, h) => a + toInr(h.emi_minor, h.currency), 0);
-  const fromSavings = !fits.length || fits[0].saving;  // paid from an everyday account, the savings (and the buffer) stay as they are
-  const bufNow = need ? saved / need : 0, bufAfter = need ? (fromSavings ? Math.max(0, saved - inInr) : saved) / need : 0;
-  // What the same money would do against your costliest debt (from what ₹1 lakh would save on each loan).
-  const best = Object.entries(M.prepay || {}).map(([id, v]) => ({ h: M.holdings.find(h => h.id === +id), ...v })).filter(x => x.h && x.interest > 0).sort((a, b) => b.interest - a.interest)[0];
-  const k = best ? inInr / (M.lump * 100) : 0;
-  const opp = best && { name: best.h.name, interest: Math.round(best.interest * k), months: Math.round(best.months * k) };
+  // 1. Current accounts and debit cards: their latest balance; enough should stay for a month's usual spending.
+  const accts = (state.bal || []).filter(b => b.kind === 'balance' && b.account_kind !== 'card' && fresh(b))
+    .map(b => ({ ...b, need: inCurOf(b.currency), has: Math.round(b.amount * 100) })).sort((a, b) => b.has / b.need - a.has / a.need);
+  const acct = accts[0], usual = avg ? avg.spent : 0, keepIn = a => a.currency === 'SAR' ? usual : a.currency === 'INR' ? toInr(usual, 'SAR') : Math.round(usual / 3.75);
+  // 2. Credit cards: room = limit − owed (Debt tab), or the available limit its SMS state.
+  const cards = [...M.holdings.filter(h => h.kind === 'card' && h.limit_minor > 0).map(h => ({ name: h.name, currency: h.currency, room: h.limit_minor - Math.max(0, h.balance_now), after: used(h, inCurOf(h.currency)) })),
+    ...(state.bal || []).filter(b => b.account_kind === 'card' && fresh(b) && !M.holdings.some(h => h.kind === 'card' && h.limit_minor > 0 && b.account.includes(h.pattern || '@@')))
+      .map(b => ({ name: b.account, currency: b.currency, room: Math.round(b.amount * 100), after: null }))]
+    .map(c => ({ ...c, need: inCurOf(c.currency) })).sort((a, b) => (b.room - b.need) / b.need - (a.room - a.need) / a.need);
+  const card1 = cards[0];
+  // 3. Tabby / Tamara: a part today, the rest monthly, on top of the pay-later plans you already have.
+  const laterNow = M.holdings.filter(h => h.name.startsWith('Pay later') && h.balance_now > 0).reduce((a, h) => a + (h.currency === 'SAR' ? h.emi_minor : sarOf(h.emi_minor)), 0);
+  const bnpl = n => { const part = Math.ceil(inSar / n), monthly = laterNow + part, after = sal ? (D.monthly + part) / sal : null;
+    return { part, monthly, after, ok: monthly <= free && (after == null || after <= .4) ? 'good' : monthly <= free + cutTotal ? 'fair' : 'poor' }; };
+  const tabby = bnpl(4), tamara = inSar >= 200000 ? bnpl(6) : bnpl(3), tn = inSar >= 200000 ? 6 : 3;
+  const bnplLines = (x, n) => [`${esc(money(x.part))} today, then ${esc(money(x.part))} a month for ${n - 1} months.`,
+    `With your current pay-later plans that’s ${esc(money(x.monthly))} a month, ${x.monthly <= free ? 'within' : 'more than'} the ${esc(money(free))} free after your plan.`,
+    x.after == null ? '' : `Debts would take <b>${Math.round(x.after * 100)}%</b> of your salary (now ${Math.round(D.pct * 100)}%; above 40% is stretched).`];
+  // 4. Save up from free money (not from savings).
   const saveMonths = free > 0 ? Math.ceil(inSar / free) : null, saveCut = free + cutTotal > 0 ? Math.ceil(inSar / (free + cutTotal)) : null;
-  const part = Math.ceil(inSar / 4), dtiAfter = sal ? (D.monthly + part) / sal : null;
+  const best = Object.entries(M.prepay || {}).map(([id, v]) => ({ h: M.holdings.find(h => h.id === +id), ...v })).filter(x => x.h && x.interest > 0).sort((a, b) => b.interest - a.interest)[0];
+  const k = best ? inInr / (M.lump * 100) : 0, opp = best && { name: best.h.name, interest: Math.round(best.interest * k), months: Math.round(best.months * k) };
   const ways = [
-    { key: 'now', title: 'Pay now', ok: fits.length && bufAfter >= 3 ? (bufAfter >= 6 ? 'good' : 'fair') : 'poor',
-      lines: [fits.length ? `From <b>${esc(fits[0].account)}</b>: ${esc(owed(fits[0].has, fits[0].currency))} (${esc(dayLabel(fits[0].day))}), ${esc(owed(fits[0].has - fits[0].need, fits[0].currency))} left after.`
-        : accts.length ? (L => `No single account or savings has enough. Largest: ${esc(L.account)} ${esc(owed(L.has, L.currency))}.`)([...accts].sort((a, b) => b.has / b.need - a.has / a.need)[0]) : 'No account balances in your SMS yet.',
-        fromSavings ? `Safety buffer: ${bufNow.toFixed(1)} → <b>${bufAfter.toFixed(1)} months</b> of spending and EMIs (3 is the minimum, 6 comfortable).` : `Your savings stay untouched: safety buffer ${bufNow.toFixed(1)} months.`] },
+    { key: 'now', title: 'Pay from your current account', ok: !acct || acct.has < acct.need ? 'poor' : acct.has - acct.need >= keepIn(acct) ? 'good' : 'fair',
+      lines: !acct ? ['No recent balance from a current account or debit card in your SMS (last 45 days).']
+        : [`<b>${esc(acct.account)}</b>: ${esc(owed(acct.has, acct.currency))} (${esc(dayLabel(acct.day))})${acct.has >= acct.need ? `, ${esc(owed(acct.has - acct.need, acct.currency))} left after.` : ': not enough.'}`,
+          acct.has >= acct.need && usual ? (acct.has - acct.need >= keepIn(acct) ? 'Enough stays for a month of your usual spending.' : `Less than a month of your usual spending (${esc(owed(keepIn(acct), acct.currency))}) would stay.`) : ''] },
+    { key: 'card', title: 'Credit card', ok: !card1 || card1.room < card1.need || (card1.after != null && card1.after > 1) ? 'poor'
+        : free >= inSar && !(card1.after > CARD_WARN) ? 'good' : 'fair',
+      lines: !card1 ? ['No credit card limit known: add your card’s limit on the Debt tab, or its SMS show “Avl Limit”.']
+        : [...cards.map(c => `<b>${esc(c.name)}</b>: ${esc(owed(c.room, c.currency))} available${c.room < c.need ? ' (not enough)' : ''}${c.after != null && c.room >= c.need ? `, ${Math.round(c.after * 100)}% of its limit used after${c.after > CARD_WARN ? ' (above 70% lowers your credit score)' : ''}` : ''}.`),
+          free >= inSar ? 'Next month’s free money pays the bill in full: no interest.' : `The bill would be ${esc(money(inSar))} but only ${esc(money(free))} is free next month; unpaid, cards charge about 3% a month.`] },
+    { key: 'tabby', title: 'Tabby · 4 payments', ok: tabby.ok, lines: bnplLines(tabby, 4) },
+    { key: 'tamara', title: `Tamara · ${tn} payments`, ok: tamara.ok, lines: bnplLines(tamara, tn) },
     { key: 'save', title: 'Save up for it', ok: saveCut == null ? 'poor' : saveCut <= 3 ? 'good' : saveCut <= 12 ? 'fair' : 'poor',
       lines: [free ? `${esc(money(free))} a month is free after your plan: ready in <b>${plural(saveMonths, 'month')}</b> (${esc(monthName(addM(today().slice(0, 7), saveMonths), 'short'))}).` : 'Nothing is free after your plan each month.',
         C.length ? `With the cuts below (${esc(money(cutTotal))} a month): <b>${plural(saveCut, 'month')}</b>.` : ''] },
-    { key: 'card', title: 'Credit card, paid in full', ok: (lim => lim != null && lim > 1 ? 'poor' : free >= inSar ? (lim > CARD_WARN ? 'fair' : 'good') : free + cutTotal >= inSar ? 'fair' : 'poor')(
-        // the card that would be least used after it, among those with a limit set
-        M.holdings.filter(h => used(h) != null).reduce((a, h) => Math.min(a ?? Infinity, used(h, inCurOf(h.currency))), null)),
-      lines: [free >= inSar ? 'Next month’s free money covers the bill.' : `The bill is ${esc(money(inSar))}; only ${esc(money(free))} is free next month. Unpaid, cards charge about 3% a month.`,
-        ...M.holdings.filter(h => used(h) != null).map(h => { const u = used(h, inCurOf(h.currency));
-          return `${esc(h.name)}: ${Math.round(used(h) * 100)}% → <b>${Math.round(u * 100)}%</b> of its limit${u > 1 ? ' (over the limit: it would be declined)' : u > CARD_WARN ? ' (above 70%: it lowers your credit score)' : ''}.`; })] },
-    { key: 'split', title: 'Split in 4 (Tamara, Tabby)', ok: part <= free && (dtiAfter == null || dtiAfter <= .4) ? 'good' : part <= free + cutTotal ? 'fair' : 'poor',
-      lines: [`${esc(money(part))} a month for 4 months${part <= free ? ', within your free money.' : ', more than your free money.'}`,
-        dtiAfter == null ? '' : `Debts would take <b>${Math.round(dtiAfter * 100)}%</b> of your salary (now ${Math.round(D.pct * 100)}%; above 40% is stretched).`] },
   ];
-  const rank = { good: 0, fair: 1, poor: 2 }, pick = [...ways].sort((a, b) => rank[a.ok] - rank[b.ok] || ['now', 'split', 'save', 'card'].indexOf(a.key) - ['now', 'split', 'save', 'card'].indexOf(b.key))[0];
-  return { inSar, inInr, free, C, cutTotal, ways, pick, opp, bufAfter, sal };
+  const rank = { good: 0, fair: 1, poor: 2 }, order = ['now', 'card', 'tabby', 'tamara', 'save'];
+  const pick = [...ways].sort((a, b) => rank[a.ok] - rank[b.ok] || order.indexOf(a.key) - order.indexOf(b.key))[0];
+  return { inSar, inInr, free, C, cutTotal, ways, pick, opp, sal };
 }
 function buyPage(rt) {
   if (!state.money || !state.settings || !state.bal) return waitFor('Can I buy it?', [['money', loadMoney], ['settings', loadSettings], ['bal', loadBal]]);
@@ -1928,13 +1934,13 @@ function buyPage(rt) {
     '<button class="btn primary">Check</button></form></section>';
   if (!q?.price) return { title: 'Can I buy it?', sub: 'Before you spend', html: form };
   const A = afford(q), mark = { good: '✅', fair: '⚠️', poor: '❌' };
-  const verdict = A.pick.ok === 'poor' ? `Not now: every way to pay strains your money. ${A.bufAfter < 3 ? 'Paying now would leave under 3 months of safety buffer.' : ''}`
+  const verdict = A.pick.ok === 'poor' ? 'Not now: no current account, card or pay-later plan covers it comfortably. Saving up is the safe way.'
     : `Best way: <b>${esc(A.pick.title.toLowerCase())}</b>. ${A.pick.lines[0]}`;
   return { title: 'Can I buy it?', sub: q.what || 'Before you spend', html: form +
     `<section class="card"><div class="big"><span class="muted">${esc(q.what || 'This')} · ${esc(owed(Math.round(q.price * 100), q.cur))}${q.cur !== 'SAR' ? ` (${esc(money(A.inSar))})` : ''}</span><b class="${A.pick.ok === 'poor' ? 'bad' : A.pick.ok === 'fair' ? 'warn' : 'good'}">${mark[A.pick.ok]}</b></div><p>${verdict}</p></section>` +
     card('Ways to pay', 'checked against your money', A.ways.map(w => `<div class="way ${w.ok}"><b>${mark[w.ok]} ${esc(w.title)}</b>${w.lines.filter(Boolean).map(l => `<p>${l}</p>`).join('')}</div>`).join(''), '') +
     card('Where it hits', '', `<ul class="muted hits">` +
-      `<li>🛟 Safety buffer if you pay now: <b>${A.bufAfter.toFixed(1)} months</b>.</li>` +
+      '<li>🔒 Your savings aren’t used: they stay as they are.</li>' +
       (A.opp ? `<li>🏁 The same money on <b>${esc(A.opp.name)}</b> would save about <b>${rupees(A.opp.interest)}</b> interest${A.opp.months > 0 ? ` and close it about ${plural(A.opp.months, 'month')} sooner` : ''}.</li>` : '') +
       (A.sal ? `<li>💰 It is <b>${Math.round(A.inSar / A.sal * 100)}%</b> of a month’s salary.</li>` : '') + '</ul>', '') +
     card('Where to cut', A.C.length ? `${esc(money(A.cutTotal))} a month` : '', A.C.length ? A.C.map(x => rk({ icon: icon(x.c), name: x.c, sub: `usually ${esc(money(x.usual))} a month`, valueText: `−${esc(money(x.cut))}`, vsub: '25% less' })).join('') +
