@@ -31,7 +31,7 @@ export interface Txn {
   id: string; day: string; occurred_at: string; amount: Money; direction: 'debit' | 'credit'; merchant: string; category: string | null;
   purpose: Purpose; confidence: number; account_id: string | null; account_name: string | null; member_id: string | null; note: string | null;
   source: 'sms' | 'statement' | 'shortcut' | 'manual' | 'peer'; person: { kind: string; id: string; name: string } | null;
-  split_mine: Money | null; claim_id: string | null; commitment_id: string | null;
+  split_mine: Money | null; claim_id: string | null; commitment_id: string | null; liability_id?: string | null;
 }
 export interface TxnDetail extends Txn { raw: { sender: string; body: string } | null; links: { id: string; kind: string; other_txn_id: string; role: 'from' | 'to'; set_by: string }[];
   splits: { id: string; member_id: string | null; contact_id: string | null; name: string; share: Money; settled: boolean }[]; claim: { id: string; name: string; status: string } | null }
@@ -40,9 +40,10 @@ export interface ReviewTxn extends Txn { suggestions: Suggestion[] }
 export interface Category { id: string; name: string; parent: string | null; kind: 'spend' | 'income' | 'excluded'; icon: string | null }
 
 export interface Liability {
-  id: string; kind: 'loan' | 'card' | 'bnpl' | 'person'; name: string; lender: string; currency: Currency; principal: Money;
-  outstanding: Money; rate_bp: number; emi: Money; due_day: number | null; start_on: string | null; end_on: string | null;
+  id: string; kind: 'loan' | 'credit_card' | 'bnpl' | 'person' | 'other'; name: string; lender: string; currency: Currency; principal: Money;
+  opening_balance?: Money; as_of?: string | null; outstanding: Money; rate_bp: number; emi: Money; due_day: number | null; start_on: string | null; end_on: string | null;
   paid_pct: number; payoff_month: string | null; interest_month: Money; account_id: string | null; contact_id: string | null;
+  match_pattern?: string | null; closed?: boolean;
 }
 export type CommitmentKind = 'rent' | 'bill' | 'subscription' | 'emi' | 'support' | 'insurance' | 'school' | 'milestone' | (string & {});
 export interface Share { member_id?: string; contact_id?: string; name: string; share: Money; paid_this_cycle: boolean }

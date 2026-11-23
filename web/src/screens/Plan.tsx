@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Advice, Commitment, DetectedCommitment, Fund, Liability, Lookahead, WhatIf } from '../api/types';
+import type { Advice, Commitment, DetectedCommitment, Fund, Liability, Lookahead, Person, WhatIf } from '../api/types';
 import { fmt, monthLabel, shortDate, today, toMinor } from '../lib/format';
 import {
-  AmountInput, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
+  AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
 } from '../ui';
 import { DueRow, KIND_ICON } from './Home';
 
@@ -175,21 +175,57 @@ function NewCommitmentSheet({ open, onClose }: { open: boolean; onClose: () => v
   const [currency, setCurrency] = useState('SAR');
   const [cycle, setCycle] = useState(1);
   const [due, setDue] = useState(today());
-  const add = useWrite('POST', '/commitments');
+  const [country, setCountry] = useState<'SA' | 'IN' | 'other'>('SA');
+  const [sharers, setSharers] = useState<string[]>([]);
+  const [equal, setEqual] = useState<'equal' | 'custom'>('equal');
+  const [custom, setCustom] = useState<Record<string, string>>({});
+  const people = (useApi<{ items: Person[] }>(open ? '/people' : null).data?.items || []).filter(p => p.relation !== 'self');
+  const add = useWrite<Record<string, unknown>>('POST', '/commitments');
   const toast = useToast();
+  const total = toMinor(Number(amount) || 0, currency);
+  const each = Math.floor(total / (sharers.length + 1));  // you're one of the equal shares
+  const shareOf = (id: string) => (equal === 'equal' ? each : toMinor(Number(custom[id]) || 0, currency));
+  const others = sharers.reduce((s, id) => s + shareOf(id), 0);
+  const pickCurrency = (c: string) => { setCurrency(c); setCountry(c === 'INR' ? 'IN' : c === 'SAR' ? 'SA' : 'other'); };
   const save = async () => {
-    await add.mutateAsync({ name, kind, amount_minor: toMinor(Number(amount), currency), currency, cycle_months: cycle, next_due: due, country: currency === 'INR' ? 'IN' : 'SA' });
-    toast(`${name} added`); setName(''); setAmount(''); onClose();
+    const shares = sharers.map(id => { const p = people.find(x => x.id === id)!; return { [p.kind === 'member' ? 'member_id' : 'contact_id']: id, share_minor: shareOf(id) }; });
+    await add.mutateAsync({ name, kind, amount_minor: total, currency, cycle_months: cycle, next_due: due, country: country === 'other' ? '' : country, shares });
+    toast(`${name} added`); setName(''); setAmount(''); setSharers([]); setCustom({}); onClose();
   };
   return (
     <Sheet open={open} onClose={onClose} title="New commitment" detent="large">
       <div className="stack">
-        <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} />
+        <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={pickCurrency} />
         <Field label="What"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Rent, DEWA, Amma…" /></Field>
         <div className="chips" style={{ flexWrap: 'wrap' }}>{GROUPS.map(([k, l]) => <Chip key={k} on={kind === k} onClick={() => setKind(k)}>{l}</Chip>)}</div>
         <div className="chips" style={{ flexWrap: 'wrap' }}>{CYCLES.map(c => <Chip key={c.v} on={cycle === c.v} onClick={() => setCycle(c.v)}>{c.l}</Chip>)}</div>
         <Field label="Next due"><input className="input" type="date" value={due} onChange={e => setDue(e.target.value)} /></Field>
-        <button className="btn block" disabled={!name || !Number(amount) || add.isPending} onClick={save}>Add</button>
+        <Segmented label="Country" value={country} onChange={setCountry} options={[{ value: 'SA', label: 'Saudi' }, { value: 'IN', label: 'India' }, { value: 'other', label: 'Other' }]} />
+        <div className="stack-sm">
+          <div className="between" style={{ margin: '0 4px' }}><b>Shared with</b>{sharers.length > 0 && <span className="caption">yours {fmt({ minor: total - others, currency })}</span>}</div>
+          {sharers.length > 0 && <Segmented label="Split" value={equal} onChange={setEqual} options={[{ value: 'equal', label: 'Equal split' }, { value: 'custom', label: 'Custom amounts' }]} />}
+          <List>
+            {people.map(p => {
+              const on = sharers.includes(p.id);
+              return (
+                <div key={p.id} className="list-row">
+                  <button type="button" className="row-flex" style={{ flex: 1, minWidth: 0, background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit', textAlign: 'left', minHeight: 44 }}
+                    aria-pressed={on} onClick={() => setSharers(on ? sharers.filter(x => x !== p.id) : [...sharers, p.id])}>
+                    <Avatar name={p.name} size={32} /><span style={{ flex: 1, minWidth: 0 }}>{p.name}<br /><span className="caption">{p.kind === 'member' ? p.relation : 'friend'}</span></span>
+                    {on && equal === 'equal' && <span className="num caption">{fmt({ minor: each, currency })}</span>}
+                    {on ? <Icon name="check" size={22} className="pos" /> : <Icon name="plus" size={20} className="muted" />}
+                  </button>
+                  {on && equal === 'custom' && <input className="input" inputMode="decimal" aria-label={`${p.name}’s share`} style={{ width: 96, flex: 'none' }} placeholder="0"
+                    value={custom[p.id] || ''} onChange={e => setCustom({ ...custom, [p.id]: e.target.value.replace(/[^\d.]/g, '') })} />}
+                </div>
+              );
+            })}
+          </List>
+          {!people.length && <p className="caption" style={{ marginLeft: 4 }}>Add family or friends in People to share a bill.</p>}
+        </div>
+        <button className="btn block" disabled={!name || !Number(amount) || others > total || add.isPending} onClick={save}>Add</button>
+        {others > total && <p className="error" role="alert">Shares add up to more than the bill.</p>}
+        {add.error && <p className="error" role="alert">{add.error.message}</p>}
         {cycle > 1 && <p className="footnote" style={{ textAlign: 'center' }}>We’ll make a fund and suggest a monthly set-aside.</p>}
       </div>
     </Sheet>
@@ -202,9 +238,11 @@ function Funds() {
   const [amt, setAmt] = useState('');
   const move = useWrite<{ id: string; amount_minor: number }>('POST', b => `/funds/${b.id}/move`);
   const toast = useToast();
+  const [creating, setCreating] = useState(false);
   return (
-    <Section title="Funds">
-      {!q.data ? <PageSkeleton /> : !q.data.items.length ? <p className="caption" style={{ marginLeft: 4 }}>Funds appear for anything due every few months (rent, school fees) — add one under Commitments.</p> : (
+    <Section title="Funds" action={<button onClick={() => setCreating(true)}>Add</button>}>
+      <NewFundSheet open={creating} onClose={() => setCreating(false)} />
+      {!q.data ? <PageSkeleton /> : !q.data.items.length ? <p className="caption" style={{ marginLeft: 4 }}>Funds appear for anything due every few months (rent, school fees), or tap Add to save toward a goal.</p> : (
         <List>
           {q.data.items.map(f => {
             const pct = (f.saved.minor / Math.max(1, f.target.minor)) * 100;
@@ -232,27 +270,128 @@ function Funds() {
   );
 }
 
+function NewFundSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState('SAR');
+  const [due, setDue] = useState('');
+  const add = useWrite<Record<string, unknown>>('POST', '/funds');
+  const toast = useToast();
+  const save = async () => {
+    await add.mutateAsync({ name: name.trim(), target_minor: toMinor(Number(amount), currency), currency, due_on: due });
+    toast(`${name.trim()} fund started`); setName(''); setAmount(''); setDue(''); onClose();
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title="New fund">
+      <div className="stack">
+        <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} label="Target" />
+        <Field label="Saving for"><input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Emergency, car service, Onam trip…" /></Field>
+        <Field label="Needed by"><input className="input" type="date" min={today()} value={due} onChange={e => setDue(e.target.value)} /></Field>
+        <button className="btn block" disabled={!name.trim() || !Number(amount) || !due || add.isPending} onClick={save}>Start fund</button>
+        {add.error && <p className="error" role="alert">{add.error.message}</p>}
+        <p className="footnote" style={{ textAlign: 'center' }}>We work out how much to set aside each month to get there on time.</p>
+      </div>
+    </Sheet>
+  );
+}
+
 function Debts() {
   const q = useApi<{ items: Liability[] }>('/liabilities');
+  const [open, setOpen] = useState<Liability | 'new' | null>(null);
   return (
-    <Section title="What you owe">
+    <Section title="What you owe" action={<button onClick={() => setOpen('new')}>Add</button>}>
       <div id="debts" style={{ scrollMarginTop: 80 }} />
       {!q.data ? <PageSkeleton /> : !q.data.items.length ? <div className="glass card caption"><Icon name="check" size={14} className="pos" /> No loans or card debt tracked. Card and BNPL balances appear from your SMS.</div> : (
         <List>
           {q.data.items.map(l => (
-            <div key={l.id} className="list-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8, paddingTop: 14, paddingBottom: 14 }}>
+            <button key={l.id} type="button" className="list-row" onClick={() => setOpen(l)} aria-label={`${l.name}, edit`}
+              style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8, paddingTop: 14, paddingBottom: 14, width: '100%', textAlign: 'left', opacity: l.closed ? .55 : 1 }}>
               <div className="between">
-                <span className="row-flex" style={{ minWidth: 0 }}><Tile icon={l.kind === 'card' ? 'card' : l.kind === 'bnpl' ? 'wallet' : 'bank'} color={l.rate_bp > 1500 ? '#ff453a' : '#5e5ce6'} />
-                  <span style={{ minWidth: 0 }}><b>{l.name}</b><br /><span className="caption">{l.lender} · {(l.rate_bp / 100).toFixed(2)}%</span></span></span>
+                <span className="row-flex" style={{ minWidth: 0 }}><Tile icon={LOAN_ICON[l.kind] || 'bank'} color={l.rate_bp > 1500 ? '#ff453a' : '#5e5ce6'} />
+                  <span style={{ minWidth: 0 }}><b>{l.name}</b><br /><span className="caption">{[l.lender, `${(l.rate_bp / 100).toFixed(2)}%`, l.closed && 'closed'].filter(Boolean).join(' · ')}</span></span></span>
                 <span style={{ textAlign: 'right' }}><b className="num"><Money m={l.outstanding} compact /></b><br /><span className="caption"><Money m={l.emi} compact />/mo</span></span>
               </div>
-              <Meter pct={l.paid_pct} color={l.rate_bp > 1500 ? 'var(--red-fill)' : undefined} />
-              <div className="between caption"><span>{l.paid_pct}% paid · interest <Money m={l.interest_month} />/mo</span><span>Done {l.payoff_month ? monthLabel(l.payoff_month, true) : '—'}</span></div>
-            </div>
+              <Meter pct={l.paid_pct ?? 0} color={l.rate_bp > 1500 ? 'var(--red-fill)' : undefined} />
+              <div className="between caption"><span>{l.paid_pct ?? 0}% paid · interest <Money m={l.interest_month} />/mo</span><span>Done {l.payoff_month ? monthLabel(l.payoff_month, true) : '—'}</span></div>
+            </button>
           ))}
         </List>
       )}
+      <LoanSheet loan={open} onClose={() => setOpen(null)} />
     </Section>
+  );
+}
+
+const LOAN_ICON: Record<string, string> = { loan: 'bank', credit_card: 'card', bnpl: 'wallet', person: 'person' };
+const LOAN_KINDS: { value: Liability['kind']; label: string }[] = [{ value: 'loan', label: 'Loan' }, { value: 'credit_card', label: 'Card' }, { value: 'bnpl', label: 'BNPL' }, { value: 'person', label: 'Person' }];
+const major = (m?: { minor: number } | null) => (m && m.minor ? String(m.minor / 100) : '');
+
+function LoanSheet({ loan, onClose }: { loan: Liability | 'new' | null; onClose: () => void }) {
+  const l = loan && loan !== 'new' ? loan : null;
+  const [f, setF] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!loan) return;
+    setF(l ? { kind: l.kind, name: l.name, lender: l.lender || '', currency: l.currency, principal: major(l.principal), opening: major(l.opening_balance), as_of: l.as_of || '',
+      rate: l.rate_bp ? String(l.rate_bp / 100) : '', emi: major(l.emi), start_on: l.start_on || '', end_on: l.end_on || '', match_pattern: l.match_pattern || '' }
+      : { kind: 'loan', currency: 'SAR', as_of: today() });
+  }, [loan]); // eslint-disable-line react-hooks/exhaustive-deps
+  const set = (k: string) => (v: string) => setF(x => ({ ...x, [k]: v }));
+  const input = (k: string) => ({ value: f[k] || '', onChange: (e: { target: { value: string } }) => set(k)(e.target.value) });
+  const toast = useToast();
+  const add = useWrite<Record<string, unknown>>('POST', '/liabilities');
+  const edit = useWrite<Record<string, unknown>>('PATCH', () => `/liabilities/${l!.id}`);
+  const del = useWrite('DELETE', () => `/liabilities/${l!.id}`);
+  const cur = f.currency || 'SAR';
+  const amt = (k: string) => (f[k] && Number(f[k]) >= 0 ? toMinor(Number(f[k]), cur) : undefined);
+  const save = async () => {
+    const day = (k: string) => f[k] || (l ? null : undefined);  // editing: an emptied date clears it
+    const body = { kind: f.kind, name: f.name.trim(), lender: f.lender || '', currency: cur, principal_minor: amt('principal'), opening_balance_minor: amt('opening'),
+      as_of: f.as_of || undefined, rate_bp: f.rate ? Math.round(Number(f.rate) * 100) : 0, emi_minor: amt('emi') ?? 0, start_on: day('start_on'), end_on: day('end_on'),
+      match_pattern: f.match_pattern || '' };
+    if (l) await edit.mutateAsync(body); else await add.mutateAsync(body);
+    toast(l ? `${body.name} saved` : `${body.name} added`); onClose();
+  };
+  const busy = add.isPending || edit.isPending || del.isPending;
+  const err = add.error || edit.error || del.error;
+  const badRate = !!f.rate && !(Number(f.rate) >= 0 && Number(f.rate) <= 1000);
+  return (
+    <Sheet open={!!loan} onClose={onClose} title={l ? l.name : 'Add a loan'} detent="large">
+      {loan && (
+        <div className="stack">
+          <Segmented label="Kind" value={(f.kind || 'loan') as Liability['kind']} onChange={set('kind')} options={LOAN_KINDS} />
+          <Field label="Name"><input className="input" {...input('name')} placeholder={f.kind === 'person' ? 'Loan from Harish' : 'Camry auto finance'} /></Field>
+          <Field label={f.kind === 'person' ? 'Who lent it' : 'Lender'}><input className="input" {...input('lender')} placeholder={f.kind === 'person' ? 'Harish' : 'Al Rajhi Bank'} /></Field>
+          <AmountInput value={f.principal || ''} onChange={set('principal')} currency={cur} onCurrency={set('currency')} label="Amount borrowed" />
+          <p className="caption" style={{ textAlign: 'center', marginTop: -8 }}>Amount borrowed</p>
+          <div className="grid-2">
+            <Field label="Balance left"><input className="input" inputMode="decimal" {...input('opening')} placeholder={f.principal || '0'} /></Field>
+            <Field label="As of"><input className="input" type="date" {...input('as_of')} /></Field>
+          </div>
+          <div className="grid-2">
+            <Field label="Rate (% a year)"><input className="input" inputMode="decimal" {...input('rate')} placeholder="4.5" /></Field>
+            <Field label={`EMI (${cur} a month)`}><input className="input" inputMode="decimal" {...input('emi')} placeholder="0" /></Field>
+          </div>
+          <div className="grid-2">
+            <Field label="Started"><input className="input" type="date" {...input('start_on')} /></Field>
+            <Field label="Ends"><input className="input" type="date" {...input('end_on')} /></Field>
+          </div>
+          <Field label="Match bank SMS containing"><input className="input" {...input('match_pattern')} placeholder="e.g. AUTO LOAN 3302" /></Field>
+          <button className="btn block" disabled={!f.name?.trim() || badRate || busy} onClick={save}>{l ? 'Save' : 'Add loan'}</button>
+          {err && <p className="error" role="alert">{err.message}</p>}
+          {l && (
+            <div className="grid-2">
+              <button className="btn secondary" disabled={busy} onClick={async () => { await edit.mutateAsync({ closed: !l.closed }); toast(l.closed ? 'Reopened' : `${l.name} closed`); onClose(); }}>
+                <Icon name={l.closed ? 'repeat' : 'check'} size={16} />{l.closed ? 'Reopen' : 'Mark closed'}</button>
+              <button className="btn danger" disabled={busy} onClick={async () => {
+                if (!confirm(`Delete ${l.name}? Payments linked to it are kept but unlinked.`)) return;
+                await del.mutateAsync(undefined); toast(`${l.name} deleted`); onClose();
+              }}><Icon name="trash" size={16} />Delete</button>
+            </div>
+          )}
+          <p className="footnote" style={{ textAlign: 'center' }}>Balance left and its date let you start mid-loan; payments after that date bring it down.</p>
+        </div>
+      )}
+    </Sheet>
   );
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
-import type { Claim, ClaimImport, Commitment, HouseholdFull, Me, Money as M, Person, Trip } from '../api/types';
+import type { Claim, ClaimImport, Commitment, Contact, HouseholdFull, Me, Member, Money as M, Person, Trip } from '../api/types';
 import { dueLabel, fmt, shortDate } from '../lib/format';
 import {
   Avatar, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, useToast,
@@ -10,7 +10,8 @@ import { TxnRow, TxnSheet } from './Activity';
 import { readFile } from './files';
 
 type Tab = 'family' | 'friends' | 'shared' | 'claims';
-const RELATIONS = ['spouse', 'mother', 'father', 'child', 'sibling', 'other'];
+const RELATIONS = ['spouse', 'parent', 'child', 'sibling', 'other'];  // the API's set (api/households.py)
+const ROLES: { value: 'admin' | 'member' | 'viewer'; label: string }[] = [{ value: 'admin', label: 'Admin' }, { value: 'member', label: 'Member' }, { value: 'viewer', label: 'Viewer' }];
 
 export default function PeoplePage({ me }: { me: Me }) {
   const [params, setParams] = useSearchParams();
@@ -35,6 +36,7 @@ function Family({ people, me }: { people: Person[]; me: Me }) {
   const admin = me.member.role === 'owner' || me.member.role === 'admin';
   const owing = people.filter(p => p.kind === 'member' && (p.owes_you.length || p.you_owe.length));
   const [open, setOpen] = useState<Person | null>(null);
+  const [editing, setEditing] = useState<Member | null>(null);
   return (
     <>
       {owing.length > 0 && (
@@ -74,13 +76,14 @@ function Family({ people, me }: { people: Person[]; me: Me }) {
         <List>
           <ListRow icon={<Avatar name={me.user.name} />} title={<>{me.user.name} <span className="caption">(you)</span></>} sub={me.member.role} chevron={false} />
           {(hh.data?.members || []).filter(m => m.id !== me.member.id).map(m => (
-            <ListRow key={m.id} icon={<Avatar name={m.display_name} />} title={m.display_name} sub={`${m.relation} · ${m.user_id ? 'on the app' : 'no login'}`}
-              end={<span className={`badge ${m.role === 'admin' || m.role === 'owner' ? 'blue' : ''}`}>{m.role}</span>} chevron={false} />
+            <ListRow key={m.id} icon={<Avatar name={m.display_name} />} title={m.display_name} sub={`${m.relation} · ${m.user_id ? 'on the app' : m.email ? 'invited' : 'no login'}`}
+              end={<span className={`badge ${m.role === 'admin' || m.role === 'owner' ? 'blue' : ''}`}>{m.role}</span>} onClick={admin ? () => setEditing(m) : undefined} label={admin ? `Edit ${m.display_name}` : undefined} />
           ))}
         </List>
         {(hh.data?.invites || []).map(i => <p key={i.id} className="caption" style={{ marginLeft: 4 }}><Icon name="mail" size={13} /> Invite sent to {i.email}</p>)}
       </Section>
       <InviteSheet open={inviting} onClose={() => setInviting(false)} />
+      <EditMemberSheet member={editing} onClose={() => setEditing(null)} />
     </>
   );
 }
@@ -118,6 +121,71 @@ export function InviteSheet({ open, onClose }: { open: boolean; onClose: () => v
   );
 }
 
+function EditMemberSheet({ member, onClose }: { member: Member | null; onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [relation, setRelation] = useState('other');
+  const [role, setRole] = useState<Member['role']>('member');
+  const [email, setEmail] = useState('');
+  useEffect(() => { if (member) { setName(member.display_name); setRelation(member.relation); setRole(member.role); setEmail(member.email || ''); } }, [member]);
+  const toast = useToast();
+  const save = useWrite<Record<string, unknown>, { invite?: { link: string } }>('PATCH', () => `/members/${member!.id}`);
+  const del = useWrite('DELETE', () => `/members/${member!.id}`);
+  if (!member) return null;
+  const owner = member.role === 'owner';
+  const invite = !member.user_id && !!email.trim() && email.trim() !== (member.email || '');
+  const submit = async () => {
+    const r = await save.mutateAsync({ display_name: name.trim(), relation, ...(owner ? {} : { role }), ...(invite ? { email: email.trim() } : {}) });
+    toast(r.invite ? `Saved — invite sent to ${email.trim()}` : `${name.trim()} saved`); onClose();
+  };
+  return (
+    <Sheet open onClose={onClose} title={member.display_name}>
+      <div className="stack">
+        <Field label="Name"><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
+        <div className="chips" style={{ flexWrap: 'wrap' }} role="group" aria-label="Relation">
+          {[...new Set([...RELATIONS, member.relation])].filter(r => r !== 'self').map(r => <Chip key={r} on={relation === r} onClick={() => setRelation(r)}>{r}</Chip>)}
+        </div>
+        {!owner && <Segmented label="Role" value={role as 'admin' | 'member' | 'viewer'} onChange={setRole} options={ROLES} />}
+        {member.user_id ? <p className="caption" style={{ marginLeft: 4 }}><Icon name="check" size={13} className="pos" /> On the app{member.email ? ` as ${member.email}` : ''}</p>
+          : <Field label="Email (sends an invite to use the app)"><input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" /></Field>}
+        <button className="btn block" disabled={!name.trim() || save.isPending} onClick={submit}>{invite ? 'Save and invite' : 'Save'}</button>
+        {(save.error || del.error) && <p className="error" role="alert">{(save.error || del.error)!.message}</p>}
+        {!owner && <button className="btn block danger" disabled={del.isPending} onClick={async () => {
+          if (!confirm(`Remove ${member.display_name} from the household? Their past transactions stay.`)) return;
+          await del.mutateAsync(undefined); toast(`${member.display_name} removed`); onClose();
+        }}><Icon name="trash" size={16} />Remove from household</button>}
+      </div>
+    </Sheet>
+  );
+}
+
+function EditContactSheet({ contact, onClose }: { contact: Contact | null; onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  useEffect(() => { if (contact) { setName(contact.name); setEmail(contact.email || ''); setPhone(contact.phone || ''); } }, [contact]);
+  const toast = useToast();
+  const save = useWrite<Record<string, unknown>>('PATCH', () => `/contacts/${contact!.id}`);
+  const del = useWrite('DELETE', () => `/contacts/${contact!.id}`);
+  if (!contact) return null;
+  return (
+    <Sheet open onClose={onClose} title={`Edit ${contact.name}`}>
+      <div className="stack">
+        <Field label="Name"><input className="input" value={name} onChange={e => setName(e.target.value)} /></Field>
+        <Field label="Email (matches them when they join the app)"><input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" /></Field>
+        <Field label="Phone"><input className="input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} /></Field>
+        <button className="btn block" disabled={!name.trim() || save.isPending} onClick={async () => {
+          await save.mutateAsync({ name: name.trim(), email: email.trim(), phone: phone.trim() }); toast(`${name.trim()} saved`); onClose();
+        }}>Save</button>
+        {(save.error || del.error) && <p className="error" role="alert">{(save.error || del.error)!.message}</p>}
+        <button className="btn block danger" disabled={del.isPending} onClick={async () => {
+          if (!confirm(`Remove ${contact.name}? Past splits with them stay.`)) return;
+          await del.mutateAsync(undefined); toast(`${contact.name} removed`); onClose();
+        }}><Icon name="trash" size={16} />Remove friend</button>
+      </div>
+    </Sheet>
+  );
+}
+
 export async function copy(text: string, toast: (s: string) => void, what = 'Copied') {
   try { await navigator.clipboard.writeText(text); toast(what); } catch { toast('Select and copy the text above'); }
 }
@@ -132,6 +200,8 @@ function Friends({ people }: { people: Person[] }) {
   const friends = people.filter(p => p.kind === 'contact');
   const [open, setOpen] = useState<Person | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Contact | null>(null);
+  const contacts = useApi<HouseholdFull>('/households/current').data?.contacts || [];
   return (
     <>
       <div className="grid-2">
@@ -150,7 +220,9 @@ function Friends({ people }: { people: Person[] }) {
         ) : <EmptyState icon="people" title="No friends yet" text="Split a bill from Activity and they’ll show up here." />}
       </Section>
       <SharedWithMe />
-      <SettleSheet person={open} onClose={() => setOpen(null)} />
+      <SettleSheet person={open} onClose={() => setOpen(null)}
+        onEdit={() => { const c = contacts.find(x => x.id === open?.id); setOpen(null); if (c) setEditing(c); }} />
+      <EditContactSheet contact={editing} onClose={() => setEditing(null)} />
       <AddContactSheet open={adding} onClose={() => setAdding(false)} />
     </>
   );
@@ -175,13 +247,13 @@ function SharedWithMe() {
   );
 }
 
-function SettleSheet({ person, onClose }: { person: Person | null; onClose: () => void }) {
+function SettleSheet({ person, onClose, onEdit }: { person: Person | null; onClose: () => void; onEdit?: () => void }) {
   const settle = useWrite('POST', '/settle');
   const toast = useToast();
   if (!person) return null;
   const rows = [...person.owes_you.map(m => ({ m, dir: 'owes you' })), ...person.you_owe.map(m => ({ m, dir: 'you owe' }))];
   return (
-    <Sheet open onClose={onClose} title={person.name}>
+    <Sheet open onClose={onClose} title={person.name} lead={onEdit && <button className="link-btn" onClick={onEdit}>Edit</button>}>
       <div className="stack" style={{ textAlign: 'center' }}>
         <div style={{ display: 'grid', placeItems: 'center' }}><Avatar name={person.name} size={64} /></div>
         {rows.length ? rows.map(({ m, dir }) => (

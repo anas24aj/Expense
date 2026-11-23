@@ -56,7 +56,7 @@ Member: `{id, display_name, relation, role, user_id|null, email|null}`. Contact:
 | GET | /categories | → `{items: [{id, name, parent, kind, icon}]}` |
 | POST | /settle | `{person: {kind,id}, currency, txn_id?}` mark balances with a person settled |
 
-Txn: `{id, day, occurred_at, amount: Money, direction, merchant, category, purpose, confidence, account_id, account_name, member_id, note, source, person: {kind,id,name}|null, split_mine: Money|null, claim_id|null, commitment_id|null}`
+Txn: `{id, day, occurred_at, amount: Money, direction, merchant, category, purpose, confidence, account_id, account_name, member_id, note, source, person: {kind,id,name}|null, split_mine: Money|null, claim_id|null, commitment_id|null, liability_id|null}`
 
 ## Ingestion (`api/ingest.py`)
 | POST | /ingest/sms | device auth. `{sender, body, received_at?}` → 201 `{stored: true, transaction: Txn}` / 200 `{stored: false, reason}` |

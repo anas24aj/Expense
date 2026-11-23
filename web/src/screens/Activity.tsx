@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Account, Category, Claim, HouseholdFull, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
+import type { Account, Asset, Category, Claim, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
 import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, thisMonth, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
@@ -108,11 +108,22 @@ export default function ActivityPage() {
 }
 
 /* ---------- transaction detail with one-tap actions ---------- */
-type Mode = null | 'category' | 'person' | 'split' | 'claim' | 'note';
+type Mode = null | 'category' | 'person' | 'split' | 'claim' | 'note' | 'loan' | 'asset';
+type PersonDir = 'give' | 'repay' | 'repaid' | 'borrow';
+// Which way money moved with a person: debits are "I paid for them" or "paying back"; credits "they paid me back" or "they lent me".
+const PERSON_DIRS: Record<'debit' | 'credit', { value: PersonDir; label: string }[]> = {
+  debit: [{ value: 'give', label: 'I paid for them / lent' }, { value: 'repay', label: 'Paying them back' }],
+  credit: [{ value: 'repaid', label: 'They paid me back' }, { value: 'borrow', label: 'They lent / paid for me' }],
+};
+const personPurpose = (d: PersonDir, p: Person): Purpose => (d === 'give' ? (p.kind === 'member' ? 'support' : 'lend') : d);
+const personToast = (purpose: Purpose, name: string) => ({
+  support: `Counted as support for ${name}`, lend: `${name} owes you this`, repay: `Paid back to ${name}`, repaid: `${name} paid you back`, borrow: `You owe ${name} this`,
+} as Record<string, string>)[purpose] || name;
 export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>(null);
   const [all, setAll] = useState(false);
   const detail = useApi<TxnDetail>(txn ? `/transactions/${txn.id}` : null);
+  const assets = useApi<{ items: Asset[] }>(txn ? '/assets' : null);
   const t = detail.data || (txn as TxnDetail | null);
   const toast = useToast();
   const patch = useWrite<Record<string, unknown>, Txn>('PATCH', () => `/transactions/${txn!.id}`);
@@ -132,13 +143,18 @@ export function TxnSheet({ txn, onClose }: { txn: Txn | null; onClose: () => voi
     { k: 'ignore', icon: 'eyeOff', label: 'Ignore', on: t.purpose === 'ignore', run: () => apply({ purpose: 'ignore' }, 'Ignored — left out of totals', { purpose: t.purpose }) },
     { k: 'note', icon: 'note', label: 'Note', on: !!t.note, run: () => setMode('note') },
     { k: 'spend', icon: 'cart', label: 'Spending', on: t.purpose === 'spend', run: () => apply({ purpose: 'spend' }, 'Counted as spending', { purpose: t.purpose }) },
+    ...(t.direction === 'debit' ? [{ k: 'loan', icon: 'bank', label: 'Loan payment', on: !!t.liability_id, run: () => setMode('loan') }] : []),
+    ...(assets.data?.items.length ? [{ k: 'asset', icon: 'car', label: 'Vehicle / property', run: () => setMode('asset') }] : []),
   ];
-  const titles: Record<string, string> = { category: 'Category', person: 'Who was it for?', split: 'Split with', claim: 'Add to claim', note: 'Note' };
+  const titles: Record<string, string> = { category: 'Category', person: 'Who was it with?', split: 'Split with', claim: 'Add to claim', note: 'Note', loan: 'Which loan?', asset: 'Vehicle / property cost' };
   return (
     <Sheet open={!!txn} onClose={close} title={mode ? titles[mode] : undefined} detent={mode ? 'medium' : 'auto'}
       lead={mode && <button className="link-btn" onClick={() => setMode(null)}><Icon name="chevL" size={16} /> Back</button>}>
       {mode === 'category' ? <CategoryPicker onPick={c => apply({ category: c, purpose: t.purpose === 'transfer' ? 'spend' : undefined }, `Moved to ${c}`, { category: t.category })} />
-        : mode === 'person' ? <PersonPicker onPick={p => apply({ person: { kind: p.kind, id: p.id }, purpose: p.kind === 'member' ? 'support' : 'lend' }, p.kind === 'member' ? `Counted as support for ${p.name}` : `${p.name} owes you this`)} />
+        : mode === 'person' ? <PersonPicker direction={t.direction} onPick={(p, purpose) => apply({ person: { kind: p.kind, id: p.id }, purpose }, personToast(purpose, p.name))} />
+        : mode === 'loan' ? <LoanPicker t={t} onPick={l => (l ? apply({ liability_id: l.id }, `Counted as a ${l.name} payment`, { liability_id: t.liability_id ?? null, purpose: t.purpose })
+          : apply({ liability_id: null, purpose: 'spend' }, 'Unlinked from the loan'))} />
+        : mode === 'asset' ? <AssetCostPicker t={t} assets={assets.data?.items || []} onDone={close} />
         : mode === 'split' ? <SplitPicker t={t} onDone={close} />
         : mode === 'claim' ? <ClaimPicker t={t} onDone={close} />
         : mode === 'note' ? <NoteEditor initial={t.note || ''} onSave={note => apply({ note }, 'Note saved')} />
@@ -177,16 +193,54 @@ function CategoryPicker({ onPick }: { onPick: (name: string) => void }) {
   return <List>{cats.data.items.filter(c => c.kind === 'spend').map(c => <ListRow key={c.id} icon={<CategoryTile category={c.name} />} title={c.name} onClick={() => onPick(c.name)} chevron={false} />)}</List>;
 }
 function usePeople() { return (useApi<{ items: Person[] }>('/people').data?.items || []).filter(p => p.relation !== 'self'); }
-function PersonPicker({ onPick }: { onPick: (p: Person) => void }) {
+function PersonPicker({ direction, onPick }: { direction: 'debit' | 'credit'; onPick: (p: Person, purpose: Purpose) => void }) {
   const people = usePeople();
+  const [d, setD] = useState<PersonDir>(PERSON_DIRS[direction][0].value);
+  const hint = d === 'give' ? ['Family — counts as support', 'Friends — they owe you'] : d === 'borrow' ? ['Family — you owe them', 'Friends — you owe them'] : ['Family', 'Friends'];
   return (
     <div className="stack">
-      {(['member', 'contact'] as const).map(kind => (
+      <Segmented label="Which way" value={d} onChange={setD} options={PERSON_DIRS[direction]} />
+      {(['member', 'contact'] as const).map((kind, i) => (
         <div key={kind} className="stack-sm">
-          <div className="caption" style={{ marginLeft: 4 }}>{kind === 'member' ? 'Family — counts as support' : 'Friends — they owe you'}</div>
-          <List>{people.filter(p => p.kind === kind).map(p => <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.relation} onClick={() => onPick(p)} chevron={false} />)}</List>
+          <div className="caption" style={{ marginLeft: 4 }}>{hint[i]}</div>
+          <List>{people.filter(p => p.kind === kind).map(p => <ListRow key={p.id} icon={<Avatar name={p.name} />} title={p.name} sub={p.relation} onClick={() => onPick(p, personPurpose(d, p))} chevron={false} />)}</List>
         </div>
       ))}
+    </div>
+  );
+}
+function LoanPicker({ t, onPick }: { t: Txn; onPick: (l: Liability | null) => void }) {
+  const q = useApi<{ items: Liability[] }>('/liabilities');
+  if (!q.data) return <PageSkeleton />;
+  const open = q.data.items.filter(l => !l.closed || l.id === t.liability_id);
+  return (
+    <div className="stack">
+      {open.length ? <List>{open.map(l => (
+        <ListRow key={l.id} icon={<Icon name={l.kind === 'credit_card' ? 'card' : l.kind === 'bnpl' ? 'wallet' : l.kind === 'person' ? 'person' : 'bank'} size={22} />} title={l.name}
+          sub={[l.lender, l.emi.minor ? `EMI ${fmt(l.emi)}` : ''].filter(Boolean).join(' · ') || undefined}
+          end={l.id === t.liability_id ? <Icon name="check" size={22} className="pos" /> : <Money m={l.outstanding} compact />}
+          onClick={() => onPick(l)} chevron={false} />
+      ))}</List> : <EmptyState icon="bank" title="No loans yet" text="Add one in Plan, under What you owe." />}
+      {t.liability_id && <button className="btn block danger" onClick={() => onPick(null)}>Unlink from loan</button>}
+      <p className="footnote" style={{ textAlign: 'center' }}>For a catch-up or bounced EMI paid another way: it counts toward the loan.</p>
+    </div>
+  );
+}
+const COST_TYPES = ['fuel', 'service', 'insurance', 'emi', 'other'];
+const costLabel = (c: string) => (c === 'emi' ? 'EMI' : c[0].toUpperCase() + c.slice(1));
+function AssetCostPicker({ t, assets, onDone }: { t: Txn; assets: Asset[]; onDone: () => void }) {
+  const [type, setType] = useState('fuel');
+  const toast = useToast();
+  const add = useWrite<{ id: string; txn_id: string; cost_type: string }>('POST', b => `/assets/${b.id}/costs`);
+  const pick = async (a: Asset) => { await add.mutateAsync({ id: a.id, txn_id: t.id, cost_type: type }); toast(`Counted as ${a.name} ${costLabel(type).toLowerCase()}`); onDone(); };
+  return (
+    <div className="stack">
+      <div className="chips" style={{ flexWrap: 'wrap' }} role="group" aria-label="Cost type">
+        {COST_TYPES.map(c => <Chip key={c} on={type === c} onClick={() => setType(c)}>{costLabel(c)}</Chip>)}
+      </div>
+      <List>{assets.map(a => <ListRow key={a.id} icon={<Icon name={a.kind === 'vehicle' ? 'car' : a.kind === 'property' ? 'house' : 'chart'} size={22} />} title={a.name}
+        sub={a.monthly_cost.minor ? <>≈ <Money m={a.monthly_cost} />/mo to run</> : a.kind} onClick={() => { if (!add.isPending) pick(a); }} chevron={false} />)}</List>
+      <p className="footnote" style={{ textAlign: 'center' }}>Pick the type, then the vehicle or property. Running costs split with anyone who shares them.</p>
     </div>
   );
 }
@@ -248,26 +302,49 @@ function AddTxnSheet({ open, onClose, accounts }: { open: boolean; onClose: () =
   const [merchant, setMerchant] = useState('');
   const [dir, setDir] = useState<'debit' | 'credit'>('debit');
   const [account, setAccount] = useState('');
+  const [day, setDay] = useState(today());
+  const [who, setWho] = useState('');
+  const [pd, setPd] = useState<PersonDir>('give');
+  const people = usePeople();
+  const person = people.find(p => p.id === who);
   const toast = useToast();
-  const save = useWrite('POST', '/transactions');
+  const save = useWrite<Record<string, unknown>, Txn>('POST', '/transactions');
+  const tag = useWrite<Record<string, unknown>>('PATCH', b => `/transactions/${b.id}`);
   const submit = async () => {
-    await save.mutateAsync({ day: today(), amount_minor: toMinor(Number(amount), currency), currency, direction: dir, merchant: merchant || (dir === 'debit' ? 'Cash' : 'Money in'), account_id: account || undefined });
-    toast('Added'); setAmount(''); setMerchant(''); onClose();
+    const t = await save.mutateAsync({ day, amount_minor: toMinor(Number(amount), currency), currency, direction: dir,
+      merchant: merchant || (person ? person.name : dir === 'debit' ? 'Cash' : 'Money in'), account_id: account || undefined });
+    if (person) {  // an IOU: POST /transactions takes no person, so tag it straight after
+      const purpose = personPurpose(pd, person);
+      await tag.mutateAsync({ id: t.id, person: { kind: person.kind, id: person.id }, purpose });
+      toast(personToast(purpose, person.name));
+    } else toast('Added');
+    setAmount(''); setMerchant(''); setWho(''); setDay(today()); onClose();
   };
+  const setDirection = (d: 'debit' | 'credit') => { setDir(d); setPd(PERSON_DIRS[d][0].value); };
   return (
     <Sheet open={open} onClose={onClose} title="Add" detent="auto">
       <div className="stack">
-        <Segmented label="Direction" value={dir} onChange={setDir} options={[{ value: 'debit', label: 'Money out' }, { value: 'credit', label: 'Money in' }]} />
+        <Segmented label="Direction" value={dir} onChange={setDirection} options={[{ value: 'debit', label: 'Money out' }, { value: 'credit', label: 'Money in' }]} />
         <AmountInput value={amount} onChange={setAmount} currency={currency} onCurrency={setCurrency} autoFocus />
-        <Field label="Where"><input className="input" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="e.g. Panda, taxi, cash to Amma" /></Field>
-        <Field label="Paid from">
+        <Field label="Where"><input className="input" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="e.g. Panda, taxi, car EMI share" /></Field>
+        <Field label={dir === 'debit' ? 'Paid from' : 'Paid into'}>
           <select className="input" value={account} onChange={e => setAccount(e.target.value)}>
-            <option value="">Cash / not sure</option>
+            <option value="">Cash / no account</option>
             {accounts.filter(a => a.currency === currency && a.kind !== 'loan').map(a => <option key={a.id} value={a.id}>{a.institution} · {a.name}</option>)}
           </select>
         </Field>
-        <button className="btn block" disabled={!Number(amount) || save.isPending} onClick={submit}>Add</button>
-        <p className="footnote" style={{ textAlign: 'center' }}>We’ll guess the category — tap it later to change.</p>
+        <Field label="Date"><input className="input" type="date" value={day} max={today()} onChange={e => setDay(e.target.value)} /></Field>
+        <Field label="With someone (optional)">
+          <select className="input" value={who} onChange={e => setWho(e.target.value)}>
+            <option value="">No one</option>
+            {(['member', 'contact'] as const).map(k => (
+              <optgroup key={k} label={k === 'member' ? 'Family' : 'Friends'}>{people.filter(p => p.kind === k).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>
+            ))}
+          </select>
+        </Field>
+        {person && <Segmented label="Which way" value={pd} onChange={setPd} options={PERSON_DIRS[dir]} />}
+        <button className="btn block" disabled={!Number(amount) || !day || save.isPending || tag.isPending} onClick={submit}>Add</button>
+        <p className="footnote" style={{ textAlign: 'center' }}>{person ? 'With no account it’s just an IOU between you, e.g. they paid your share of a bill.' : 'We’ll guess the category — tap it later to change.'}</p>
       </div>
     </Sheet>
   );
