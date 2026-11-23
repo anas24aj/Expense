@@ -63,14 +63,17 @@ function CountrySplit({ accounts, spent, fx, homeCur }: { accounts: Account[]; s
     const here = accounts.filter(a => countryOf(a) === c.code);
     const cur = here[0]?.currency || spent.find(x => countryOf({ currency: x.currency, country: '' } as Account) === c.code)?.currency;
     if (!cur) return null;
-    const bal = (kinds: string[]) => here.filter(a => kinds.includes(a.kind) && a.balance?.currency === cur).reduce((s, a) => s + Math.abs(a.balance!.minor), 0);
+    const bal = (kinds: string[]): MoneyT | null => { // null: no balance known yet (it arrives with SMS or a statement), shown as —
+      const known = here.filter(a => kinds.includes(a.kind) && a.balance?.currency === cur);
+      return known.length ? { minor: known.reduce((s, a) => s + Math.abs(a.balance!.minor), 0), currency: cur } : null;
+    };
     const owing = (k: string) => here.some(a => a.kind === k && a.balance?.minor);
-    return { ...c, cur, held: { minor: bal(CASH), currency: cur } as MoneyT, owed: { minor: bal(DEBT), currency: cur } as MoneyT,
+    return { ...c, cur, held: bal(CASH), owed: bal(DEBT),
       owedLabel: owing('loan') ? (owing('credit_card') || owing('bnpl') ? 'Loans & cards' : 'Loans') : owing('credit_card') || owing('bnpl') ? 'Card dues' : 'Owed', spent: spent.find(x => x.currency === cur) || { minor: 0, currency: cur } as MoneyT };
-  }).filter(Boolean) as { code: string; name: string; flag: string; held: MoneyT; owed: MoneyT; owedLabel: string; spent: MoneyT }[];
+  }).filter(Boolean) as { code: string; name: string; flag: string; held: MoneyT | null; owed: MoneyT | null; owedLabel: string; spent: MoneyT }[];
   const total = (k: 'held' | 'owed' | 'spent') => {
-    const v = sides.map(x => conv(x[k]));
-    return v.some(x => x === null) ? null : { minor: Math.round(v.reduce((a, b) => a! + b!, 0)!), currency: homeCur } as MoneyT;
+    const known = sides.map(x => x[k]).filter(Boolean) as MoneyT[], v = known.map(conv);
+    return !known.length || v.some(x => x === null) ? null : { minor: Math.round(v.reduce((a, b) => a! + b!, 0)!), currency: homeCur } as MoneyT;
   };
   const rows: ['held' | 'owed' | 'spent', string][] = [['held', 'In accounts'], ['owed', ''], ['spent', 'Spent this month']];
   return (
@@ -81,7 +84,7 @@ function CountrySplit({ accounts, spent, fx, homeCur }: { accounts: Account[]; s
             <div className="card-title">{x.flag} {x.name}</div>
             {rows.map(([k, label]) => (
               <div key={k} className="stat"><span className="k">{label || x.owedLabel}</span>
-                <span className={`v ${k === 'owed' && x.owed.minor ? 'neg' : ''}`}><Money m={x[k]} compact /></span></div>
+                <span className={`v ${k === 'owed' && x.owed?.minor ? 'neg' : ''}`}><Money m={x[k]} compact /></span></div>
             ))}
           </Link>
         ))}
