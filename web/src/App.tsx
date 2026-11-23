@@ -12,6 +12,7 @@ import PlanPage from './screens/Plan';
 import MoneyPage from './screens/Money';
 import { TripPage, TripsPage } from './screens/Trips';
 import { AccountPage, AccountsPage, CoveragePage } from './screens/Accounts';
+import InstallPage from './screens/Install';
 import { AssetPage, ClaudePage, DevicesPage, HouseholdPage, ImportPage, MorePage, ProfilePage, SettingsPage } from './screens/More';
 
 // Five tabs (iOS and Material guidance). What you own and owe, and where money moved, open from Home; trips and setup from More.
@@ -20,13 +21,17 @@ const TABS = [
   { to: '/activity', label: 'Activity', icon: 'activity', also: [] as string[] },
   { to: '/plan', label: 'Plan', icon: 'plan', also: [] },
   { to: '/people', label: 'People', icon: 'people', also: [] },
-  { to: '/more', label: 'More', icon: 'more', also: ['/trips'] },
+  { to: '/more', label: 'More', icon: 'more', also: ['/trips', '/install'] },
 ];
 const tabOf = (path: string) => Math.max(0, TABS.findIndex((t, i) => (i === 0 ? path === '/' : [t.to, ...t.also].some(p => path.startsWith(p)))));
 
 function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   const { pathname, search } = useLocation();
   const active = tabOf(pathname);
+  // a new tab's screen slides in from that tab's side; set once per navigation so later re-renders don't move it
+  const slide = useRef({ path: pathname, tab: active, dir: 0 });
+  if (slide.current.path !== pathname) slide.current = { path: pathname, tab: active, dir: active === slide.current.tab ? 0 : active > slide.current.tab ? 1 : -1 };
+  const dir = slide.current.dir;
   const online = useOnline();
   // each tab reopens where you left it (its last URL, then its scroll position); tapping the current tab goes to its top
   const lastUrl = useRef<Record<number, string>>({});
@@ -70,7 +75,7 @@ function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         <div className="hh">{me.household.name}<br /><span className="footnote">{me.user.email}</span></div>
       </nav>
       {!online && <div className="offline-bar" role="status"><Icon name="wifiOff" size={16} />Offline · nothing new until you reconnect</div>}
-      <main id="main" className="main"><Boundary key={pathname}>{children}</Boundary></main>
+      <main id="main" className="main" style={{ ['--enter-x' as string]: `${dir * 28}px` }}><Boundary key={pathname}>{children}</Boundary></main>
       <nav className="tabbar" aria-label="Tabs">
         <span className="lens" style={{ transform: `translateX(${active * 100}%)` }} aria-hidden />
         {TABS.map((t, i) => (
@@ -116,6 +121,7 @@ function Authed() {
         <Route path="/more/household" element={<HouseholdPage me={me.data} />} />
         <Route path="/more/profile" element={<ProfilePage me={me.data} />} />
         <Route path="/more/settings" element={<SettingsPage me={me.data} />} />
+        <Route path="/install" element={<InstallPage />} />
         {/* earlier paths, and the ones the backend puts in Home alerts */}
         <Route path="/assets" element={<Navigate to="/accounts" replace />} />
         <Route path="/more/assets" element={<Navigate to="/accounts" replace />} />

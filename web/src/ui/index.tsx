@@ -6,6 +6,58 @@ import { fmt, monthLabel } from '../lib/format';
 import { Icon } from './Icon';
 
 export { Icon, Tile, CategoryTile, Avatar, brandOf, logoOf, BrandTile } from './Icon';
+export { Donut, BarRow, MiniBars, CHART_COLORS } from './Chart';
+export type { ChartItem } from './Chart';
+export { InstallBanner, useInstall, isStandalone } from './install';
+
+/* ---------- count-up: big figures roll up from zero the first time they appear ---------- */
+const COUNTED = '.hero-amount, .stat .v, .count-up, .pill-cta .count, .donut-center b';
+const seen = new WeakSet<Node>();
+const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+/** Rolls every number in el's text nodes from 0 to its value, keeping its format (commas, decimals, ₹ lakh grouping). */
+export function countUp(el: Element, ms = 900) {
+  if (seen.has(el) || reduced()) return;
+  seen.add(el);
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes: { n: Text; text: string; nums: { s: string; v: number; dec: number; indian: boolean }[] }[] = [];
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    const text = n.nodeValue || '';
+    const nums = [...text.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map(m => ({
+      s: m[0], v: parseFloat(m[0].replace(/,/g, '')), dec: (m[0].split('.')[1] || '').length, indian: /^\d{1,2}(,\d{2})+,\d{3}/.test(m[0]),
+    }));
+    if (nums.length) nodes.push({ n, text, nums });
+  }
+  if (!nodes.length) return;
+  const t0 = performance.now();
+  const written = new Map<Text, string>();
+  const frame = (now: number) => {
+    const p = Math.min(1, (now - t0) / ms), e = 1 - Math.pow(2, -10 * p); // ease-out expo
+    for (const { n, text, nums } of nodes) {
+      if (written.has(n) && n.nodeValue !== written.get(n)) return; // React re-rendered it: stop, its text is current
+      let i = 0;
+      const out = p >= 1 ? text : text.replace(/\d[\d,]*(?:\.\d+)?/g, s => {
+        const x = nums[i++]; if (!x) return s;
+        return (x.v * e).toLocaleString(x.indian ? 'en-IN' : 'en-US', { minimumFractionDigits: x.dec, maximumFractionDigits: x.dec, useGrouping: x.s.includes(',') });
+      });
+      n.nodeValue = out; written.set(n, out);
+    }
+    if (p < 1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+/** Watches a container and counts up figures as they arrive (after a skeleton, say). */
+export function useCountUp(ref: React.RefObject<HTMLElement>) {
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const scan = () => root.querySelectorAll(COUNTED).forEach(el => countUp(el));
+    scan();
+    const mo = new MutationObserver(scan);
+    mo.observe(root, { childList: true, subtree: true });
+    const stop = setTimeout(() => mo.disconnect(), 8000); // only the first arrival animates, not every later update
+    return () => { mo.disconnect(); clearTimeout(stop); };
+  }, [ref]);
+}
 
 /* ---------- Money ---------- */
 export function Money({ m, compact, sign, cents, className = '', tone }: { m: M | null | undefined; compact?: boolean; sign?: boolean; cents?: boolean; className?: string; tone?: boolean }) {
@@ -21,6 +73,8 @@ export function Monies({ items, empty = '—' }: { items: M[]; empty?: string })
 /* ---------- Page: top bar + collapsing large title ---------- */
 export function Page({ title, subtitle, back, trail, children }: { title: string; subtitle?: ReactNode; back?: string | true; trail?: ReactNode; children: ReactNode }) {
   const sentinel = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  useCountUp(body);
   const [collapsed, setCollapsed] = useState(false);
   const nav = useNavigate();
   useEffect(() => {
@@ -49,7 +103,7 @@ export function Page({ title, subtitle, back, trail, children }: { title: string
       <h1 className="large-title">{title}</h1>
       <div ref={sentinel} />
       {subtitle && <p className="large-sub">{subtitle}</p>}
-      <div className="stack">{children}</div>
+      <div className="stack" ref={body}>{children}</div>
     </div>
   );
 }
@@ -108,7 +162,7 @@ export function ProgressRing({ pct, size = 56, stroke = 6, color = 'var(--tint-f
     <span className="ring-wrap" style={{ width: size, height: size }} role="img" aria-label={`${Math.round(p)} percent`}>
       <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--fill-2)" strokeWidth={stroke} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - p / 100)} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - p / 100)} style={{ ['--c' as string]: c }} />
       </svg>
       <span className="ring-label">{label ?? `${Math.round(p)}%`}</span>
     </span>
@@ -159,7 +213,7 @@ export function AreaChart({ data, height = 120 }: { data: Pt[]; height?: number 
         <linearGradient id={gid} x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="var(--tint-fill)" stopOpacity=".35" /><stop offset="1" stopColor="var(--tint-fill)" stopOpacity="0" /></linearGradient>
       </defs>
       <path d={`${line}L${x(data.length - 1)},${top + h}L${x(0)},${top + h}Z`} fill={`url(#${gid})`} />
-      <path d={line} fill="none" stroke="var(--tint-fill)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={line} pathLength={1} fill="none" stroke="var(--tint-fill)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
       {data.map((d, i) => (
         <g key={d.month}>
           <circle cx={x(i)} cy={y(d.value)} r="3.5" fill={d.value < 0 ? 'var(--red-fill)' : 'var(--glass-solid)'} stroke={d.value < 0 ? 'var(--red-fill)' : 'var(--tint-fill)'} strokeWidth="2" />
