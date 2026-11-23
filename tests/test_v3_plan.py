@@ -258,7 +258,7 @@ class PlanTest(unittest.TestCase):
                   'interest_month', 'fx'):
             self.assertIn(k, m)
         self.assertEqual(m['fx'], {'SAR_INR': 25.0, 'at': self.today})
-        self.assertEqual(m['by_category'], [{'category': 'Uncategorized', 'amount': M(100_00)}])
+        self.assertEqual(m['by_category'], [{'category': 'Uncategorized', 'amount': M(100_00), 'last': M(0)}])
 
     def test_validation_and_scoping(self):
         self.assertEqual(self.call('POST', '/api/commitments', {'name': 'x'})[0], 400)

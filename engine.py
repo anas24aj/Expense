@@ -234,6 +234,71 @@ def debt_free(loans, extra, today, strategy='avalanche'):
     return {'month': add_months(today[:7], p['months']) if p['months'] is not None else None, 'months': p['months'], 'interest': p['interest']}
 
 
+CARD_MIN_PCT = 5  # a card's minimum due, % of the balance: the slow way that "interest saved" compares against
+
+
+def payoff(debts, surplus, prepay_loans=False, spend_now=0, cap=600):
+    """Cards first. Loans keep their EMIs; each month `surplus` (free money after EMIs) goes to the cards, highest rate
+    first, then (prepay_loans) to the loans, highest rate first; a loan that ends leaves its EMI in the pool.
+    spend_now: spent this month on top, out of this month's surplus; what the surplus can't cover goes on the costliest
+    card (a new one at CARD_RATE_BP if there is none). debts: [{id, kind 'card'|'loan', balance, rate_bp, emi}], one
+    currency, minor units. Returns {cards_months, debt_months (None = not within `cap` months), interest, timeline,
+    cleared {id: month n}}."""
+    bal = {d['id']: float(d['balance']) for d in debts if d['balance'] > 0}
+    rate = {d['id']: d['rate_bp'] / 120000 for d in debts}
+    card = {d['id'] for d in debts if d['kind'] == 'card'}
+    emi = {d['id']: 0 if d['id'] in card else d['emi'] for d in debts}
+    if spend_now > surplus:
+        top = max((i for i in bal if i in card), key=lambda i: rate[i], default=None)
+        if top is None:
+            top, bal['spend'], rate['spend'], emi['spend'] = 'spend', 0.0, CARD_RATE_BP / 120000, 0
+            card.add('spend')
+        bal[top] += spend_now - surplus
+    budget = sum(emi[i] for i in bal)  # what the loans take now; a finished loan's EMI stays in the pool
+    timeline, cleared, interest, card_int, n = [], {}, 0.0, 0.0, 0
+    cards_n = None if card & set(bal) else 0
+    while bal and n < cap:
+        n += 1
+        charged = 0.0
+        for i in bal:
+            charged += bal[i] * rate[i]
+            card_int += bal[i] * rate[i] if i in card else 0
+            bal[i] += bal[i] * rate[i]
+        left = budget + (max(0, surplus - spend_now) if n == 1 else max(0, surplus))
+        for i in bal:  # every running loan gets its EMI
+            paid = min(emi[i], bal[i])
+            bal[i] -= paid
+            left -= paid
+        for i in sorted(bal, key=lambda i: (i not in card, -rate[i], bal[i])):
+            if i in card or prepay_loans:
+                paid = min(max(left, 0), bal[i])
+                bal[i] -= paid
+                left -= paid
+        interest += charged
+        done = [i for i in bal if bal[i] < 1]
+        for i in done:
+            cleared[i] = n
+            del bal[i]
+        if cards_n is None and not card & set(bal):
+            cards_n = n
+        timeline.append({'n': n, 'interest': round(charged), 'cards': round(sum(v for i, v in bal.items() if i in card)),
+                         'loans': round(sum(v for i, v in bal.items() if i not in card)), 'cleared': done})
+    return {'cards_months': cards_n, 'debt_months': None if bal else n, 'interest': round(interest), 'card_interest': round(card_int), 'timeline': timeline, 'cleared': cleared}
+
+
+def min_due_interest(debts, cap=600):
+    """Interest the cards cost when only the minimum due is paid (CARD_MIN_PCT of the balance, at least 100 units)."""
+    total = 0.0
+    for d in debts:
+        b, r, n = float(d['balance']), d['rate_bp'] / 120000, 0
+        while d['kind'] == 'card' and b >= 1 and n < cap:
+            n += 1
+            total += b * r
+            b += b * r
+            b -= min(b, max(b * CARD_MIN_PCT / 100, 100_00))
+    return round(total)
+
+
 def interest_per_month(loans):
     return sum(l['balance_now'] * l['rate_bp'] / 120000 for l in loans if l['balance_now'] > 0)
 
