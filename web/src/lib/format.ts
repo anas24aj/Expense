@@ -71,3 +71,10 @@ if (import.meta.env.DEV) {
   eq(fmt({ minor: 10_000_000, currency: 'SAR' }, { compact: true }), 'SAR 100K');
   eq(fmt({ minor: -4550, currency: 'SAR' }), '−SAR 45.50');
 }
+
+/** Totals per currency, in first-seen order: SAR and INR are never added together. */
+export function sumByCurrency(items: Money[]): Money[] {
+  const by = new Map<string, number>();
+  for (const m of items) by.set(m.currency, (by.get(m.currency) || 0) + m.minor);
+  return [...by].map(([currency, minor]) => ({ currency, minor }) as Money);
+}

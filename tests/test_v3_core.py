@@ -290,6 +290,7 @@ class IngestTest(Base):
         self.assertEqual((again['new'], again['duplicates']), (0, 3))
         items = self.c.ok('GET', f"/api/transactions?account_id={acc['id']}")['items']
         self.assertEqual(sorted(i['amount']['minor'] for i in items), [8000, 12000, 500000])
+        self.assertEqual({i['account_name'] for i in items}, {'RiyadBank ··7777'})  # tagged by bank, not the account's nickname
         self.assertEqual(next(i for i in items if i['amount']['minor'] == 500000)['purpose'], 'income')
         sts = self.c.ok('GET', '/api/ingest/statements')['items']
         self.c.ok('DELETE', f"/api/ingest/statements/{sts[0]['id']}")

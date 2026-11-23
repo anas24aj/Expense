@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
 import type { Advice, Commitment, DetectedCommitment, Fund, HouseholdFull, Liability, Lookahead, Person, Pot, WhatIf } from '../api/types';
-import { fmt, monthLabel, shortDate, today, toMinor } from '../lib/format';
+import { fmt, monthLabel, shortDate, sumByCurrency, today, toMinor } from '../lib/format';
 import {
   AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast,
 } from '../ui';
@@ -22,7 +22,6 @@ export default function PlanPage() {
   return (
     <Page title="Plan">
       <div className="grid-desktop stack">
-        <Afford />
         <Section title="Next 12 months">
           <div id="lookahead" style={{ scrollMarginTop: 80 }} />
           {look.isLoading ? <PageSkeleton /> : look.error ? <ErrorCard error={look.error} retry={look.refetch} /> : <LookaheadCard l={look.data!} />}
@@ -31,6 +30,7 @@ export default function PlanPage() {
         <Funds />
         <Debts />
         <AdviceCard />
+        <Afford />
       </div>
     </Page>
   );
@@ -75,10 +75,12 @@ function Afford() {
 
 function LookaheadCard({ l }: { l: Lookahead }) {
   const [table, setTable] = useState(false);
+  const empty = l.months.every(m => !m.income.minor && !m.free.minor);
   return (
     <div className="glass card stack-sm">
-      <div className="between"><span className="caption">Free money per month</span><button className="link-btn" onClick={() => setTable(!table)} aria-expanded={table}>{table ? 'Chart' : 'Table'}</button></div>
-      {table ? (
+      <div className="between"><span className="caption">Free money per month</span>{!empty && <button className="link-btn" onClick={() => setTable(!table)} aria-expanded={table}>{table ? 'Chart' : 'Table'}</button>}</div>
+      {empty ? <p className="caption">Set your salary in <Link to="/more/settings">Settings</Link> and add your commitments to see what’s free in each of the next 12 months.</p>
+      : table ? (
         <div className="table-wrap">
           <table className="look">
             <thead><tr><th>Month</th><th>In</th><th>Due</th><th>Funds</th><th>Living</th><th>Free</th></tr></thead>
@@ -135,14 +137,15 @@ function Commitments({ q }: { q: ReturnType<typeof useApi<{ items: Commitment[] 
           </div>
         </div>
       )}
+      {!all.length && !sugg.length && <div className="glass card caption">Rent, bills, EMIs, school fees and money sent home: anything you pay on a schedule. We spot them in your transactions, or tap Add.</div>}
       <div className="grid-desktop stack">
         {GROUPS.map(([kind, label]) => {
           const items = all.filter(c => c.kind === kind);
           if (!items.length) return null;
-          const monthly = items.reduce((s, c) => (c.amount.currency === items[0].amount.currency ? s + c.amount.minor / Math.max(1, c.cycle_months) : s), 0);
+          const monthly = sumByCurrency(items.map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / Math.max(1, c.cycle_months)) })));
           return (
             <div key={kind} className="stack-sm">
-              <div className="between" style={{ margin: '4px 4px 0' }}><b>{label}</b><span className="caption">≈ {fmt({ minor: monthly, currency: items[0].amount.currency })}/mo</span></div>
+              <div className="between" style={{ margin: '4px 4px 0' }}><b>{label}</b><span className="caption">≈ {monthly.map(m => fmt(m)).join(' + ')}/mo</span></div>
               <List>{items.map(c => <DueRow key={c.id} c={c} onClick={() => setOpen(c)} />)}</List>
             </div>
           );
@@ -243,7 +246,7 @@ function Funds() {
   return (
     <Section title="Funds" action={<button onClick={() => setCreating(true)}>Add</button>}>
       <NewFundSheet open={creating} onClose={() => setCreating(false)} />
-      {!q.data ? <PageSkeleton /> : !q.data.items.length ? <p className="caption" style={{ marginLeft: 4 }}>Funds appear for anything due every few months (rent, school fees), or tap Add to save toward a goal.</p> : (
+      {!q.data ? <PageSkeleton /> : !q.data.items.length ? <div className="glass card caption">Money set aside each month for bills that come every few months, like rent or school fees, appears here. Tap Add to save toward a goal.</div> : (
         <List>
           {q.data.items.map(f => {
             if (f.pot) return <ListRow key={f.id} icon={<Tile icon="house" color="var(--green-fill)" />} title={f.name}

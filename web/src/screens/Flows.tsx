@@ -187,7 +187,10 @@ export function CoveragePage() {
   const bad = items.filter(c => c.status !== 'ok');
   return (
     <Page title="Up to date?" back="/more/accounts" subtitle="Every account, every month — from SMS or a statement.">
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : (
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !items.length ? (
+        <EmptyState icon="calendar" title="No accounts to check yet" text="Once you add accounts, each one gets a month-by-month strip showing which months came in by SMS or statement, and which are missing."
+          action={<Link to="/more/accounts" className="btn small">Add account</Link>} />
+      ) : (
         <>
           <div className="glass card row-flex">
             <Tile icon={bad.length ? 'warn' : 'check'} color={bad.length ? '#ff9f0a' : '#30d158'} />

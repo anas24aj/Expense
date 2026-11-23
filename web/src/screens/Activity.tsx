@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
 import type { Account, Asset, Category, Claim, Fund, HouseholdFull, Liability, Person, Purpose, ReviewTxn, Txn, TxnDetail } from '../api/types';
-import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, thisMonth, today, toMinor } from '../lib/format';
+import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, sumByCurrency, thisMonth, today, toMinor } from '../lib/format';
 import {
-  AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
+  AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Monies, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
 } from '../ui';
 
 export const PURPOSES: { value: Purpose; label: string }[] = [
@@ -68,7 +68,7 @@ export default function ActivityPage() {
           <strong aria-live="polite">{monthLabel(month, true)}</strong>
           <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= thisMonth()} aria-label="Next month" style={{ opacity: month >= thisMonth() ? .3 : 1 }}><Icon name="chevR" /></button>
         </div>
-        {list.data && <span className="caption">{list.data.items.length} items</span>}
+        {!!list.data?.items.length && <span className="caption">{list.data.items.length} items</span>}
       </div>
       <div className="search">
         <Icon name="search" />
@@ -85,12 +85,14 @@ export default function ActivityPage() {
 
       {list.isLoading ? <div className="glass list" style={{ padding: 16 }}><div className="stack">{[0, 1, 2, 3, 4].map(i => <Skeleton key={i} h={40} />)}</div></div>
         : list.error ? <ErrorCard error={list.error} retry={list.refetch} />
-        : !groups.length ? <EmptyState icon="search" title="Nothing here" text={q || Object.values(f).some(Boolean) ? 'Try clearing the filters.' : 'Transactions arrive from your phone’s bank SMS.'} />
+        : !groups.length ? (q || Object.values(f).some(Boolean) ? <EmptyState icon="search" title="No matches" text="Try clearing the search or filters." />
+          : <EmptyState icon="activity" title={`Nothing in ${monthLabel(month, true)}`} text="Every payment shows up here, tagged to the account it came from. Import a bank statement, or connect your phone so bank SMS arrive by themselves."
+              action={<div className="row-flex" style={{ justifyContent: 'center' }}><Link to="/more/import" className="btn small">Import statement</Link><Link to="/more/devices" className="btn small secondary">Connect phone</Link></div>} />)
         : groups.map(([day, items]) => {
-          const out = items.filter(t => t.direction === 'debit' && ['spend', 'fee', 'support'].includes(t.purpose)).reduce((s, t) => s + (t.split_mine || t.amount).minor * (t.amount.currency === 'INR' ? 0 : 1), 0);
+          const out = sumByCurrency(items.filter(t => t.direction === 'debit' && ['spend', 'fee', 'support'].includes(t.purpose)).map(t => t.split_mine || t.amount));
           return (
             <section key={day} aria-label={dayLabel(day)}>
-              <h2 className="day-head"><span>{dayLabel(day)}</span>{out > 0 && <span className="num">{fmt({ minor: out, currency: 'SAR' })}</span>}</h2>
+              <h2 className="day-head"><span>{dayLabel(day)}</span>{out.length > 0 && <span className="num"><Monies items={out} /></span>}</h2>
               <List>{items.map(t => <TxnRow key={t.id} t={t} onOpen={setOpen} />)}</List>
             </section>
           );

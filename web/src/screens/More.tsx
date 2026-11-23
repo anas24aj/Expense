@@ -76,7 +76,10 @@ export function AccountsPage() {
   const [country, setCountry] = useState<string>('all');
   return (
     <Page title="Accounts" back="/more" trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="Add account"><Icon name="plus" /></button>}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : (
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !items.length ? (
+        <EmptyState icon="bank" title="No accounts yet" text="Add each bank account, card, wallet and loan you use, in Saudi Arabia and India. Balances, card limits and missing statements show up here, grouped by country."
+          action={<button className="btn small" onClick={() => setAdding(true)}><Icon name="plus" size={16} />Add account</button>} />
+      ) : (
         <>
           <CountryCards items={items} country={country} onPick={c => setCountry(country === c ? 'all' : c)} />
           <Link to="/more/coverage" className="glass pill-cta">
@@ -786,7 +789,8 @@ export function ImportPage() {
   const name = (id: string) => accounts.data?.items.find(a => a.id === id)?.institution || '';
   return (
     <Page title="Import statements" back="/more" subtitle="Years of history in one go. Duplicates of SMS are skipped.">
-      <div className="glass card stack">
+      {accounts.data && !accounts.data.items.length ? <EmptyState icon="bank" title="Add an account first" text="Each statement belongs to an account, so its transactions are tagged to the right bank or card."
+        action={<Link to="/more/accounts" className="btn small">Add account</Link>} /> : <div className="glass card stack">
         <Field label="Account">
           <select className="input" value={account} onChange={e => setAccount(e.target.value)}>
             <option value="">Choose…</option>
@@ -800,11 +804,11 @@ export function ImportPage() {
         </label>
         {up.error && <p className="error" role="alert">{up.error.message}</p>}
         {res && <p className="pos" role="status"><Icon name="check" size={16} /> {res.new} new transactions · {res.duplicates} already known · {res.rows} rows read</p>}
-      </div>
+      </div>}
       <Section title="Imported">
         {list.data?.items.length ? (
           <List>{list.data.items.map(s => <ListRow key={s.id} icon={<Tile icon="receipt" color="#30b0c7" />} title={s.file_name} sub={`${name(s.account_id)} · ${shortDate(s.period_from)} – ${shortDate(s.period_to)}`} end={`${s.rows}`} endSub="rows" />)}</List>
-        ) : <p className="caption" style={{ marginLeft: 4 }}>Nothing imported yet.</p>}
+        ) : <p className="caption" style={{ marginLeft: 4 }}>Nothing imported yet. Each statement you add is listed here with its dates, so you can see which months are covered.</p>}
       </Section>
     </Page>
   );

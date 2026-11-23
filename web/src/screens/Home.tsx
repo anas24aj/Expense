@@ -1,6 +1,6 @@
 import { Link, Navigate } from 'react-router-dom';
 import { useApi } from '../api/client';
-import type { Commitment, Home, Settings, Trip } from '../api/types';
+import type { Account, Commitment, Home, HouseholdFull, Items, Settings, Statement, Trip } from '../api/types';
 import { dueLabel, fmt, monthLabel, today } from '../lib/format';
 import { AreaChart, ErrorCard, Icon, List, ListRow, Money, PageSkeleton, Page, ProgressRing, Section, StatusBadge, Tile } from '../ui';
 
@@ -30,21 +30,49 @@ export default function HomePage() {
   const q = useApi<Home>('/insights/home');
   const settings = useApi<Settings>('/settings');
   const trips = useApi<{ items: Trip[] }>('/trips');
+  const accounts = useApi<Items<Account>>('/accounts');
+  const stmts = useApi<Items<Statement>>('/ingest/statements');
+  const hh = useApi<HouseholdFull>('/households/current');
   let onboarded = true;
   try { onboarded = localStorage.getItem('onboarded') === '1'; } catch { /* storage blocked */ }
   if (settings.data && !settings.data.salary && !onboarded) return <Navigate to="/welcome" replace />;
-  const fx = q.data?.month.fx.SAR_INR;
+  const steps: Step[] = [
+    { done: !!accounts.data?.items.length, to: '/more/accounts', icon: 'bank', color: '#0a84ff', title: 'Add your accounts', sub: 'Saudi and Indian banks, cards and loans' },
+    { done: !!stmts.data?.items.length || !!q.data?.month.spent.minor, to: '/more/import', icon: 'upload', color: '#30b0c7', title: 'Bring in your history', sub: 'Import statements or connect your phone' },
+    { done: !!settings.data?.salary, to: '/more/settings', icon: 'coin', color: '#30d158', title: 'Set your salary', sub: 'To see what’s free each month' },
+    { done: (hh.data?.members.length ?? 0) > 1, to: '/more/household', icon: 'family', color: '#ff375f', title: 'Add your household', sub: 'Family and anyone you share costs with' },
+  ];
+  const loaded = accounts.data && stmts.data && settings.data;
+  // the household step is optional: a single person is set up once the first three are done
+  const setup = loaded && steps.slice(0, 3).some(x => !x.done) ? steps : null;
 
   return (
-    <Page title="Home" subtitle={q.data ? <>{monthLabel(q.data.month.month, true)}{fx ? ` · 1 SAR = ₹${fx.toFixed(2)}` : ''}</> : ' '}
+    <Page title="Home" subtitle={q.data ? monthLabel(q.data.month.month, true) : ' '}
       trail={<Link to="/more/profile" className="icon-btn" aria-label="Profile"><Icon name="person" /></Link>}>
-      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : <HomeBody h={q.data!} payday={daysTo(settings.data?.salary_day ?? null)} trip={trips.data?.items.find(t => t.start_on <= today() && today() <= t.end_on)} />}
+      {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : <HomeBody h={q.data!} setup={setup} payday={daysTo(settings.data?.salary_day ?? null)} trip={trips.data?.items.find(t => t.start_on <= today() && today() <= t.end_on)} />}
     </Page>
   );
 }
 
-function HomeBody({ h, payday, trip }: { h: Home; payday: number | null; trip?: Trip }) {
+type Step = { done: boolean; to: string; icon: string; color: string; title: string; sub: string };
+function GetStarted({ steps }: { steps: Step[] }) {
+  const left = steps.filter(x => !x.done).length;
+  return (
+    <Section title="Get started">
+      <List>
+        {steps.map(x => <ListRow key={x.to} to={x.to} icon={<Tile icon={x.done ? 'check' : x.icon} color={x.done ? '#8e8e93' : x.color} />}
+          title={x.done ? <s className="muted">{x.title}</s> : x.title} sub={x.done ? 'Done' : x.sub} />)}
+      </List>
+      <p className="footnote" style={{ margin: '0 4px' }}>{left} step{left === 1 ? '' : 's'} left. Your month, debts and what’s coming up fill in here as each one is done.</p>
+    </Section>
+  );
+}
+
+function HomeBody({ h, setup, payday, trip }: { h: Home; setup: Step[] | null; payday: number | null; trip?: Trip }) {
   const m = h.month;
+  const fresh = !m.income.minor && !m.spent.minor && !m.owed_by_you.total.minor && !m.owed_to_you.total.minor && !h.next_dues.length;
+  if (setup && fresh) return <div className="stack"><GetStarted steps={setup} /></div>;
+  const fx = m.fx.SAR_INR;
   const parts = [
     { k: 'Spent', v: m.spent, c: 'var(--orange-fill)' },
     { k: 'Still due', v: m.committed_due, c: '#af52de' },
@@ -56,7 +84,14 @@ function HomeBody({ h, payday, trip }: { h: Home; payday: number | null; trip?: 
   const df = h.lookahead.debt_free;
   return (
     <div className="grid-desktop stack">
-      <section className="glass hero span-2" aria-label="Free this month">
+      {setup && <div className="span-2"><GetStarted steps={setup} /></div>}
+      {!m.income.minor ? (
+        <section className="glass hero span-2" aria-label="Spent this month">
+          <span className="hero-label">Spent this month</span>
+          <div className="hero-amount">{fmt(m.spent)}</div>
+          <p className="caption"><Link to="/more/settings">Add your salary</Link> to see what’s free after bills, EMIs and savings.</p>
+        </section>
+      ) : <section className="glass hero span-2" aria-label="Free this month">
         <div className="between">
           <span className="hero-label">Free this month</span>
           {payday !== null && <span className="badge blue"><Icon name="calendar" size={12} />Payday in {payday} {payday === 1 ? 'day' : 'days'}</span>}
@@ -71,7 +106,9 @@ function HomeBody({ h, payday, trip }: { h: Home; payday: number | null; trip?: 
             <div key={p.k} className="stat"><span className="k"><i className="dot" style={{ background: p.c }} />{p.k}</span><span className="v"><Money m={p.v} compact /></span></div>
           ))}
         </div>
-      </section>
+      </section>}
+
+      {m.currency !== 'INR' && fx ? <p className="footnote span-2" style={{ margin: '-4px 4px 0' }}>Totals in {m.currency}. Rupee amounts are counted at 1 SAR = ₹{fx.toFixed(2)}; each account and transaction keeps its own currency.</p> : null}
 
       {trip && (
         <Link to={`/more/trips/${trip.id}`} className="glass pill-cta span-2" aria-label={`Current trip: ${trip.name}`}>
@@ -93,7 +130,7 @@ function HomeBody({ h, payday, trip }: { h: Home; payday: number | null; trip?: 
         </Link>
       )}
 
-      <div className="grid-2">
+      {(m.owed_by_you.total.minor !== 0 || m.owed_to_you.total.minor !== 0) && <div className="span-2 stack-sm"><div className="grid-2">
         <Link to="/plan#debts" className="glass card" style={{ color: 'inherit' }}>
           <div className="card-title" style={{ marginBottom: 6 }}>You owe</div>
           <div className="stat"><span className="v" style={{ fontSize: 22 }}><Money m={m.owed_by_you.total} compact /></span>
@@ -107,22 +144,23 @@ function HomeBody({ h, payday, trip }: { h: Home; payday: number | null; trip?: 
             <span className="caption">Claims <Money m={m.owed_to_you.claims} compact /></span></div>
         </Link>
       </div>
+      </div>}
 
-      <Link to="/plan#debts" className="glass card row-flex" style={{ color: 'inherit' }}>
+      {m.owed_by_you.total.minor > 0 && <Link to="/plan#debts" className="glass card row-flex" style={{ color: 'inherit' }}>
         <ProgressRing pct={df.months ? Math.max(4, 100 - df.months / 2.4) : 100} size={64} stroke={7} color="var(--green-fill)" label={<Icon name="target" size={22} />} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="caption">Debt-free</div>
-          <div style={{ font: '700 22px var(--font-display)', letterSpacing: '-.02em' }}>{df.month ? monthLabel(df.month, true) : m.owed_by_you.total.minor ? 'Not in sight yet' : 'No debt'}</div>
-          <div className="caption">{span(df.months)} · interest costs you <b className="neg"><Money m={h.lookahead.interest_per_month} />/mo</b></div>
+          <div style={{ font: '700 22px var(--font-display)', letterSpacing: '-.02em' }}>{df.month ? monthLabel(df.month, true) : 'Not in sight yet'}</div>
+          <div className="caption">{df.months ? `${span(df.months)} · ` : ''}interest costs you <b className="neg"><Money m={h.lookahead.interest_per_month} />/mo</b></div>
         </div>
-      </Link>
+      </Link>}
 
       <Section title="Coming up" action={<Link to="/plan">See all</Link>}>
         {h.next_dues.length ? <List>{h.next_dues.map(c => <DueRow key={c.id} c={c} />)}</List>
           : <div className="glass card caption">Nothing due — enjoy it.</div>}
       </Section>
 
-      <Section title="Next 6 months" action={<Link to="/plan#lookahead">Plan</Link>}>
+      {h.lookahead.months.some(x => x.free.minor) && <Section title="Next 6 months" action={<Link to="/plan#lookahead">Plan</Link>}>
         <div className="glass card">
           <div className="caption" style={{ marginBottom: 8 }}>Free money each month</div>
           <AreaChart data={h.lookahead.months.map(x => ({ month: x.month, value: x.free.minor / 100 }))} />
@@ -130,7 +168,7 @@ function HomeBody({ h, payday, trip }: { h: Home; payday: number | null; trip?: 
             <p className="caption" style={{ marginTop: 8 }}><Icon name="info" size={14} /> {h.lookahead.months.filter(x => x.warnings.length).map(x => `${monthLabel(x.month)}: ${x.warnings[0]}`).join(' · ')}</p>
           )}
         </div>
-      </Section>
+      </Section>}
 
       {h.alerts.length > 0 && (
         <Section title="Heads-up">
