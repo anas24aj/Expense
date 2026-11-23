@@ -3,3 +3,5 @@ __pycache__/
 .vercel/
 android/app/*.keystore
 .claude/worktrees/
+web/dist/
+web/node_modules/

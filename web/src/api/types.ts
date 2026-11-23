@@ -1,0 +1,99 @@
+// Shapes from docs/brain/api-v3.md. Keep in step with the contract; nothing here is invented beyond it.
+export type Currency = 'SAR' | 'INR' | (string & {});
+export interface Money { minor: number; currency: Currency }
+export type Ref = { kind: 'member' | 'contact'; id: string };
+
+export interface User { id: string; email: string; username: string | null; name: string }
+export interface Household { id: string; name: string; base_currency: Currency; home_currency: Currency; timezone: string }
+export interface Member { id: string; display_name: string; relation: string; role: 'owner' | 'admin' | 'member' | 'viewer'; user_id: string | null; email: string | null }
+export interface Contact { id: string; name: string; email: string | null; phone: string | null; on_app: boolean }
+export interface Invite { id: string; email: string; role?: string; link?: string; expires_at?: string }
+export interface Me { user: User; household: Household; member: Member; households: { id: string; name: string; role: string }[] }
+export interface HouseholdFull { household: Household; members: Member[]; contacts: Contact[]; invites: Invite[]; resets?: { member_id: string; name: string; email: string; expires_at: string; link: string }[] }
+
+export interface Person {
+  kind: 'member' | 'contact'; id: string; name: string; relation: string | null; role: string | null; on_app: boolean;
+  owes_you: Money[]; you_owe: Money[]; support_month: Money | null; support_plan: Money | null;
+}
+export interface Device { id: string; name: string; platform: 'iphone' | 'android' | 'other'; member_id: string; created_at: string; last_seen: string | null }
+export interface DeviceCreated { device: Device; key: string; sms_url: string; setup: string; shortcut_url: string | null }
+
+export type AccountKind = 'bank' | 'wallet' | 'credit_card' | 'debit_card' | 'bnpl' | 'loan' | 'cash' | 'investment';
+export interface Account {
+  id: string; kind: AccountKind; institution: string; name: string; currency: Currency; country: string; last4: string | null;
+  owner_member_id: string | null; visibility: 'household' | 'private'; balance: Money | null; balance_at: string | null;
+  credit_limit: Money | null; used_pct: number | null; due_day: number | null; statement_day: number | null; rate_bp: number | null; archived: boolean;
+}
+
+export type Purpose = 'spend' | 'fee' | 'transfer' | 'income' | 'support' | 'lend' | 'repaid' | 'borrow' | 'repay'
+  | 'loan_payment' | 'claim' | 'reimbursement' | 'asset' | 'saving' | 'refund' | 'ignore';
+export interface Txn {
+  id: string; day: string; occurred_at: string; amount: Money; direction: 'debit' | 'credit'; merchant: string; category: string | null;
+  purpose: Purpose; confidence: number; account_id: string | null; account_name: string | null; member_id: string | null; note: string | null;
+  source: 'sms' | 'statement' | 'shortcut' | 'manual' | 'peer'; person: { kind: string; id: string; name: string } | null;
+  split_mine: Money | null; claim_id: string | null; commitment_id: string | null;
+}
+export interface TxnDetail extends Txn { raw: { sender: string; body: string } | null; links: { id: string; kind: string; other_txn_id: string; role: 'from' | 'to'; set_by: string }[];
+  splits: { id: string; member_id: string | null; contact_id: string | null; name: string; share: Money; settled: boolean }[]; claim: { id: string; name: string; status: string } | null }
+export interface Suggestion { purpose: Purpose; category: string | null; person: { kind: string; id: string; name: string } | null; label: string }
+export interface ReviewTxn extends Txn { suggestions: Suggestion[] }
+export interface Category { id: string; name: string; parent: string | null; kind: 'spend' | 'income' | 'excluded'; icon: string | null }
+
+export interface Liability {
+  id: string; kind: 'loan' | 'card' | 'bnpl' | 'person'; name: string; lender: string; currency: Currency; principal: Money;
+  outstanding: Money; rate_bp: number; emi: Money; due_day: number | null; start_on: string | null; end_on: string | null;
+  paid_pct: number; payoff_month: string | null; interest_month: Money; account_id: string | null; contact_id: string | null;
+}
+export type CommitmentKind = 'rent' | 'bill' | 'subscription' | 'emi' | 'support' | 'insurance' | 'school' | 'milestone' | (string & {});
+export interface Share { member_id?: string; contact_id?: string; name: string; share: Money; paid_this_cycle: boolean }
+export interface Commitment {
+  id: string; name: string; kind: CommitmentKind; amount: Money; cycle_months: number; next_due: string; end_on: string | null; country: string | null;
+  match_pattern: string | null; account_id: string | null; liability_id: string | null; asset_id: string | null; for_member_id: string | null;
+  shares: Share[]; status: 'paid' | 'due' | 'overdue' | 'upcoming'; last_paid: { day: string; txn_id: string } | null; fund_id: string | null;
+}
+export type DetectedCommitment = Omit<Commitment, 'id'> & { evidence_txn_ids: string[] };
+export interface Fund { id: string; name: string; target: Money; due_on: string; saved: Money; monthly: Money; on_track: boolean; commitment_id: string | null }
+export interface Milestone { id: string; name: string; due_on: string; amount: Money; paid: boolean }
+export interface Asset {
+  id: string; kind: 'property' | 'vehicle' | 'investment'; name: string; currency: Currency; cost: Money; value: Money; paid: Money; financed: Money;
+  remaining: Money; milestones: Milestone[]; next_milestone: Milestone | null; monthly_cost: Money; my_monthly_cost: Money;
+  costs_by_type: Record<string, Money>; sharers: { cost_type: string; name: string; member_id?: string; contact_id?: string; share_pct: number }[];
+  liability_id: string | null; details: Record<string, string | number | null>;
+}
+export interface Claim { id: string; name: string; payer: string; status: 'draft' | 'submitted' | 'paid' | 'partly'; member_id: string; items: Txn[]; expected: Money; received: Money; age_days: number; submitted_on: string | null;
+  suggestion?: { txn_id: string; day: string; amount: Money } | null; reimbursement_txn_ids?: string[] }
+export interface Settings { salary: Money | null; salary_day: number | null; emergency_months: number; debt_strategy: 'avalanche' | 'snowball'; extra_to_debt_minor: number }
+
+export interface MonthInsight {
+  month: string; currency: Currency; income: Money; spent: Money; committed_due: Money; committed_paid: Money; set_aside: Money; free: Money;
+  by_category: { category: string; amount: Money }[]; by_purpose: Record<string, Money> | { purpose: string; amount: Money }[]; other_out?: Money;
+  owed_by_you: { loans: Money; cards: Money; bnpl: Money; people: Money; total: Money };
+  owed_to_you: { people: Money; claims: Money; total: Money }; interest_month: Money; fx: { SAR_INR: number; at: string };
+}
+export interface LookMonth { month: string; income: Money; commitments: Money; funds: Money; everyday: Money; free: Money; warnings: string[] }
+export interface Lookahead { months: LookMonth[]; debt_free: { month: string | null; months: number | null }; interest_per_month: Money }
+export interface WhatIf { verdict: 'ok' | 'tight' | 'no'; why: string; month_free_after: Money; debt_free_before: DebtFree | string | null; debt_free_after: DebtFree | string | null; delay_months: number; extra_interest: Money }
+export type DebtFree = { month: string | null; months: number | null };
+export interface Advice { note?: string; emergency: { months_covered: number | null; target: Money }; steps: { title: string; why: string; amount: Money | null }[] }
+export interface Alert { level: 'info' | 'warn' | 'bad'; text: string; link: string | null }
+export interface Home { month: MonthInsight; next_dues: Commitment[]; lookahead: Lookahead; review_count: number; alerts: Alert[] }
+export interface Statement { id: string; account_id: string; file_name: string; period_from: string; period_to: string; rows: number; imported_at: string }
+export interface Items<T> { items: T[] }
+
+// Trips (api-v3.md "Trips"). totals are in the trip's currency; the contract also mentions base — not modelled yet.
+export type TripStatus = 'claimed' | 'personal' | 'missed' | 'unreviewed';
+export interface Trip {
+  id: string; name: string; city: string; country: string; start_on: string; end_on: string; kind: 'business' | 'personal'; claim_ids: string[];
+  currency: string; totals: TripTotals; totals_base?: TripTotals; count: number;
+}
+export type TripTotals = { total: Money; claimed: Money; personal: Money; missed: Money; unreviewed: Money };
+export interface TripDetail extends Trip { expenses: (Txn & { trip_status: TripStatus })[]; claims: Claim[] }
+export interface FlowNode { id: string; name: string; kind: 'inflow' | 'account' | 'spending' | 'outflow' }
+export interface Flows { from: string; to: string; currency: string; nodes: FlowNode[]; links: { source: string; target: string; amount: Money }[] }
+export interface Coverage {
+  account_id: string; name: string; kind: AccountKind; currency: string; first_month: string | null; last_day: string | null;
+  months: { month: string; sources: ('sms' | 'statement' | 'manual' | 'shortcut' | 'peer')[]; covered: boolean }[];
+  missing_months: string[]; days_quiet: number | null; status: 'no_data' | 'gaps' | 'stale' | 'ok';
+}
+export interface ClaimRow { row: number; day: string; description: string; amount: Money; claimed: Money | null; txn_id?: string }
+export interface ClaimImport { claim: Claim | null; matched: ClaimRow[]; unmatched: ClaimRow[] }
