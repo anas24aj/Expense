@@ -66,9 +66,9 @@ class OverviewTest(test_v3_plan.PlanTest):  # imported as a module so the harnes
         this, second = p['months']
         kinds = {(x['kind'], x['name']): x for x in this['lines']}
         self.assertIn(('emi', 'Home loan'), kinds)
-        self.assertEqual(kinds[('card', 'SAB card card')]['amount'], M(1500_00))
+        self.assertEqual(kinds[('card', 'SAB card')]['amount'], M(1500_00))
         self.assertEqual(kinds[('person', 'Pay back Ali')]['amount'], M(300_00))
-        self.assertEqual(kinds[('card', 'SAB card card')]['account_id'], self.bank)  # paid from the main Saudi bank
+        self.assertEqual(kinds[('card', 'SAB card')]['account_id'], self.bank)  # paid from the main Saudi bank
         # next month: rent, Umma and the EMI; nobody owed; the card bill is a guess from past spending (none here)
         names = {x['name'] for x in second['lines']}
         self.assertTrue({'Rent', 'Umma', 'Home loan'} <= names)

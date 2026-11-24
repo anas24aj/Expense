@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+import domain
 from api import classify, households, plan, valid
 from api.app import ApiError, route
 from api.db import new_id, now
@@ -21,12 +22,19 @@ TXN_SELECT = ('SELECT t.*, m.purpose, m.confidence, m.set_by, m.person_member_id
               'LEFT JOIN accounts a ON a.id = t.account_id AND a.household_id = t.household_id ')
 
 
+def label(bank, name, last4):
+    """'Al Rajhi Bank ··0785': the bank first, so every expense names the account it came from. When the account's own
+    name carries the bank's brand ('Federal OneCard' at Federal Bank) that name is used instead, so no word shows twice."""
+    bank, name = (bank or '').strip(), (name or '').strip()
+    brand = bank.split()[0].lower() if bank else ''
+    base = name if name and (not bank or brand in name.lower().split()) else bank
+    if last4:
+        return f"{base} ··{last4}"
+    return base if not name or base == name or name.lower() in base.lower() else f"{base} · {name}"
+
+
 def bank_label(r):
-    """'Al Rajhi Bank ··0785', as the app shows it: the bank first, so every expense names the account it came from."""
-    bank, last4 = r.get('account_institution'), r.get('account_last4')  # absent when a caller selects its own columns
-    if not bank:
-        return r['account_name']
-    return f"{bank} ··{last4}" if last4 else f"{bank} · {r['account_name']}"
+    return label(r.get('account_institution'), r['account_name'], r.get('account_last4'))  # institution absent when a caller selects its own columns
 
 
 VISIBLE = "(t.account_id IS NULL OR a.visibility = 'household' OR a.owner_member_id = :me)"
@@ -63,7 +71,8 @@ def txn_views(hh, rows):
                     'source': r['source'], 'person': person,
                     'split_mine': valid.money(r['amount_minor'] - shared[r['id']], r['currency']) if r['id'] in shared else None,
                     'claim_id': r['claim_id'], 'commitment_id': r['commitment_id'], 'liability_id': r['liability_id'],
-                    'fund_id': r.get('fund_id')})
+                    'fund_id': r.get('fund_id'), 'merchant_raw': r.get('merchant_raw') or '',
+                    'instalment': domain.instalment(f"{r['merchant'] or ''} {r.get('merchant_raw') or ''}")})
     return out
 
 
@@ -107,7 +116,9 @@ def account_view(hh, a):
             'balance': valid.money(bal, a['currency']), 'balance_at': at, 'credit_limit': valid.money(limit, a['currency']), 'used_pct': used,
             'due_day': a['due_day'], 'statement_day': a['statement_day'], 'rate_bp': a['rate_bp'], 'archived': bool(a['archived_at']),
             'statement_due': valid.money(a.get('statement_due_minor'), a['currency']), 'min_due': valid.money(a.get('min_due_minor'), a['currency']),
-            'statement_due_on': a.get('statement_due_on') or None}
+            'statement_due_on': a.get('statement_due_on') or None, 'rewards': a.get('rewards') or None,
+            'annual_fee': valid.money(a.get('annual_fee_minor'), a['currency']), 'forex_markup_bp': a.get('forex_markup_bp'),
+            'interest_free_days': a.get('interest_free_days')}
 
 
 def account_rows(hh, member_id, archived=False):
@@ -152,9 +163,14 @@ def _account_fields(req, b, partial):
     for k, lo, hi in (('due_day', 0, 31), ('statement_day', 0, 31), ('rate_bp', 0, 100000)):
         if k in b:
             cols[k] = valid.integer(b[k], k, lo, hi)
-    for k in ('statement_due_minor', 'min_due_minor'):  # null clears it
+    for k in ('statement_due_minor', 'min_due_minor', 'annual_fee_minor'):  # null clears it
         if k in b:
             cols[k] = None if b[k] is None else valid.minor(b[k], k)
+    for k, hi in (('forex_markup_bp', 10000), ('interest_free_days', 120)):
+        if k in b:
+            cols[k] = None if b[k] is None else valid.integer(b[k], k, 0, hi)
+    if 'rewards' in b:
+        cols['rewards'] = valid.text(b['rewards'], 'rewards', 120, required=False) if b['rewards'] is not None else None
     if 'statement_due_on' in b:
         cols['statement_due_on'] = valid.day(b['statement_due_on'], 'statement_due_on', required=False) or None
     if 'opening_as_of' in b:

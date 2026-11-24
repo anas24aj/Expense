@@ -282,7 +282,8 @@ def payoff(debts, surplus, prepay_loans=False, spend_now=0, cap=600):
         if cards_n is None and not card & set(bal):
             cards_n = n
         timeline.append({'n': n, 'interest': round(charged), 'cards': round(sum(v for i, v in bal.items() if i in card)),
-                         'loans': round(sum(v for i, v in bal.items() if i not in card)), 'cleared': done})
+                         'loans': round(sum(v for i, v in bal.items() if i not in card)), 'cleared': done,
+                         'by': {i: round(v) for i, v in bal.items()}})
     return {'cards_months': cards_n, 'debt_months': None if bal else n, 'interest': round(interest), 'card_interest': round(card_int), 'timeline': timeline, 'cleared': cleared}
 
 
@@ -300,13 +301,16 @@ def min_due_interest(debts, cap=600):
 
 
 def interest_per_month(loans):
-    return sum(l['balance_now'] * l['rate_bp'] / 120000 for l in loans if l['balance_now'] > 0)
+    """Interest a month: each debt's own figure (interest_minor: real charges or the loan schedule) where known."""
+    return sum(l['interest_minor'] if l.get('interest_minor') is not None else l['balance_now'] * l['rate_bp'] / 120000
+               for l in loans if l['balance_now'] > 0)
 
 
 def to_cur(loans, cur, rate):
     return [{**l, 'balance_now': round(conv(l['balance_now'], l['currency'], cur, rate)),
              'emi_minor': round(conv(l['emi_minor'], l['currency'], cur, rate)),
-             'pre_emi_minor': round(conv(l.get('pre_emi_minor') or 0, l['currency'], cur, rate)), 'currency': cur} for l in loans]
+             'pre_emi_minor': round(conv(l.get('pre_emi_minor') or 0, l['currency'], cur, rate)), 'currency': cur,
+             **({'interest_minor': round(conv(l['interest_minor'], l['currency'], cur, rate))} if l.get('interest_minor') is not None else {})} for l in loans]
 
 
 def emi_in(l, month):

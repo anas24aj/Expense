@@ -135,6 +135,9 @@ def infer(hh, t, ctx):
     if rule and (rule['purpose'] or rule['category']):
         return out(rule['purpose'] or ('spend' if debit else 'income'), rule['category'] or t['category'] or 'Uncategorized', 0.9,
                    person_member_id=rule['person_member_id'], person_contact_id=rule['person_contact_id'])
+    if debit and t.get('account_kind') in ('credit_card', 'bnpl') and domain.CARD_EMI.search(text):
+        # the interest part of a card instalment is a loss; the instalment itself is spending already planned
+        return out('fee' if domain.CARD_EMI_INTEREST.search(text) else 'spend', domain.CARD_EMI_CATEGORY, 0.9)
     category = categorize(t['merchant'] or '', text, RULES)
     if debit and (category == FEES or domain.FEE.search(text)):
         return out('fee', FEES, 0.9)

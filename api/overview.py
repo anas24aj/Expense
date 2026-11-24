@@ -1,6 +1,7 @@
 """Reads for the redesigned app (docs/brain/api-v3.md "Overview"): net worth by country with fees as losses, the month
 planner, money movement between accounts and people, one person's ledger, and the review queue grouped by merchant."""
 import math
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 
@@ -10,6 +11,7 @@ from api.app import ApiError, route
 
 CASH_KINDS = ('bank', 'wallet', 'cash', 'debit_card', 'investment')
 CARD_KINDS = ('credit_card', 'bnpl')
+INTEREST = re.compile(r'interest|finance charge|Card instalment', re.I)
 CUR_COUNTRY = {'SAR': 'SA', 'INR': 'IN'}
 COUNTRY_CUR = {'SA': 'SAR', 'IN': 'INR'}
 
@@ -64,7 +66,23 @@ def networth_view(req, ctx):
     assets = sum(p['cash'] + p['property'] for p in g.values())
     liab = sum(p['cards'] + p['loans'] for p in g.values())
     return {'currency': base, 'fx': ctx['rate'], 'assets': _M(assets, base), 'liabilities': _M(liab, base), 'net': _M(assets - liab, base),
-            'countries': countries, 'losses': losses(ctx)}
+            'countries': countries, 'losses': losses(ctx), 'history': history(ctx, assets - liab)}
+
+
+def history(ctx, net_now, months=6):
+    """Net worth at each of the last `months` month ends, walked back from today's: undo every movement on an account
+    with a known balance after that day, and add back the loan principal paid since (property at today's value, today's
+    rate). Approximate: an account whose balance is unknown is left out."""
+    known = {a['id'] for a in ctx['accounts'] if a['balance'] is not None}
+    ends = [(engine.add_months(ctx['today'][:7], -k), engine.add_months(ctx['today'][:7], 1 - k) + '-01') for k in range(months - 1, 0, -1)]
+    out = []
+    for m, after in ends:
+        moved = sum(_conv(ctx, t['amount_minor'] if t['direction'] == 'credit' else -t['amount_minor'], t['currency'])
+                    for t in ctx['raw_txns'] if t['account_id'] in known and t['day'] >= after)
+        principal = sum(_conv(ctx, p['amount'] - p['interest'], l['currency']) for l in ctx['liabs'] if l['kind'] not in CARD_KINDS
+                        for p in l['payments'] if p['day'] >= after)
+        out.append({'month': m, 'net': _M(net_now - moved - principal, ctx['cur'])})
+    return out + [{'month': ctx['today'][:7], 'net': _M(net_now, ctx['cur'])}]
 
 
 def losses(ctx):
@@ -93,37 +111,107 @@ def _main_bank(accts, cur):
     return max(banks, key=lambda a: (a['balance'] or {}).get('minor') or 0, default=None)
 
 
+def last_payer(ctx, card_id):
+    """The account that last paid a card: the sending side of the latest transfer (a card payment) into it, or None."""
+    if 'payers' not in ctx:
+        rows = ctx['hh'].run("SELECT c.account_id AS card, f.account_id AS src FROM txn_links l "
+                             "JOIN transactions c ON c.id = l.to_txn AND c.household_id = l.household_id "
+                             "JOIN transactions f ON f.id = l.from_txn AND f.household_id = l.household_id "
+                             "WHERE l.household_id = :hid AND l.kind = 'transfer' AND c.deleted_at IS NULL AND f.deleted_at IS NULL "
+                             "ORDER BY c.day, c.occurred_at, c.id")
+        cash = {a['id'] for a in ctx['accounts'] if a['kind'] in CASH_KINDS}
+        ctx['payers'] = {r['card']: r['src'] for r in rows if r['src'] in cash}  # the latest one wins
+    return ctx['payers'].get(card_id)
+
+
+def _label(a):
+    return ledger.label(a['institution'], a['name'], a['last4'])
+
+
+def _payer_label(ctx, card_id):
+    a = next((x for x in ctx['accounts'] if x['id'] == last_payer(ctx, card_id)), None)
+    return {'id': a['id'], 'name': _label(a)} if a else None
+
+
 def _card_spend(ctx, aid, month):
     """Average monthly spending on a card over the 3 full months before `month`: next month's bill, as a guess."""
-    months = {engine.add_months(month, -k) for k in (2, 3, 4)}
-    rows = [t for t in ctx['raw_txns'] if t['account_id'] == aid and t['direction'] == 'debit' and t['day'][:7] in months and t['purpose'] != 'transfer']
-    return sum(t['amount_minor'] for t in rows) / 3
+    if 'card_spend' not in ctx:
+        by = ctx['card_spend'] = defaultdict(int)
+        for t in ctx['raw_txns']:
+            if t['direction'] == 'debit' and t['purpose'] != 'transfer':
+                by[(t['account_id'], t['day'][:7])] += t['amount_minor']
+    return sum(ctx['card_spend'][(aid, engine.add_months(month, -k))] for k in (2, 3, 4)) / 3
 
 
-def _plan_month(req, ctx, accts, m, look, india_cash, people):
-    today, base = ctx['today'], ctx['cur']
+def card_due(ctx, a, m):
+    """(due in month m, its day, revolving, known: the amount is from a statement) for a card account. What is due is the statement by its due date: the
+    statement due (or the minimum due) when the bank's statement is known, else what the last statement billed and is
+    still unpaid (with a statement day), else the whole balance. The rest of the balance is revolving debt: it charges
+    interest and is not due this month. Later months: the statement due in that month, else the card's average spend."""
+    today, cur = ctx['today'], a['currency']
+    owed = max(0, -((a['balance'] or {}).get('minor') or 0))
+    day = f"{m}-{min(28, a['due_day']):02d}" if a['due_day'] else None
+    stated = (a['statement_due'] or a['min_due'] or {}).get('minor')
+    on = a['statement_due_on'] or ''
+    if stated is not None and on[:7] == m:
+        due, day, known = min(owed, stated) if m == today[:7] else stated, on, True
+    elif m != today[:7]:
+        return round(_card_spend(ctx, a['id'], m)), day, 0, False
+    elif stated is not None and on[:7] > m:
+        return 0, day, max(0, owed - stated), True  # the statement is due next month (counted there); the rest revolves
+    elif a['statement_day']:
+        close = f"{today[:7]}-{min(28, a['statement_day']):02d}"
+        close = close if close <= today else engine.add_months(close, -1)
+        rows = [t for t in ctx['raw_txns'] if t['account_id'] == a['id'] and t['currency'] == cur and t['category'] != 'Ignored']
+        signed = lambda t: t['amount_minor'] if t['direction'] == 'debit' else -t['amount_minor']
+        billed = sum(signed(t) for t in rows if engine.add_months(close, -1) < t['day'] <= close)
+        paid = sum(t['amount_minor'] for t in rows if t['direction'] == 'credit' and t['day'] > close)
+        due, known = min(owed, max(0, billed - paid)), True
+    else:
+        due, known = owed, False
+    return due, day, max(0, owed - due) if m == today[:7] else 0, known
+
+
+def owe_due_key(kind, pid):
+    return f'owe_due.{kind}.{pid}'
+
+
+def _owe_due(ctx):
+    """People you owe whose money is counted in this month's dues (the person page's toggle); the rest is "no rush"."""
+    if 'owe_due' not in ctx:
+        ctx['owe_due'] = {r['key'] for r in ctx['hh'].run("SELECT key, value FROM settings WHERE household_id = :hid AND key LIKE 'owe_due.%'")
+                          if r['value'] in ('true', '1')}
+    return ctx['owe_due']
+
+
+def _plan_month(ctx, m, look, india_cash, people):
+    """One month's dues against its income: recurring payments, loan EMIs, card statements by their due dates and the
+    people you owe who want it now. short = income − those dues, the one "short by" figure (Home, the look-ahead, Plan)."""
+    today, base, accts = ctx['today'], ctx['cur'], ctx['accounts']
+    this = m == today[:7]
     by_id = {a['id']: a for a in accts}
     loan_ids = {l['id'] for l in ctx['loans']}
     lines = []
 
-    def line(kind, name, minor, cur, day, account_id, link, paid=False, counted=True, country=None, note=None):
+    def line(kind, name, minor, cur, day, account_id, link, paid=False, counted=True, country=None, note=None, overdue=False, ref=None):
         payer = by_id.get(account_id) if account_id in by_id and by_id[account_id]['kind'] in CASH_KINDS else _main_bank(accts, cur)
         lines.append({'kind': kind, 'name': name, 'amount': _M(minor, cur), 'base': _M(_conv(ctx, minor, cur), base), 'day': day,
-                      'country': country or country_of('', cur), 'account_id': payer and payer['id'],
-                      'account_name': payer and ledger.bank_label({'account_institution': payer['institution'], 'account_last4': payer['last4'], 'account_name': payer['name']}),
-                      'paid': paid, 'counted': counted and not paid, 'link': link, 'note': note})
+                      'country': country or country_of('', cur), 'account_id': payer and payer['id'], 'account_name': payer and _label(payer),
+                      'paid': paid, 'counted': counted and not paid, 'link': link, 'note': note, 'overdue': bool(overdue and not paid), 'ref': ref})
 
     funded = {f['commitment_id'] for f in ctx['funds'] if f['commitment_id']}
+    cjs = ctx.setdefault('cj', {})
     for c in ctx['commits']:
         if c['liability_id'] in loan_ids:
             continue  # paid as the loan's EMI below
-        cj = plan.commitment_json(c, ctx)
+        cj = cjs.get(c['id']) or cjs.setdefault(c['id'], plan.commitment_json(c, ctx))
         due = engine.dues({**c, 'next_due': cj['next_due']}, m, m)
-        overdue = m == today[:7] and cj['next_due'] < m + '-01'
+        late = this and cj['next_due'] < today
         last = (cj['last_paid'] or {}).get('day') or ''
-        if due or overdue:
-            line('commitment', c['name'], engine.your_share(c), c['currency'], today if overdue else due[0], c['account_id'],
-                 f"/recurring?commitment={c['id']}", counted=c['id'] not in funded, country=c['country'])
+        if due or late:
+            line('commitment', c['name'], engine.your_share(c), c['currency'], cj['next_due'] if late else due[0], c['account_id'],
+                 f"/recurring?commitment={c['id']}", counted=c['id'] not in funded, country=c['country'], overdue=late, ref=c['id'],
+                 note=f"Overdue since {cj['next_due']}" if late else None)
         elif last[:7] == m:
             line('commitment', c['name'], engine.your_share(c), c['currency'], last, c['account_id'], f"/recurring?commitment={c['id']}", paid=True,
                  country=c['country'])
@@ -134,31 +222,36 @@ def _plan_month(req, ctx, accts, m, look, india_cash, people):
             continue
         day = f"{m}-{min(28, l['due_day'] or 1):02d}"
         paid = any(p['day'][:7] == m for p in l['payments'])
-        line('emi', l['name'], emi, l['currency'], day, l['account_id'], '/plan#debts', paid=paid)
-    card_liab = {l['account_id'] for l in ctx['liabs'] if l['account_id']}
+        late = this and not paid and day < today
+        line('emi', l['name'], emi, l['currency'], day, l['account_id'], '/plan#debts', paid=paid, overdue=late, ref=l['id'],
+             note=f"Overdue: the {engine.fmt(emi, l['currency'])} instalment was due {day}" if late else None)
     for a in accts:
         if a['kind'] != 'credit_card':
             continue
-        owed = max(0, -((a['balance'] or {}).get('minor') or 0)) if m == today[:7] else round(_card_spend(ctx, a['id'], m))
-        day = f"{m}-{min(28, a['due_day']):02d}" if a['due_day'] else None
-        note = None
-        if m == today[:7] and a['statement_due'] and a['statement_due_on'] and a['statement_due_on'] >= today:
-            # the statement says what is due and by when; what was paid since takes the balance below it
-            owed, day = min(owed, a['statement_due']['minor']), a['statement_due_on']
-            if a['min_due']:
-                note = (f"Minimum due {engine.fmt(a['min_due']['minor'], a['currency'])}. Paying only the minimum leaves the rest "
-                        'charging interest (about 3% a month): pay it in full.')
-        if owed:
-            line('card', f"{a['institution'] or a['name']} card{' ··' + a['last4'] if a['last4'] else ''}", owed, a['currency'], day, None,
-                 f"/accounts/{a['id']}", country=country_of(a['country'], a['currency']), note=note)
+        due, day, revolving, known = card_due(ctx, a, m)
+        name = _label(a)
+        if due:
+            note = (f"Minimum due {engine.fmt(a['min_due']['minor'], a['currency'])}. Paying only the minimum leaves the rest charging interest: pay it in full."
+                    if this and a['min_due'] and a['statement_due'] else None)
+            line('card', name, due, a['currency'], day, last_payer(ctx, a['id']), f"/accounts/{a['id']}", country=country_of(a['country'], a['currency']),
+                 note=note, overdue=this and known and day and day < today)
+        if revolving:
+            debt = insights.debt_of(ctx, a['id']) or {}
+            line('revolving', f"{name} revolving debt", revolving, a['currency'], None, None, f"/accounts/{a['id']}", counted=False,
+                 country=country_of(a['country'], a['currency']),
+                 note=f"Costs interest (about {engine.fmt(debt.get('interest_minor') or 0, a['currency'])} a month). Not due this month; the debt plan clears it.")
     for l in ctx['liabs']:  # a card tracked only as a liability (no account)
-        if l['kind'] == 'credit_card' and not l['closed_at'] and l['outstanding_minor'] > 0 and l['account_id'] not in by_id and m == today[:7]:
+        if l['kind'] == 'credit_card' and not l['closed_at'] and l['outstanding_minor'] > 0 and l['account_id'] not in by_id and this:
             line('card', l['name'], l['outstanding_minor'], l['currency'], f"{m}-{min(28, l['due_day'] or 28):02d}", None, '/plan#debts')
+    wanted = _owe_due(ctx)
     for p in people:
+        now_ = owe_due_key(p['kind'], p['id']) in wanted
         for owe in p['you_owe']:
-            line('person', f"Pay back {p['name']}", owe['minor'], owe['currency'], None, None, f"/people/{p['kind']}/{p['id']}")
+            line('person', f"Pay back {p['name']}", owe['minor'], owe['currency'], None, None, f"/people/{p['kind']}/{p['id']}", counted=now_,
+                 note=None if now_ else 'No rush: no due date, so not counted this month')
     if look['funds']['minor']:
-        line('fund', 'Set aside for funds', look['funds']['minor'], base, None, None, '/plan#funds')
+        line('fund', 'Set aside for funds', look['funds']['minor'], base, None, None, '/plan#funds', counted=False,
+             note='From what is left after the dues')
     lines.sort(key=lambda x: (x['paid'], x['day'] or '9999', x['kind']))
 
     out = sum(x['base']['minor'] for x in lines if x['counted'])
@@ -181,21 +274,54 @@ def _plan_month(req, ctx, accts, m, look, india_cash, people):
             'items': [{'name': x['name'], 'amount': x['amount'], 'day': x['day']} for x in xs]}
            for aid, xs in sorted(by_account.items(), key=lambda kv: min(x['day'] or '9999' for x in kv[1]))]
     return {'month': m, 'income': look['income'], 'out': _M(out, base), 'surplus': _M(surplus, base), 'short': _M(-surplus, base) if surplus < 0 else None,
-            'lines': lines, 'pay_from': pay, 'move_to_india': move,
+            'lines': lines, 'pay_from': pay, 'move_to_india': move, 'revolving': _M(sum(x['base']['minor'] for x in lines if x['kind'] == 'revolving'), base),
             'india': {'due': _M(inr_due, 'INR'), 'cash': _M(india_cash, 'INR')}}
 
 
+def plan_months(ctx, n=2):
+    """The month planner for this month and the next n − 1 (computed once per request)."""
+    if len(ctx.get('plan_months') or ()) < n:
+        accts = ctx['accounts']
+        look = insights.lookahead(ctx, n)['months']
+        india = sum(a['balance']['minor'] for a in accts if a['kind'] in CASH_KINDS and a['currency'] == 'INR' and a['balance'] and a['balance']['minor'] > 0)
+        people = [p for p in households.people(ctx['hh'], ctx['hh'].db) if p['you_owe']]
+        out = []
+        for k, lm in enumerate(look):
+            out.append(_plan_month(ctx, lm['month'], lm, india, people if not k else []))
+            india = max(0, india - out[-1]['india']['due']['minor'])
+        ctx['plan_months'] = out
+    return ctx['plan_months'][:n]
+
+
+def cash_vs_due(ctx, days=30):
+    """Per country: what the bank accounts hold against what is due in the next `days` days (this month's and next
+    month's counted dues dated in the window, and this month's undated ones), and what to move when it is short."""
+    today = ctx['today']
+    end = (date.fromisoformat(today) + timedelta(days=days)).isoformat()
+    due = defaultdict(int)
+    for k, pm in enumerate(plan_months(ctx, 2)):
+        for x in pm['lines']:
+            if x['counted'] and x['country'] in COUNTRY_CUR and ((x['day'] and x['day'] <= end) or (not k and (x['overdue'] or not x['day']))):
+                due[x['country']] += round(_conv(ctx, x['amount']['minor'], x['amount']['currency'], COUNTRY_CUR[x['country']]))
+    cash = defaultdict(int)
+    for a in ctx['accounts']:
+        if a['kind'] in ('bank', 'wallet', 'cash') and a['balance'] and a['balance']['minor'] > 0:
+            c = country_of(a['country'], a['currency'])
+            if c in COUNTRY_CUR:
+                cash[c] += round(_conv(ctx, a['balance']['minor'], a['currency'], COUNTRY_CUR[c]))
+    out = []
+    for c in ('SA', 'IN'):
+        cur, gap = COUNTRY_CUR[c], due[c] - cash[c]
+        move = math.ceil(_conv(ctx, gap, cur, ctx['cur']) / 100_00) * 100_00 if gap > 0 else 0
+        out.append({'country': c, 'due': _M(due[c], cur), 'cash': _M(cash[c], cur), 'short': _M(max(0, gap), cur), 'move': _M(move, ctx['cur'])})
+    return out
+
+
 def plan_view(req, ctx):
-    """This month and next: salary (as Plan expects it), minus commitments, loan EMIs, card bills and what you owe people
-    (this month), and the fund set-asides → surplus or gap. Then who pays what from which account, and how much to move
-    to India: rupee dues not covered by what the Indian accounts hold."""
-    accts = ledger.account_views(req.hh, req.member['id'])
-    look = insights.lookahead(ctx, 2)['months']
-    india = sum(a['balance']['minor'] for a in accts if a['kind'] in CASH_KINDS and a['currency'] == 'INR' and a['balance'] and a['balance']['minor'] > 0)
-    people = [p for p in households.people(req.hh, req.db) if p['you_owe']]
-    first = _plan_month(req, ctx, accts, look[0]['month'], look[0], india, people)
-    second = _plan_month(req, ctx, accts, look[1]['month'], look[1], max(0, india - first['india']['due']['minor']), [])
-    return {'currency': ctx['cur'], 'fx': ctx['rate'], 'months': [first, second]}
+    """This month and next (months=1-12): salary (as Plan expects it) minus what is due → surplus or gap. Then who pays
+    what from which account, and how much to move to India: rupee dues not covered by what the Indian accounts hold."""
+    n = insights._months(req.query, 2) if req.query.get('months') else 2
+    return {'currency': ctx['cur'], 'fx': ctx['rate'], 'months': plan_months(ctx, min(12, n))}
 
 
 @route('GET', '/api/insights/plan')
@@ -311,9 +437,27 @@ def person(req):
              for c in plan.shared_costs(hh) if c['key'] == (kind, pid)]
     costs.sort(key=lambda c: c['day'], reverse=True)
     tot = lambda ms: [_M(v, c) for c, v in sorted(_sum(ms).items())]
+    p = {**p, 'count_in_dues': bool(hh.one('SELECT key FROM settings WHERE household_id = :hid AND key = :k AND value = :v',
+                                         k=owe_due_key(kind, pid), v='true'))}
     return {'person': p, 'shared': shared, 'sent': sent, 'received': received, 'shared_costs': costs,
             'totals': {'shared': tot([(x['txn']['amount'], 1) for x in shared]), 'their_part': tot([(x['share'], 1) for x in shared if not x['settled']]),
                        'sent': tot([(v['amount'], 1) for v in sent]), 'received': tot([(v['amount'], 1) for v in received])}}
+
+
+@route('PUT', '/api/people/{kind}/{id}/dues')
+def person_dues(req):
+    """{count_in_dues: bool}: what you owe this person counts in this month's dues (off by default: no due date, no rush)."""
+    kind = valid.choice(req.params['kind'], {'member', 'contact'}, 'kind')
+    pid = valid.ident(req.params['id'], 'person')
+    if not req.hh.one(f"SELECT id FROM {'members' if kind == 'member' else 'contacts'} WHERE id = :p AND household_id = :hid", p=pid):
+        raise ApiError(404, 'no such person')
+    on = req.json.get('count_in_dues')
+    if not isinstance(on, bool):
+        raise ApiError(400, 'count_in_dues must be true or false')
+    req.hh.run('DELETE FROM settings WHERE household_id = :hid AND key = :k', k=owe_due_key(kind, pid))
+    if on:
+        req.hh.run('INSERT INTO settings (household_id, key, value) VALUES (:hid, :k, :v)', k=owe_due_key(kind, pid), v='true')
+    return {'kind': kind, 'id': pid, 'count_in_dues': on}
 
 
 def _sum(pairs):
@@ -380,13 +524,15 @@ def card(req):
         raise ApiError(404, 'no such card')
     cur, today = a['currency'], ctx['today']
     rows = [t for t in ctx['raw_txns'] if t['account_id'] == aid and t['currency'] == cur and t['category'] != 'Ignored']
+    interest = lambda t: t['direction'] == 'debit' and insights.is_loss(t) and bool(INTEREST.search(f"{t['merchant'] or ''} {t['category']}"))
 
     def total(keep, after, upto):
         return _M(sum(t['amount_minor'] for t in rows if keep(t) and after < t['day'] <= upto), cur)
     lost = lambda t: t['direction'] == 'debit' and insights.is_loss(t)
     spend = lambda t: t['direction'] == 'debit' and t['purpose'] != 'transfer' and not insights.is_loss(t)
     credit = lambda t: t['direction'] == 'credit'
-    months = [{'month': m, 'spent': total(spend, m, m + '-99'), 'paid': total(credit, m, m + '-99'), 'lost': total(lost, m, m + '-99')}
+    months = [{'month': m, 'spent': total(spend, m, m + '-99'), 'paid': total(credit, m, m + '-99'), 'lost': total(lost, m, m + '-99'),
+               'interest': total(interest, m, m + '-99'), 'fees': total(lambda t: lost(t) and not interest(t), m, m + '-99')}
               for m in (engine.add_months(today[:7], -k) for k in range(5, -1, -1))]
     statement = None
     if a['statement_day']:
@@ -401,8 +547,12 @@ def card(req):
         due = f"{today[:7]}-{min(28, a['due_day']):02d}"
         due = due if due >= today else engine.add_months(due, 1)
     owed = None if a['balance'] is None else max(0, -a['balance']['minor'])
-    rate, assumed = insights.card_rate(a['rate_bp'], cur)
+    debt = insights.debt_of(ctx, aid) or {}
+    rate, assumed = debt.get('rate_bp') or insights.card_rate(a['rate_bp'], cur)[0], debt.get('rate_assumed', not a['rate_bp'])
+    interest = debt.get('interest_minor') if debt else (0 if not owed else round(owed * rate / 120000))
     return {'id': aid, 'currency': cur, 'owed': None if owed is None else _M(owed, cur), 'limit': a['credit_limit'], 'used_pct': a['used_pct'],
             'due_day': a['due_day'] or None, 'next_due': a['statement_due_on'] or due, 'statement': statement, 'months': months,
             'statement_due': a['statement_due'], 'min_due': a['min_due'], 'statement_due_on': a['statement_due_on'],
-            'rate_bp': rate, 'rate_assumed': assumed, 'interest_month': None if owed is None else _M(owed * rate / 120000, cur)}
+            'rate_bp': rate, 'rate_assumed': assumed, 'interest_month': None if owed is None else _M(interest, cur),
+            'interest_source': debt.get('interest_source'), 'payer': _payer_label(ctx, aid),
+            **{k: a[k] for k in ('rewards', 'annual_fee', 'forex_markup_bp', 'interest_free_days')}}

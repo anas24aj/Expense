@@ -160,7 +160,7 @@ def liability_json(l, ctx):
                              'phase': cons['phase'], 'emi_from': cons['emi_from'],
                              'tranches': [{**{k: t[k] for k in ('milestone_id', 'asset_id', 'name', 'day', 'future')}, 'amount': M(t['amount_minor'], cur)}
                                           for t in cons['tranches']]} if cons else None,
-            'interest_month': M(out * l['rate_bp'] / 120000, cur), 'account_id': l['account_id'], 'contact_id': l['contact_id'],
+            'interest_month': M((insights.debt_of(ctx, l['id']) or {}).get('interest_minor', 0) if out > 0 else 0, cur), 'account_id': l['account_id'], 'contact_id': l['contact_id'],
             'member_id': l['member_id'], 'match_pattern': l['match_pattern'], 'closed': bool(l['closed_at']),
             'payments': [{'txn_id': p['txn_id'], 'day': p['day'], 'amount': M(p['amount'], cur), 'interest': M(p['interest'], cur),
                           'principal': M(p['amount'] - p['interest'], cur)} for p in l['payments']],

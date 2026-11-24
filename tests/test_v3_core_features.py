@@ -148,13 +148,23 @@ class CoreFeaturesTest(test_v3_plan.PlanTest):
         self.ok('PATCH', f'/accounts/{card}', {'statement_due_minor': 166569_00, 'min_due_minor': 44676_00, 'statement_due_on': due_on})
         a = next(x for x in self.ok('GET', '/accounts')['items'] if x['id'] == card)
         self.assertEqual((a['statement_due'], a['min_due'], a['statement_due_on']), (M(166569_00, 'INR'), M(44676_00, 'INR'), due_on))
+        this, nxt = self.ok('GET', '/insights/plan')['months']
+        # due next month by its due date: counted there, the statement total and not all 2,00,000 owed
+        self.assertFalse([x for x in this['lines'] if x['kind'] == 'card'])
+        line = next(x for x in nxt['lines'] if x['kind'] == 'card')
+        self.assertEqual((line['amount'], line['day'], line['counted']), (M(166569_00, 'INR'), due_on, True))
+        rev = next(x for x in this['lines'] if x['kind'] == 'revolving')  # the rest of the balance revolves, not due
+        self.assertEqual((rev['amount'], rev['counted']), (M(200000_00 - 166569_00, 'INR'), False))
+        self.assertIn('interest', rev['note'])
+        self.ok('PATCH', f'/accounts/{card}', {'statement_due_on': self.today})  # due this month: the note names the minimum
         line = next(x for x in self.ok('GET', '/insights/plan')['months'][0]['lines'] if x['kind'] == 'card')
-        self.assertEqual((line['amount'], line['day']), (M(166569_00, 'INR'), due_on))  # the statement total, not all 2,00,000 owed
+        self.assertEqual(line['amount'], M(166569_00, 'INR'))
         self.assertIn('Minimum due ₹', line['note'].replace('INR ', '₹'))
         self.assertIn('interest', line['note'])
+        self.ok('PATCH', f'/accounts/{card}', {'statement_due_on': due_on})
         c = self.ok('GET', f'/insights/card/{card}')
         self.assertEqual((c['statement_due'], c['min_due'], c['next_due'], c['used_pct']), (M(166569_00, 'INR'), M(44676_00, 'INR'), due_on, 62))
-        self.ok('PATCH', f'/accounts/{card}', {'statement_due_minor': None})  # cleared: back to the full amount owed
+        self.ok('PATCH', f'/accounts/{card}', {'statement_due_minor': None, 'min_due_minor': None})  # cleared: back to the full amount owed
         line = next(x for x in self.ok('GET', '/insights/plan')['months'][0]['lines'] if x['kind'] == 'card')
         self.assertEqual((line['amount'], line['note']), (M(200000_00, 'INR'), None))
         self.assertEqual(self.call('PATCH', f'/api/accounts/{card}', {'statement_due_on': 'soon'})[0], 400)

@@ -53,6 +53,22 @@ CARD_PAY = re.compile(r'\b(?:credit ?card|cc|card) ?(?:bill )?payment\b|\bpaymen
                       r'\bpayment (?:received|thank)|\btop ?-?up\b|سداد بطاقة|\bcredit cards? transactions? t', re.I)  # Al Rajhi: "Debit - Credit Cards Transactions T…" pays the card
 LOAN = re.compile(r'\b(?:emi|loan|instal+ments?)\b|قسط', re.I)
 CK_PURPOSE = {'emi': 'loan_payment', 'support': 'support', 'milestone': 'asset'}
+# A card's own instalment plan ("Pay in EMIs", "EMI 3/12", "interest on EMI"): a card instalment, not insurance or a fee
+CARD_EMI = re.compile(r'\bemis?\b|\binstal+ments?\b|\bpay in emis?\b|\bsmart ?emi\b|\bflexipay\b', re.I)
+CARD_EMI_INTEREST = re.compile(r'\binterest\b|\bfinance charges?\b|\bgst\b|\bprocessing fee', re.I)
+CARD_EMI_CATEGORY = 'Card instalments'
+_N_OF = re.compile(r'(?<!\d)(\d{1,2}) ?(?:/|of) ?(\d{1,2})(?!\d)', re.I)
+
+
+def instalment(text):
+    """{'n', 'of', 'left'} from a card instalment's text ('EMI 3/12', 'instalment 03 of 06'), else None."""
+    if not CARD_EMI.search(text or ''):
+        return None
+    m = _N_OF.search(text)
+    if not m or not 0 < int(m[1]) <= int(m[2]):
+        return None
+    n, of = int(m[1]), int(m[2])
+    return {'n': n, 'of': of, 'left': of - n}
 
 
 class NotFound(KeyError):  # a KeyError so MCP's error handling reports it

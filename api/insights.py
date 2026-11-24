@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
+import domain
 import engine
 from api.app import ApiError, route
 
@@ -226,18 +227,17 @@ def load(req):
 
     loans = [{'id': l['id'], 'name': l['name'], 'kind': 'card' if l['kind'] == 'credit_card' else 'loan', 'balance_now': l['outstanding_minor'],
               'rate_bp': l['rate_bp'], 'emi_minor': l['emi_minor'], 'currency': l['currency'], 'pattern': l['match_pattern'], 'liability_kind': l['kind'],
-              'pre_emi_minor': (l['construction'] or {}).get('pre_emi', 0), 'emi_from': l['emi_from'] if l['construction'] else ''}
+              'pre_emi_minor': (l['construction'] or {}).get('pre_emi', 0), 'emi_from': l['emi_from'] if l['construction'] else '',
+              'account_id': l['account_id']}
              for l in liabs if not l['closed_at'] and l['outstanding_minor'] > 0]
     tracked = {l['account_id'] for l in liabs if l['account_id'] and not l['closed_at']}
-    loans += [{'id': a['id'], 'name': a['name'] if a['name'] == a['institution'] else f"{a['institution']} {a['name']}".strip(),
+    loans += [{'id': a['id'], 'name': ledger.label(a['institution'], a['name'], a['last4']),
                'kind': 'card', 'balance_now': -a['balance']['minor'], 'rate_bp': a['rate_bp'], 'emi_minor': 0, 'currency': a['currency'],
                'pattern': '', 'liability_kind': 'credit_card', 'pre_emi_minor': 0, 'emi_from': '', 'account_id': a['id']}
               for a in accts if a['kind'] == 'credit_card' and a['id'] not in tracked and a['balance'] and a['balance']['minor'] < 0]
     acct_rate = {a['id']: a['rate_bp'] for a in accts}
-    acct_of = {l['id']: l['account_id'] for l in liabs}
     for l in loans:
-        if l['liability_kind'] == 'credit_card':
-            l['rate_bp'], l['rate_assumed'] = card_rate(l['rate_bp'] or acct_rate.get(acct_of.get(l['id'], l['id'])), l['currency'])
+        l.update(interest_of(l, acct_rate.get(l['account_id']), l['account_id'], txns, today, r))
     s = settings(hh)
     eng_settings = {'salary': s['salary_minor'] / 100 if s['salary_minor'] else None, 'salary_currency': s['salary_currency'] or cur,
                     'emergency_months': s['emergency_months'], 'debt_strategy': s['debt_strategy'],
@@ -252,6 +252,40 @@ def load(req):
             'milestones': milestones, 'accounts': accts,
             'accounts_cash': hh.run("SELECT currency, last_balance_minor FROM accounts WHERE household_id = :hid AND archived_at IS NULL "
                                     "AND kind IN ('bank', 'wallet', 'cash')")}
+
+
+def interest_of(l, acct_rate_bp, account_id, txns, today, r):
+    """One debt's interest a month, the one figure Home, Month, Wealth and the debt plan show, and the yearly rate the
+    plan runs on. A card: the interest and fees actually charged on its account, averaged over the 3 full months before
+    this one (months with no activity on it are left out); its rate is its own (rate_bp), else charges × 12 ÷ balance,
+    else the usual one for its country (rate_assumed). A loan: its schedule (outstanding × rate ÷ 12)."""
+    bal = max(0, l['balance_now'])
+    if l['liability_kind'] not in CARD_KINDS:
+        return {'interest_minor': round(bal * (l['rate_bp'] or 0) / 120000), 'rate_assumed': False, 'interest_source': 'schedule'}
+    months = {engine.add_months(today[:7], -k) for k in (1, 2, 3)}
+    rows = [t for t in txns if account_id and t['account_id'] == account_id and t['day'][:7] in months]
+    seen = {t['day'][:7] for t in rows}
+    charged = sum(engine.conv(t['amount_minor'], t['currency'], l['currency'], r) for t in rows if t['direction'] == 'debit' and is_loss(t)) / max(1, len(seen))
+    own = l['rate_bp'] or acct_rate_bp
+    if own:
+        rate, source = own, 'rate'
+    elif charged and bal:
+        rate, source = min(100000, round(charged * 120000 / bal)), 'charges'
+    else:
+        rate, source = card_rate(None, l['currency'])[0], 'assumed'
+    if seen:  # what the bank really charged
+        return {'interest_minor': round(charged), 'rate_bp': rate, 'rate_assumed': source == 'assumed', 'interest_source': 'charges'}
+    return {'interest_minor': round(bal * rate / 120000), 'rate_bp': rate, 'rate_assumed': source == 'assumed', 'interest_source': source}
+
+
+def debt_of(ctx, id):
+    """The debt (ctx['loans'] entry) for a liability id or a card's account id, else None."""
+    return next((l for l in ctx['loans'] if id in (l['id'], l.get('account_id'))), None)
+
+
+def interest_total(ctx, kind=None):
+    """The debts' interest a month (interest_of), in the base currency; kind 'card' or 'loan' for one side."""
+    return sum(to_cur(l['interest_minor'], l['currency'], ctx) for l in ctx['loans'] if kind in (None, l['kind']))
 
 
 def _liability_calc(l, txns, r, tranches=None, today=''):
@@ -329,7 +363,8 @@ def spend_split(ctx, m):
         if t['day'].startswith(m) and (c := engine.counted(t)):
             v = engine.conv(c, t['currency'], ctx['cur'], ctx['r'])
             if is_loss(t):
-                loss['Loan interest' if t['id'].endswith(':interest') else t['category'] if t['category'] in LOSS_CATEGORIES else 'Bank fees'] += v
+                loss['Loan interest' if t['id'].endswith(':interest') else 'Card instalment interest' if t['category'] == domain.CARD_EMI_CATEGORY
+                     else t['category'] if t['category'] in LOSS_CATEGORIES else 'Bank fees'] += v
             else:
                 cats[t['category']] += v
     return cats, loss
@@ -378,10 +413,21 @@ def _months(q, default):
     return n
 
 
-def lookahead(ctx, n=12):
+def lookahead(ctx, n=12, dues=False):
+    """Free money per month (after everyday spending). dues: each month also carries the planner's dues and gap
+    (overview.plan_months), and its "Short by" warning is that gap, the same figure Home and Plan show."""
     # EMI commitments tied to a liability are counted through the loan (until its payoff), not twice
     commits = [c for c in ctx['commits'] if not (c['liability_id'] and any(l['id'] == c['liability_id'] for l in ctx['loans']))]
-    return engine.lookahead(ctx['txns'], commits, ctx['funds'], ctx['loans'], ctx['eng_settings'], ctx['today'], ctx['cur'], ctx['r'], n)
+    out = engine.lookahead(ctx['txns'], commits, ctx['funds'], ctx['loans'], ctx['eng_settings'], ctx['today'], ctx['cur'], ctx['r'], n)
+    out['interest_per_month'] = M(interest_total(ctx), ctx['cur'])
+    if dues:
+        from api import overview
+        for x, pm in zip(out['months'], overview.plan_months(ctx, n)):
+            x.update(dues=pm['out'], surplus=pm['surplus'], short=pm['short'])
+            x['warnings'] = [w for w in x['warnings'] if not w.startswith('Short by')]
+            if pm['short']:
+                x['warnings'].append(f"Short by {engine.fmt(pm['short']['minor'], ctx['cur'])}: dues are more than the salary")
+    return out
 
 
 def whatif(ctx, q):
@@ -424,15 +470,21 @@ def payoff(ctx, q):
               'rate_bp': l['rate_bp'], 'rate_assumed': l.get('rate_assumed', False), 'local': M(l['balance_now'], l['currency']),
               'emi': round(engine.conv(engine.emi_in(l, today[:7]), l['currency'], cur, r))} for l in ctx['loans']]
     plan = engine.payoff(debts, surplus, prepay, spend)
+    try:
+        extra = int(q.get('extra_minor') or 1000_00)  # "paying extra": this much a month on top of the free money
+    except ValueError:
+        raise ApiError(400, 'extra_minor must be a whole number')
+    fast = engine.payoff(debts, max(0, surplus) + max(0, extra), prepay, spend)
     base = engine.payoff(debts, surplus, prepay) if spend else plan
     month = lambda n: engine.add_months(today[:7], n) if n is not None else None
     names = {d['id']: d['name'] for d in debts}
     cards = [d for d in debts if d['kind'] == 'card']
     slow = engine.min_due_interest(cards)
-    now = lambda kind: sum(d['balance'] * d['rate_bp'] / 120000 for d in debts if d['kind'] == kind)
+    now = lambda kind: interest_total(ctx, kind)
     delay = lambda k: None if plan[k] is None or base[k] is None else plan[k] - base[k]
-    notes = [f"{d['name']}: no rate set, assumed {d['rate_bp'] / 100:g}% a year (usual for {'Indian' if d['local']['currency'] == 'INR' else 'Saudi'} cards)"
+    notes = [f"{d['name']}: no rate set and no interest charged yet, assumed {d['rate_bp'] / 100:g}% a year (usual for {'Indian' if d['local']['currency'] == 'INR' else 'Saudi'} cards)"
              for d in cards if d['rate_assumed']]
+    notes.append('Interest a month is what the cards really charged (average of the last 3 months) and the loans’ schedules.')
     notes.append(f'Free money for debt: {engine.fmt(surplus, cur)} a month, the next 12 months’ average after EMIs, bills and everyday spending.')
     if surplus <= 0:
         notes.append('Nothing is left after EMIs and bills, so the cards only grow. Cut spending or move a set-aside to start.')
@@ -448,7 +500,9 @@ def payoff(ctx, q):
                        'cleared': month(plan['cleared'].get(d['id'])), 'months': plan['cleared'].get(d['id'])}
                       for d in sorted(debts, key=lambda d: (d['kind'] != 'card', -d['rate_bp']))],
             'timeline': [{'month': month(x['n']), 'interest': M(x['interest'], cur), 'cards': M(x['cards'], cur), 'loans': M(x['loans'], cur),
-                          'cleared': [names.get(i, 'This purchase') for i in x['cleared']]} for x in plan['timeline']],
+                          'cleared': [names.get(i, 'This purchase') for i in x['cleared']], 'by': x['by']} for x in plan['timeline']],
+            'extra': M(extra, cur), 'with_extra': {'debt_free': month(fast['debt_months']), 'months': fast['debt_months'], 'interest': M(fast['interest'], cur),
+                                                   'timeline': [{'month': month(x['n']), 'total': M(x['cards'] + x['loans'], cur)} for x in fast['timeline']]},
             'assumptions': notes}
 
 
@@ -504,12 +558,22 @@ def card_alerts(ctx, days=7):
 
 
 def home(req, ctx):
-    from api import plan
+    from api import overview, plan
     m = month(req, ctx, ctx['today'][:7])
-    la = lookahead(ctx, 6)
+    la = lookahead(ctx, 6, dues=True)
     commits = sorted((plan.commitment_json(c, ctx) for c in ctx['commits']), key=lambda c: c['next_due'])
-    alerts = [{'level': 'warn', 'text': f"{c['name']} is overdue ({c['next_due']})", 'link': f"/plan/commitments/{c['id']}"}
-              for c in commits if c['status'] == 'overdue']
+    alerts = []
+    for c in overview.cash_vs_due(ctx):  # cash in the accounts against the next 30 days: at the top of Home
+        if c['short']['minor']:
+            move = f", move {engine.fmt(c['move']['minor'], ctx['cur'])}" if c['country'] != 'SA' else f", short {engine.fmt(c['short']['minor'], c['due']['currency'])}"
+            alerts.append({'level': 'bad', 'top': True, 'country': c['country'], 'link': '/plan',
+                           'text': f"Due in 30 days {engine.fmt(c['due']['minor'], c['due']['currency'])}, in accounts {engine.fmt(c['cash']['minor'], c['cash']['currency'])}{move}"})
+    missed = loan_alerts(ctx)
+    flagged = {a['liability_id'] for a in missed if a['month'] == ctx['today'][:7]}
+    for x in overview.plan_months(ctx, 1)[0]['lines']:  # an unpaid instalment or recurring payment past its due date
+        if x['overdue'] and x['ref'] not in flagged:
+            alerts.append({'level': 'bad', 'overdue': True, 'link': x['link'], 'ref': x['ref'],
+                           'text': f"{x['name']} is overdue: {engine.fmt(x['amount']['minor'], x['amount']['currency'])} was due {x['day']}"})
     short = [(r['month'], w) for r in la['months'] for w in r['warnings'] if w.startswith('Short')]
     if short:  # one alert, not one per month
         more = f" (and {len(short) - 1} more month{'s' if len(short) > 2 else ''})" if len(short) > 1 else ''
@@ -517,7 +581,7 @@ def home(req, ctx):
     alerts += [{'level': 'warn', 'text': f"Claim {c['name']} pending for {c['age_days']} days: follow up with {c['payer'] or 'the company'}",
                 'link': f"/plan/claims/{c['id']}"} for c in plan.claim_rows(ctx) if c['status'] not in ('paid', 'rejected') and c['age_days'] > 30]
     alerts += card_alerts(ctx)
-    alerts += loan_alerts(ctx)
+    alerts += missed
     return {'month': m, 'next_dues': [c for c in commits if c['status'] != 'paid'][:5], 'lookahead': la,
             'review_count': review_count(ctx), 'alerts': alerts}
 
@@ -535,7 +599,7 @@ def month_route(req):
 
 @route('GET', '/api/insights/lookahead')
 def lookahead_route(req):
-    return lookahead(load(req), _months(req.query, 12))
+    return lookahead(load(req), _months(req.query, 12), dues=True)
 
 
 @route('GET', '/api/insights/whatif')
