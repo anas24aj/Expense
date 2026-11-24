@@ -658,7 +658,8 @@ on('GET', '/insights/card/{id}', m => {
   const owed = a.balance ? Math.max(0, -a.balance.minor / 100) : null;
   return { id: a.id, currency: cur, owed: owed === null ? null : X(owed), limit: a.credit_limit, used_pct: a.used_pct, due_day: a.due_day,
     next_due: a.statement_due_on || (a.due_day ? onDay(1, a.due_day) : null),
-    statement: a.statement_day ? { from: onDay(-2, 28), to: onDay(-1, 28), billed: X(4120 * f), paid: X(4000 * f), left: X(120 * f) } : null,
+    statement: a.statement_day ? (a.statement_due ? { from: onDay(-2, 28), to: onDay(-1, 28), billed: a.statement_due, paid: X(0), left: a.statement_due }
+      : { from: onDay(-2, 28), to: onDay(-1, 28), billed: X(4120 * f), paid: X(4000 * f), left: X(120 * f) }) : null,
     months: [5, 4, 3, 2, 1, 0].map(i => ({ month: ym(-i), spent: X((2600 + 900 * Math.sin(i * 1.3) + (i === 1 ? 1400 : 0)) * f), paid: X((2400 + 500 * Math.cos(i)) * f), lost: X((i % 2 ? 84 : 23) * f) })),
     rate_bp: a.rate_bp || (cur === 'INR' ? 3600 : 3000), rate_assumed: !a.rate_bp, interest_month: owed === null ? null : X(owed * (a.rate_bp || 3600) / 120000),
     statement_due: a.statement_due || null, min_due: a.min_due || null, statement_due_on: a.statement_due_on || null };

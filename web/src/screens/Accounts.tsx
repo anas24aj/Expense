@@ -240,7 +240,7 @@ export function AccountPage() {
             <div className="row-flex"><AccountTile a={a} /><div><b>{a.name}</b><p className="caption">{KIND_LABEL[a.kind]?.replace(/s$/, '')} · {a.country} · {a.currency}{owner ? ` · ${owner}` : ''}{a.visibility === 'private' ? ' · private' : ''}</p></div></div>
             {card && <div className="hero-label" style={{ marginTop: 12 }}>Owed now</div>}
             <div className={`hero-amount ${a.balance && a.balance.minor < 0 ? 'neg' : ''}`} style={{ fontSize: 40 }}>{card && a.balance ? fmt({ ...a.balance, minor: owed(a) }) : fmt(a.balance)}</div>
-            <p className="caption">{card && a.due_day ? <b>Due {nextDue(a.due_day)} · </b> : null}{a.balance_at ? `Balance as of ${shortDate(a.balance_at.slice(0, 10))}` : 'No balance seen yet — it appears from the next SMS or statement'}</p>
+            <p className="caption">{card && a.statement_due_on ? <b>Due {shortDate(a.statement_due_on)} · </b> : card && a.due_day ? <b>Due {nextDue(a.due_day)} · </b> : null}{a.balance_at ? `Balance as of ${shortDate(a.balance_at.slice(0, 10))}` : 'No balance seen yet — it appears from the next SMS or statement'}</p>
             {ownerM && ownerM.id !== me && <p className="row-flex caption" style={{ marginTop: 8, gap: 8 }}><Avatar name={ownerM.display_name} photo={ownerM.photo} size={24} />{ownerM.display_name}’s account</p>}
             {a.credit_limit && a.used_pct !== null && (
               <div className="stack-sm" style={{ marginTop: 14 }}>

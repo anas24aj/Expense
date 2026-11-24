@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError, qs, useApi } from '../api/client';
 import type { MonthInsight, Payoff, Txn } from '../api/types';
 import { fmt, monthLabel, shiftMonth, thisMonth } from '../lib/format';
-import { AreaChart, BarRow, CHART_COLORS, Donut, EmptyState, ErrorCard, Icon, List, ListRow, MiniBars, Money, Page, PageSkeleton, Section, Toggle } from '../ui';
+import { BarRow, CHART_COLORS, Donut, EmptyState, ErrorCard, Icon, List, ListRow, MiniBars, Money, Page, PageSkeleton, Section, Toggle } from '../ui';
 import type { ChartItem } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 
@@ -98,7 +98,7 @@ function MonthBody({ m, ym }: { m: MonthInsight; ym: string }) {
       <Section title="Not spending">
         <List>
           <ListRow icon={<Icon name="transfer" />} title="Transfers, card bills, EMIs, lending" to={`/money?month=${ym}`}
-            sub="Moving your own money, paying the card bill, loan principal and money lent are not counted as spent"
+            sub="Not counted as spent"
             end={m.other_out ? <Money m={m.other_out} /> : undefined} />
         </List>
       </Section>
@@ -195,17 +195,20 @@ export function PayoffPage() {
 
           <Section title="Month by month">
             <div className="glass card stack-sm">
-              <AreaChart data={p.timeline.filter((_, i) => p.timeline.length <= 24 || i % 12 === 0 || i < 12).slice(0, 24).map(t => ({ month: t.month, value: (t.cards.minor + t.loans.minor) / 100 }))} />
+              {/* what is still owed: monthly for a short plan, once a year for a long one */}
+              <MiniBars label="Still owed" format={v => fmt({ minor: Math.round(v * 100), currency: p.currency }, { compact: true })}
+                items={p.timeline.filter((_, i) => p.timeline.length <= 12 || i % Math.ceil(p.timeline.length / 12) === 0)
+                  .map(t => ({ label: p.timeline.length <= 12 ? monthLabel(t.month) : `’${t.month.slice(2, 4)}`, value: (t.cards.minor + t.loans.minor) / 100 }))} highlight={0} />
               <div className="table-wrap">
                 <table className="look">
                   <thead><tr><th>Month</th><th>Cards</th><th>Loans</th><th>Interest</th></tr></thead>
-                  <tbody>{p.timeline.slice(0, 24).map(t => (
+                  <tbody>{p.timeline.filter((t, i) => i < 12 || t.cleared.length).map(t => (
                     <tr key={t.month}><td>{monthLabel(t.month)} {t.month.slice(2, 4)}{t.cleared.length ? <><br /><span className="pos caption">✓ {t.cleared.join(', ')}</span></> : null}</td>
                       <td>{fmt(t.cards, { compact: true })}</td><td>{fmt(t.loans, { compact: true })}</td><td className="neg">{fmt(t.interest, { compact: true })}</td></tr>
                   ))}</tbody>
                 </table>
               </div>
-              {p.timeline.length > 24 && <p className="caption">…then the loans run on their EMIs until {(base || p).debt_free.month ? monthLabel((base || p).debt_free.month!, true) : 'beyond 50 years'}.</p>}
+              {p.timeline.length > 12 &&<p className="caption">…then the loans run on their EMIs until {(base || p).debt_free.month ? monthLabel((base || p).debt_free.month!, true) : 'beyond 50 years'}.</p>}
             </div>
           </Section>
           <div className="span-2">{p.assumptions.map(a => <p key={a} className="footnote">{a}</p>)}</div>

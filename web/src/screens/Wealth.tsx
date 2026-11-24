@@ -36,7 +36,7 @@ export default function WealthPage() {
   if (err) return <Page title="Wealth"><ErrorCard error={err} retry={() => { nw.refetch(); assets.refetch(); liabs.refetch(); accounts.refetch(); }} /></Page>;
   const n = nw.data!, as = assets.data!.items, ls = liabs.data!.items.filter(l => !l.closed && l.outstanding.minor > 0 && l.kind !== 'credit_card');
   const accts = accounts.data!.items.filter(a => !a.archived);
-  const cards = accts.filter(a => a.kind === 'credit_card' || a.kind === 'bnpl');
+  const cards = accts.filter(a => a.kind === 'credit_card');  // BNPL is listed with the loans
   const cash = accts.filter(a => ['bank', 'wallet', 'cash', 'debit_card'].includes(a.kind) && a.balance);
   const ownPct = n.assets.minor + n.liabilities.minor ? 100 * n.assets.minor / (n.assets.minor + n.liabilities.minor) : 50;
   return (
@@ -77,9 +77,9 @@ export default function WealthPage() {
               <List>{xs.map(a => (
                 <ListRow key={a.id} to={`/assets/${a.id}`} icon={<Tile icon={icon} color={color} />} title={a.name}
                   sub={rented ? <>Running costs <Money m={a.my_monthly_cost} />/mo (your part)</>
-                    : <>Cost <Money m={a.cost} compact />{a.funding ? <> · own <Money m={a.funding.own} compact /> · loan <Money m={a.funding.loan} compact />
+                    : <span style={{ whiteSpace: 'normal' }}>Cost <Money m={a.cost} compact />{a.funding ? <> · own <Money m={a.funding.own} compact /> · loan <Money m={a.funding.loan} compact />
                       {a.funding.interest.minor ? <> · interest so far <span className="neg"><Money m={a.funding.interest} compact /></span></> : null}</> : null}
-                      {a.under_construction ? ' · under construction' : ''}</>}
+                      {a.under_construction ? ' · under construction' : ''}</span>}
                   end={rented ? <><Money m={a.monthly_cost} compact />/mo</> : <Money m={a.value} compact />} />
               ))}</List>
             </Section>

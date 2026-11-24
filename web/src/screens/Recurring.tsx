@@ -16,7 +16,8 @@ const GROUPS: [string, string][] = [['family', 'Family'], ['shared', 'Shared wit
   ['rent', 'Rent'], ['bill', 'Bills'], ['other', 'Others']];
 const groupOf = (c: Commitment) => (c.kind === 'support' || c.for_member_id ? 'family' : c.shares.length ? 'shared'
   : ['subscription', 'emi', 'rent', 'bill'].includes(c.kind) ? c.kind : 'other');
-const perMonth = (c: Commitment, m: M = c.amount): M => ({ ...m, minor: Math.round(m.minor / Math.max(1, c.cycle_months)) });
+// one-offs (a property milestone) are not a monthly cost; their fund sets money aside instead
+const perMonth = (c: Commitment, m: M = c.amount): M => ({ ...m, minor: c.cycle_months ? Math.round(m.minor / c.cycle_months) : 0 });
 const mine = (c: Commitment): M => ({ ...c.amount, minor: c.amount.minor - c.shares.reduce((a, s) => a + s.share.minor, 0) });
 const country = (c: Commitment) => c.country || (c.amount.currency === 'INR' ? 'IN' : 'SA');
 
@@ -86,7 +87,7 @@ export default function RecurringPage() {
                   const forWho = memberName(c.for_member_id), from = acctName(c.account_id);
                   return (
                     <ListRow key={c.id} icon={<Tile icon={icon} color={color} />} title={c.name} onClick={() => setOpen(c)} chevron={false}
-                      sub={<>{[cycleLabel(c.cycle_months), `next ${dueLabel(c.next_due)}`, forWho && `for ${forWho}`, from && `from ${from}`].filter(Boolean).join(' · ')}
+                      sub={<>{[cycleLabel(c.cycle_months), dueLabel(c.next_due), forWho && `for ${forWho}`, from && `from ${from}`].filter(Boolean).join(' · ')}
                         {c.shares.length > 0 && <><br />{c.shares.map(s => <span key={s.member_id || s.contact_id} className={`badge ${s.paid_this_cycle ? 'green' : 'orange'}`} style={{ marginRight: 4 }}>
                           {s.name} <Money m={s.share} /> {s.paid_this_cycle ? 'paid' : 'not paid'}</span>)}</>}</>}
                       end={<Money m={c.amount} />} endSub={c.shares.length ? <>yours <Money m={mine(c)} /></> : <StatusBadge status={c.status} />} />

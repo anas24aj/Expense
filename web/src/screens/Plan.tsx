@@ -22,7 +22,7 @@ export default function PlanPage() {
         <div className="span-2"><MonthPlanner /></div>
         <List className="span-2">
           <ListRow to="/recurring" icon={<Tile icon="repeat" color="#af52de" />} title="Recurring payments" sub="Rent, bills, subscriptions, EMIs, family: all feed this plan"
-            end={commits.data ? sumByCurrency(commits.data.items.map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / Math.max(1, c.cycle_months)) }))).map(m => fmt(m, { compact: true })).join(' + ') + '/mo' : undefined} />
+            end={commits.data ? sumByCurrency(commits.data.items.filter(c => c.cycle_months).map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / c.cycle_months) }))).map(m => fmt(m, { compact: true })).join(' + ') + '/mo' : undefined} />
           <ListRow to="/payoff" icon={<Tile icon="target" color="#ff453a" />} title="Debt-free plan" sub="Months to clear the cards, then the loans" />
         </List>
         <Debts />
