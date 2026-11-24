@@ -4,6 +4,7 @@ import type {
   Account, Asset, Claim, Commitment, Contact, DetectedCommitment, Device, Fund, Invite, Liability, Member, Money,
   Person, ReviewTxn, SalaryEntry, Settings, Trip, TripStatus, Txn,
 } from './types';
+import { acctLabel, fmt } from '../lib/format';
 
 const SAR = (v: number): Money => ({ minor: Math.round(v * 100), currency: 'SAR' });
 const INR = (v: number): Money => ({ minor: Math.round(v * 100), currency: 'INR' });
@@ -36,7 +37,8 @@ const invites: Invite[] = [{ id: 'i1', email: 'amma.menon@example.com', role: 'v
 
 const accounts: Account[] = [
   acct('a1', 'bank', 'Al Rajhi Bank', 'Current account', 'SAR', 'SA', '4471', SAR(18420)),
-  acct('a2', 'credit_card', 'SNB', 'Platinum card', 'SAR', 'SA', '9012', SAR(-6850), SAR(20000), 34, 2700),
+  { ...acct('a2', 'credit_card', 'SNB', 'Platinum card', 'SAR', 'SA', '9012', SAR(-6850), SAR(20000), 34, 2700), statement_due: SAR(4120), min_due: SAR(206), statement_due_on: onDay(0, 18),
+    rewards: '1% cashback on everything', annual_fee: SAR(0), forex_markup_bp: 250, interest_free_days: 50 },
   acct('a3', 'wallet', 'STC Pay', 'STC Pay', 'SAR', 'SA', null, SAR(640)),
   acct('a4', 'bank', 'HDFC Bank', 'NRE savings', 'INR', 'IN', '2231', INR(42000)),
   acct('a5', 'bank', 'ICICI Bank', 'NRO savings', 'INR', 'IN', '7780', INR(8650)),
@@ -48,13 +50,15 @@ const accounts: Account[] = [
   { ...acct('a10', 'bank', 'Riyad Bank', 'Salary account', 'SAR', 'SA', '6620', SAR(9340)), owner_member_id: 'm2' },
   { ...acct('a11', 'bank', 'Federal Bank', 'NRE savings', 'INR', 'IN', '1184', INR(126000)), owner_member_id: 'm2' },
   { ...acct('a12', 'credit_card', 'Riyad Bank', 'Visa Signature', 'SAR', 'SA', '3051', SAR(-1240), SAR(15000), 8, 2600), owner_member_id: 'm2' },
+  { ...acct('a13', 'bank', 'Canara Bank', 'NRO savings', 'INR', 'IN', '6602', INR(0)), balance: null, balance_at: null },
+  { ...acct('a14', 'wallet', 'Urpay', 'Urpay', 'SAR', 'SA', null, SAR(0.4)), balance_at: day(-210) + 'T06:00:00Z' },
 ];
 function acct(id: string, kind: Account['kind'], institution: string, name: string, currency: string, country: string, last4: string | null,
   balance: Money, credit_limit: Money | null = null, used_pct: number | null = null, rate_bp: number | null = null): Account {
   return { id, kind, institution, name, currency, country, last4, owner_member_id: 'm1', visibility: 'household', balance, balance_at: day(0) + 'T06:00:00Z',
     credit_limit, used_pct, due_day: kind === 'credit_card' ? 18 : null, statement_day: kind === 'credit_card' ? 28 : null, rate_bp, archived: false };
 }
-const acctName = (aid: string) => { const a = accounts.find(x => x.id === aid)!; return `${a.institution} ${a.last4 ? '··' + a.last4 : a.name}`; };
+const acctName = (aid: string) => acctLabel(accounts.find(x => x.id === aid)!);
 
 const categories = ['Groceries', 'Dining', 'Fuel', 'Transport', 'Shopping', 'Rent', 'Utilities', 'Subscriptions', 'Family', 'Health',
   'Education', 'Travel', 'Fees & interest', 'Loan EMI', 'Salary', 'Transfer', 'Home', 'Entertainment', 'Ignored']
@@ -68,13 +72,15 @@ const T = (offset: number, merchant: string, amt: Money, account_id: string | nu
   claim_id: null, commitment_id: null, ...extra,
 });
 const txns: Txn[] = [
-  T(0, 'Panda Retail', SAR(186.4), 'a1', 'Groceries'),
+  T(0, 'Panda Retail', SAR(186.4), 'a1', 'Groceries', 'spend', { merchant_raw: 'POS PURCHASE PANDA RETAIL CO 0412 RIYADH' }),
+  T(-2, 'Croma TV · SmartEMI', INR(4166), 'a6', 'Card instalments', 'spend', { merchant_raw: 'SMARTEMI CROMA RETAIL 03/12', instalment: { n: 3, of: 12, left: 9 } }),
+  T(-2, 'Interest on SmartEMI', INR(412), 'a6', 'Card instalments', 'fee', { merchant_raw: 'INTEREST ON EMI 03/12' }),
   T(0, 'Starbucks', SAR(24), 'a2', 'Dining'),
   T(0, 'Uber', SAR(38.5), 'a2', 'Transport', 'spend', { confidence: 0.55 }),
   T(-1, 'Aldrees Petrol', SAR(120), 'a3', 'Fuel', 'spend', { split_mine: SAR(60), person: { kind: 'contact', id: 'c3', name: 'Sameer Khan' } }),
-  T(-1, 'Al Baik', SAR(64), 'a2', 'Dining'),
+  T(-1, 'Al Baik', SAR(64), 'a2', 'Dining', 'spend', { merchant_raw: 'ALBAIK FOOD SYSTEMS CO 2231' }),
   T(-1, 'Nahdi Pharmacy', SAR(92.75), 'a1', 'Health'),
-  T(-2, 'SNB card payment', SAR(4000), 'a1', 'Transfer', 'transfer'),
+  T(-2, 'SNB card payment', SAR(4000), 'a1', 'Transfer', 'transfer', { merchant_raw: 'TRF TO CC 9012 SNB ONLINE' }),
   T(-2, 'Amazon.sa', SAR(349), 'a2', 'Shopping', 'spend', { confidence: 0.6 }),
   T(-3, 'Marriott Jeddah', SAR(1840), 'a2', 'Travel', 'claim', { claim_id: 'cl1' }),
   T(-3, 'Careem', SAR(212), 'a2', 'Transport', 'claim', { claim_id: 'cl1' }),
@@ -180,6 +186,7 @@ const tripOut = (t: Trip): Trip => {
   }
   const trio = (v: number[]) => ({ spent: m(v[0]), claimed: m(v[1]), burden: m(v[2]) });
   return { ...t, count: xs.length, totals: Object.fromEntries(Object.entries(tot).map(([k, v]) => [k, m(v)])) as Trip['totals'],
+    totals_base: Object.fromEntries(Object.entries(tot).map(([k, v]) => [k, { minor: Math.round(conv(v, cur, 'SAR')), currency: 'SAR' }])) as Trip['totals'],
     by_category: [...cats].sort((a, b) => b[1][0] - a[1][0]).map(([category, v]) => ({ category, ...trio(v) })),
     by_day: [...days].sort((a, b) => a[0].localeCompare(b[0])).map(([day, v]) => ({ day, ...trio(v) })) };
 };
@@ -358,8 +365,10 @@ const people = (): Person[] => [
   ...members.filter(m => m.relation !== 'self').map(m => ({ kind: 'member' as const, id: m.id, name: m.display_name, relation: m.relation, role: m.role, on_app: !!m.user_id,
     owes_you: [], you_owe: [], support_month: m.id === 'm3' ? INR(25000) : m.id === 'm4' ? INR(8000) : null, support_plan: m.id === 'm3' ? INR(25000) : m.id === 'm4' ? INR(5000) : null })),
   ...contacts.map(c => ({ kind: 'contact' as const, id: c.id, name: c.name, relation: c.id === 'c3' ? 'colleague' : 'friend', role: null, on_app: c.on_app,
-    owes_you: ({ c1: [SAR(171.67)], c2: [SAR(21.67)], c4: [INR(4500)], c5: [SAR(1094.5)] } as Record<string, Money[]>)[c.id] || [], you_owe: c.id === 'c3' ? [SAR(120)] : [], support_month: null, support_plan: null })),
+    owes_you: ({ c1: [SAR(171.67)], c2: [SAR(21.67)], c4: [INR(4500)], c5: [SAR(1094.5)] } as Record<string, Money[]>)[c.id] || [], you_owe: c.id === 'c3' ? [SAR(120)] : [], support_month: null, support_plan: null,
+    count_in_dues: payNow.has(c.id) })),
 ];
+const payNow = new Set<string>();
 
 let settings: Settings = { salary: SAR(26000), salary_day: 27, emergency_months: 6, debt_strategy: 'avalanche', extra_to_debt_minor: 50000 };
 const devices: Device[] = [
@@ -367,6 +376,8 @@ const devices: Device[] = [
   { id: 'd2', name: 'Priya’s Pixel', platform: 'android', member_id: 'm2', created_at: day(-40) + 'T09:00:00Z', last_seen: day(-1) + 'T19:40:00Z' },
 ];
 
+// one interest figure everywhere: what the cards charged (3-month average) and the loans' schedules
+const INTEREST = { cards: 154 + 412 / 24.9, loans: 41200 * 0.00375 + 3862000 / 24.9 * 0.0072 };
 function month(m = ym(0)) {
   // every month has the same shape, scaled a little so the trend and "vs last month" move
   const back = Math.max(0, (Number(ym(0).slice(0, 4)) - Number(m.slice(0, 4))) * 12 + Number(ym(0).slice(5)) - Number(m.slice(5)));
@@ -388,23 +399,23 @@ function month(m = ym(0)) {
     by_purpose: [{ purpose: 'spend', amount: SAR(9747) }, { purpose: 'support', amount: SAR(1409) }, { purpose: 'fee', amount: SAR(204) }],
     other_out: SAR(4250),
     owed_by_you: { loans: SAR(206102), cards: SAR(8390), bnpl: SAR(900), people: SAR(120), total: SAR(215512) },
-    owed_to_you: { people: SAR(385), claims: SAR(2912), total: SAR(3297) }, interest_month: SAR(1498), fx: { SAR_INR: 24.9, at: day(0) },
+    owed_to_you: { people: SAR(385), claims: SAR(2912), total: SAR(3297) }, interest_month: SAR(INTEREST.cards + INTEREST.loans), fx: { SAR_INR: 24.9, at: day(0) },
     spent_by_currency: [INR(54420), SAR(8916)],
   };
 }
 const shiftYm = (m: string, n: number) => { const d = new Date(Number(m.slice(0, 4)), Number(m.slice(5)) - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 // cards first (HDFC 36% assumed, then SNB 27%) with the free money; the loans keep their EMIs (or are prepaid after)
-function payoff(spend = 0, prepay = false) {
+function payoff(spend = 0, prepay = false, more = 1000) {
   const surplus = 3900, debts = [
     { id: 'a6', name: 'HDFC Regalia', kind: 'card', bal: 38400 / 24.9, rate: 3600, emi: 0, local: INR(38400), assumed: true },
     { id: 'l3', name: 'SNB Platinum', kind: 'card', bal: 6850, rate: 2700, emi: 0, local: SAR(6850), assumed: false },
     { id: 'l2', name: 'Camry auto finance', kind: 'loan', bal: 41200, rate: 450, emi: 2150, local: SAR(41200), assumed: false },
     { id: 'l1', name: 'Home loan', kind: 'loan', bal: 3862000 / 24.9, rate: 865, emi: 39500 / 24.9, local: INR(3862000), assumed: false },
   ];
-  const run = (extra: number) => {
+  const run = (extra: number, surplus = 3900) => {
     const bal: Record<string, number> = Object.fromEntries(debts.map(d => [d.id, d.bal])), budget = debts.reduce((a, d) => a + d.emi, 0);
     if (extra > surplus) bal.a6 += extra - surplus;
-    const tl: { n: number; interest: number; cards: number; loans: number; cleared: string[] }[] = [], cleared: Record<string, number> = {};
+    const tl: { n: number; interest: number; cards: number; loans: number; cleared: string[]; by: Record<string, number> }[] = [], cleared: Record<string, number> = {};
     let n = 0, interest = 0, cardInt = 0, cardsN: number | null = null;
     while (debts.some(d => bal[d.id] > 0) && n < 600) {
       n++; let charged = 0, left = budget + (n === 1 ? Math.max(0, surplus - extra) : surplus);
@@ -416,12 +427,13 @@ function payoff(spend = 0, prepay = false) {
       const done = debts.filter(d => !(d.id in cleared) && bal[d.id] < 0.01).map(d => d.id);
       for (const id of done) { cleared[id] = n; bal[id] = 0; }
       if (cardsN === null && debts.every(d => d.kind !== 'card' || bal[d.id] <= 0)) cardsN = n;
-      tl.push({ n, interest: charged, cards: debts.filter(d => d.kind === 'card').reduce((a, d) => a + bal[d.id], 0), loans: debts.filter(d => d.kind === 'loan').reduce((a, d) => a + bal[d.id], 0), cleared: done });
+      tl.push({ n, interest: charged, cards: debts.filter(d => d.kind === 'card').reduce((a, d) => a + bal[d.id], 0), loans: debts.filter(d => d.kind === 'loan').reduce((a, d) => a + bal[d.id], 0), cleared: done,
+        by: Object.fromEntries(debts.filter(d => bal[d.id] > 0).map(d => [d.id, Math.round(bal[d.id] * 100)])) });
     }
     return { cardsN, debtN: n, interest, cardInt, tl, cleared };
   };
-  const p = run(spend), b = spend ? run(0) : p, at = (n: number | null) => (n === null ? null : ym(n));
-  const cardsNow = 6850 * 0.0225 + 38400 / 24.9 * 0.03, loansNow = 41200 * 0.00375 + 3862000 / 24.9 * 0.0072;
+  const p = run(spend), b = spend ? run(0) : p, at = (n: number | null) => (n === null ? null : ym(n)), fast = run(spend, surplus + more);
+  const cardsNow = INTEREST.cards, loansNow = INTEREST.loans;
   return { currency: 'SAR', surplus: SAR(surplus), prepay, spend: SAR(spend),
     cards: { months: p.cardsN, month: at(p.cardsN) }, debt_free: { months: p.debtN, month: at(p.debtN) },
     delay: { cards: p.cardsN !== null && b.cardsN !== null ? p.cardsN - b.cardsN : null, debt_free: p.debtN - b.debtN, interest: SAR(p.interest - b.interest) },
@@ -429,8 +441,9 @@ function payoff(spend = 0, prepay = false) {
     interest_total: SAR(p.interest), card_interest: SAR(p.cardInt), card_interest_min_due: SAR(p.cardInt * 4.6), interest_saved: SAR(p.cardInt * 3.6),
     debts: debts.map(d => ({ id: d.id, name: d.name, kind: d.kind, balance: SAR(d.bal), local: d.local, rate_bp: d.rate, rate_assumed: d.assumed, emi: SAR(d.emi),
       cleared: d.id in p.cleared ? ym(p.cleared[d.id]) : null, months: p.cleared[d.id] ?? null })),
-    timeline: p.tl.map(t => ({ month: ym(t.n), interest: SAR(t.interest), cards: SAR(t.cards), loans: SAR(t.loans), cleared: t.cleared.map(id => debts.find(d => d.id === id)!.name) })),
-    assumptions: ['HDFC Regalia: no rate set, assumed 36% a year (usual for Indian cards)', 'Free money for debt: SAR 3,900 a month, the next 12 months’ average after EMIs, bills and everyday spending.'] };
+    timeline: p.tl.map(t => ({ month: ym(t.n), interest: SAR(t.interest), cards: SAR(t.cards), loans: SAR(t.loans), cleared: t.cleared.map(id => debts.find(d => d.id === id)!.name), by: t.by })),
+    extra: SAR(more), with_extra: { debt_free: at(fast.debtN), months: fast.debtN, interest: SAR(fast.interest), timeline: fast.tl.map(t => ({ month: ym(t.n), total: SAR(t.cards + t.loans) })) },
+    assumptions: ['HDFC Regalia: no rate set and no interest charged yet, assumed 36% a year (usual for Indian cards)', 'Interest a month is what the cards really charged (average of the last 3 months) and the loans’ schedules.', 'Free money for debt: SAR 3,900 a month, the next 12 months’ average after EMIs, bills and everyday spending.'] };
 }
 const look = (n: number) => {
   const months = Array.from({ length: n }, (_, i) => {
@@ -442,7 +455,10 @@ const look = (n: number) => {
     return { month: ym(i), income: SAR(26000), commitments: SAR(commit), funds: SAR(fundsV), everyday: SAR(everyday), free: SAR(free),
       warnings: commit > 20000 ? ['Rent due — paid from the rent fund'] : free < 1500 ? ['Tight month'] : [] };
   });
-  return { months, debt_free: { month: '2039-04', months: 149 }, interest_per_month: SAR(1498) };
+  const plans = Array.from({ length: n }, (_, i) => planFor(i));
+  return { months: months.map((x, i) => ({ ...x, dues: plans[i].out, surplus: plans[i].surplus, short: plans[i].short,
+    warnings: [...x.warnings, ...(plans[i].short ? [`Short by ${fmt(plans[i].short)}: dues are more than the salary`] : [])] })),
+    debt_free: { month: '2039-04', months: 149 }, interest_per_month: SAR(INTEREST.cards + INTEREST.loans) };
 };
 
 // --- tiny router ------------------------------------------------------------------------------------------------
@@ -632,7 +648,7 @@ on('GET', '/accounts/coverage', () => {
   const span = Array.from({ length: 12 }, (_, i) => ym(i - 11));
   const make = (a: Account, missing: string[], quiet: number | null, src: (m: string, i: number) => string[]) => {
     const months = a.kind === 'bnpl' ? [] : span.map((m, i) => ({ month: m, sources: missing.includes(m) ? [] : src(m, i), covered: !missing.includes(m) }));
-    return { account_id: a.id, name: `${a.institution} ${a.last4 ? '··' + a.last4 : a.name}`, kind: a.kind, currency: a.currency, first_month: months[0]?.month || null,
+    return { account_id: a.id, name: acctLabel(a), kind: a.kind, currency: a.currency, first_month: months[0]?.month || null,
       last_day: quiet === null ? null : day(-quiet), months, missing_months: missing, days_quiet: quiet,
       status: !months.length ? 'no_data' : missing.length ? 'gaps' : quiet !== null && quiet > 45 ? 'stale' : 'ok' };
   };
@@ -652,7 +668,7 @@ on('DELETE', '/salary/{id}', m => { salary.splice(salary.findIndex(x => x.id ===
 on('PUT', '/settings', (_m, b) => (settings = { ...settings, ...b, salary: b.salary_minor !== undefined ? { minor: b.salary_minor, currency: b.salary_currency || 'SAR' } : settings.salary }));
 
 on('GET', '/insights/month', (_m, _b, q) => month(q.get('month') || ym(0)));
-on('GET', '/insights/payoff', (_m, _b, q) => payoff(Number(q.get('spend_minor') || 0) / 100, q.get('prepay') === '1'));
+on('GET', '/insights/payoff', (_m, _b, q) => payoff(Number(q.get('spend_minor') || 0) / 100, q.get('prepay') === '1', Number(q.get('extra_minor') || 100000) / 100));
 on('GET', '/insights/card/{id}', m => {
   const a = accounts.find(x => x.id === m[1])!, cur = a.currency, X = (v: number): Money => ({ minor: Math.round(v * 100), currency: cur }), f = cur === 'INR' ? 24.9 : 1;
   const owed = a.balance ? Math.max(0, -a.balance.minor / 100) : null;
@@ -660,9 +676,12 @@ on('GET', '/insights/card/{id}', m => {
     next_due: a.statement_due_on || (a.due_day ? onDay(1, a.due_day) : null),
     statement: a.statement_day ? (a.statement_due ? { from: onDay(-2, 28), to: onDay(-1, 28), billed: a.statement_due, paid: X(0), left: a.statement_due }
       : { from: onDay(-2, 28), to: onDay(-1, 28), billed: X(4120 * f), paid: X(4000 * f), left: X(120 * f) }) : null,
-    months: [5, 4, 3, 2, 1, 0].map(i => ({ month: ym(-i), spent: X((2600 + 900 * Math.sin(i * 1.3) + (i === 1 ? 1400 : 0)) * f), paid: X((2400 + 500 * Math.cos(i)) * f), lost: X((i % 2 ? 84 : 23) * f) })),
-    rate_bp: a.rate_bp || (cur === 'INR' ? 3600 : 3000), rate_assumed: !a.rate_bp, interest_month: owed === null ? null : X(owed * (a.rate_bp || 3600) / 120000),
-    statement_due: a.statement_due || null, min_due: a.min_due || null, statement_due_on: a.statement_due_on || null };
+    months: [5, 4, 3, 2, 1, 0].map(i => ({ month: ym(-i), spent: X((2600 + 900 * Math.sin(i * 1.3) + (i === 1 ? 1400 : 0)) * f), paid: X((2400 + 500 * Math.cos(i)) * f),
+      lost: X((i % 2 ? 84 + 46 : 23 + 131) * f), interest: X((i % 2 ? 84 : 131) * f), fees: X((i % 2 ? 46 : 23) * f) })),
+    rate_bp: a.rate_bp || (cur === 'INR' ? 3600 : 3000), rate_assumed: !a.rate_bp, interest_month: owed === null ? null : X(a.id === 'a2' ? 154 : a.id === 'a6' ? 412 : owed * (a.rate_bp || 3600) / 120000),
+    interest_source: a.id === 'a2' || a.id === 'a6' ? 'charges' : a.rate_bp ? 'rate' : 'assumed', payer: { a2: { id: 'a1', name: acctName('a1') }, a6: { id: 'a4', name: acctName('a4') } }[a.id] || null,
+    statement_due: a.statement_due || null, min_due: a.min_due || null, statement_due_on: a.statement_due_on || null,
+    rewards: a.rewards ?? null, annual_fee: a.annual_fee ?? null, forex_markup_bp: a.forex_markup_bp ?? null, interest_free_days: a.interest_free_days ?? null };
 });
 on('GET', '/insights/lookahead', (_m, _b, q) => look(Number(q.get('months') || 12)));
 on('GET', '/insights/whatif', (_m, _b, q) => {
@@ -683,6 +702,9 @@ on('GET', '/insights/advice', () => ({ emergency: { months_covered: 2.9, target:
 ] }));
 on('GET', '/insights/home', () => ({ month: month(), next_dues: [...commitments].filter(c => c.status !== 'paid').sort((a, b) => a.next_due.localeCompare(b.next_due)).slice(0, 5),
   lookahead: look(6), review_count: merchants.reduce((a, g) => a + g.count, 0), alerts: [
+    { level: 'bad', top: true, country: 'IN', text: 'Due in 30 days ₹1,03,750, in accounts ₹50,650, move SAR 2,200', link: '/plan' },
+    ...(NOW.getDate() > 1 ? [{ level: 'bad', overdue: true, text: `Patrol loan — my half to Rohan is overdue: SAR 1,350 was due ${ym(0)}-01`, link: '/plan#debts' }] : []),
+    ...look(6).months.filter(x => x.short).slice(0, 1).map(x => ({ level: 'warn', text: `${x.month}: ${x.warnings[x.warnings.length - 1]}`, link: '/plan?s=year' })),
     { level: 'warn', text: 'KSEB electricity for Kochi is 2 days late', link: '/plan' },
     { level: 'info', text: 'Imran hasn’t paid his Netflix share this month', link: '/people' },
   ] }));
@@ -707,11 +729,12 @@ on('GET', '/insights/networth', () => {
   return { currency: 'SAR', fx: { SAR_INR: 24.9, at: day(0) }, countries,
     assets: sumC(countries.map(c => c.assets), 'SAR'), liabilities: sumC(countries.map(c => c.liabilities), 'SAR'), net: sumC(countries.map(c => c.net), 'SAR'),
     losses: { month: sumC(fees.filter(t => t.day.startsWith(ym(0))).map(t => t.amount), 'SAR'), year: sumC([...fees.map(t => t.amount), SAR(1240)], 'SAR'),
-      loan_interest_month: sumC([INR(27840), SAR(155)], 'SAR'), items: fees } };
+      loan_interest_month: sumC([INR(27840), SAR(155)], 'SAR'), items: fees },
+    history: [5, 4, 3, 2, 1, 0].map(i => ({ month: ym(-i), net: SAR(sumC(countries.map(c => c.net), 'SAR').minor / 100 - i * 2150 + (i === 2 ? 3100 : 0) - (i === 4 ? 1800 : 0)) })) };
 });
 const planFor = (off: number) => {
   const mo = ym(off), A = (id: string) => [id, acctName(id)] as const;
-  type L = { kind: string; name: string; amount: Money; day: string | null; acct: readonly [string, string]; paid?: boolean; counted?: boolean; link: string; country: string; note?: string | null };
+  type L = { kind: string; name: string; amount: Money; day: string | null; acct: readonly [string, string]; paid?: boolean; counted?: boolean; link: string; country: string; note?: string | null; overdue?: boolean };
   const ls: L[] = [];
   for (const c of commitments) {
     if (c.cycle_months !== 1 && !c.next_due.startsWith(mo)) continue;
@@ -719,26 +742,38 @@ const planFor = (off: number) => {
     ls.push({ kind: c.kind === 'emi' ? 'emi' : 'commitment', name: c.name, amount: c.amount, day: `${mo}-${c.next_due.slice(8)}`, link: '/plan#commitments',
       acct: A(ind ? (c.kind === 'support' ? 'a5' : 'a4') : 'a1'), paid: off === 0 && c.status === 'paid', counted: !(c.fund_id && c.cycle_months !== 1), country: ind ? 'IN' : 'SA' });
   }
-  ls.push({ kind: 'emi', name: 'Patrol loan — my half to Rohan', amount: SAR(1350), day: `${mo}-27`, acct: A('a1'), link: '/plan#debts', country: 'SA' });
-  ls.push({ kind: 'card', name: off ? 'SNB Platinum (estimate)' : 'SNB Platinum', amount: SAR(off ? 3800 : 6850), day: `${mo}-18`, acct: A('a1'), link: '/accounts/a2', country: 'SA' });
-  ls.push({ kind: 'card', name: off ? 'HDFC Regalia (estimate)' : 'HDFC Regalia', amount: INR(off ? 15000 : 36250), day: off ? `${mo}-19` : onDay(1, 4), acct: A('a4'), link: '/accounts/a6', country: 'IN',
-    note: off ? null : 'Minimum due ₹1,820. Paying only the minimum leaves the rest charging interest (about 3% a month): pay it in full.' });
-  if (!off) ls.push({ kind: 'person', name: 'You owe Sameer Khan', amount: SAR(120), day: null, acct: A('a1'), link: '/people/contact/c3', country: 'SA' });
-  for (const f of funds) if (f.monthly.minor) ls.push({ kind: 'fund', name: f.name, amount: f.monthly, day: null, acct: A(f.monthly.currency === 'INR' ? 'a4' : 'a1'), link: '/plan#funds', country: f.monthly.currency === 'INR' ? 'IN' : 'SA' });
+  const late = !off && NOW.getDate() > 1;
+  ls.push({ kind: 'emi', name: 'Patrol loan — my half to Rohan', amount: SAR(1350), day: `${mo}-01`, acct: A('a1'), link: '/plan#debts', country: 'SA', overdue: late,
+    note: late ? `Overdue: the SAR 1,350 instalment was due ${mo}-01` : null });
+  ls.push({ kind: 'card', name: acctName('a2'), amount: SAR(off ? 3800 : 4120), day: `${mo}-18`, acct: A('a1'), link: '/accounts/a2', country: 'SA',
+    note: off ? null : 'Minimum due SAR 206. Paying only the minimum leaves the rest charging interest: pay it in full.' });
+  if (off === 1) ls.push({ kind: 'card', name: acctName('a6'), amount: INR(36250), day: onDay(1, 4), acct: A('a4'), link: '/accounts/a6', country: 'IN' });
+  else if (off) ls.push({ kind: 'card', name: acctName('a6'), amount: INR(15000), day: `${mo}-04`, acct: A('a4'), link: '/accounts/a6', country: 'IN' });
+  if (!off) {
+    ls.push({ kind: 'revolving', name: `${acctName('a2')} revolving debt`, amount: SAR(2730), day: null, acct: A('a1'), link: '/accounts/a2', country: 'SA', counted: false,
+      note: 'Costs interest (about SAR 154 a month). Not due this month; the debt plan clears it.' });
+    ls.push({ kind: 'revolving', name: `${acctName('a6')} revolving debt`, amount: INR(2150), day: null, acct: A('a4'), link: '/accounts/a6', country: 'IN', counted: false,
+      note: 'Costs interest (about ₹412 a month). Not due this month; the debt plan clears it.' });
+    ls.push({ kind: 'person', name: 'Pay back Sameer Khan', amount: SAR(120), day: null, acct: A('a1'), link: '/people/contact/c3', country: 'SA', counted: payNow.has('c3'),
+      note: payNow.has('c3') ? null : 'No rush: no due date, so not counted this month' });
+  }
+  for (const f of funds) if (f.monthly.minor) ls.push({ kind: 'fund', name: f.name, amount: f.monthly, day: null, acct: A(f.monthly.currency === 'INR' ? 'a4' : 'a1'), link: '/plan#funds', country: f.monthly.currency === 'INR' ? 'IN' : 'SA',
+    counted: false, note: 'From what is left after the dues' });
   const lines = ls.map(l => ({ kind: l.kind, name: l.name, amount: l.amount, base: SAR(toSAR(l.amount) / 100), day: l.day, country: l.country,
-    account_id: l.acct[0], account_name: l.acct[1], paid: !!l.paid, counted: l.counted !== false, link: l.link, note: l.note ?? null }));
+    account_id: l.counted === false ? null : l.acct[0], account_name: l.counted === false ? null : l.acct[1], paid: !!l.paid, counted: l.counted !== false, link: l.link, note: l.note ?? null, overdue: !!l.overdue, ref: null }));
   const out = lines.filter(l => l.counted).reduce((a, l) => a + l.base.minor, 0), income = 2600000;
   const open = lines.filter(l => !l.paid && l.counted), pay = new Map<string, typeof open>();
-  for (const l of open) pay.set(l.account_id, [...(pay.get(l.account_id) || []), l]);
+  for (const l of open) if (l.account_id) pay.set(l.account_id, [...(pay.get(l.account_id) || []), l]);
   const dueIN = open.filter(l => l.country === 'IN').reduce((a, l) => a + l.amount.minor, 0);
   const cash = off ? 190000 : 5065000, need = Math.max(0, dueIN - cash), sar = Math.ceil(need / 24.9 / 10000) * 10000;
-  return { month: mo, income: SAR(26000), out: SAR(out / 100), surplus: SAR(Math.max(0, income - out) / 100), short: out > income ? SAR((out - income) / 100) : null, lines,
+  return { month: mo, income: SAR(26000), out: SAR(out / 100), surplus: SAR((income - out) / 100), short: out > income ? SAR((out - income) / 100) : null, lines,
+    revolving: SAR(lines.filter(l => l.kind === 'revolving').reduce((a, l) => a + l.base.minor, 0) / 100),
     pay_from: [...pay].map(([aid, xs]) => { const a = accounts.find(x => x.id === aid)!;
       return { account_id: aid, account_name: acctName(aid), currency: a.currency, total: sumC(xs.map(x => x.amount), a.currency), items: xs.map(x => ({ name: x.name, amount: x.amount, day: x.day })) }; }),
     move_to_india: sar ? { amount: SAR(sar / 100), inr: INR(sar * 24.9 / 100), by: `${mo}-${off ? '01' : '25'}`, from: 'a1', to: 'a4' } : null,
     india: { due: INR(dueIN / 100), cash: INR(cash / 100) } };
 };
-on('GET', '/insights/plan', () => ({ currency: 'SAR', fx: { SAR_INR: 24.9 }, months: [planFor(0), planFor(1)] }));
+on('GET', '/insights/plan', (_m, _b, q) => ({ currency: 'SAR', fx: { SAR_INR: 24.9 }, months: Array.from({ length: Math.min(12, Number(q.get('months') || 2)) }, (_, i) => planFor(i)) }));
 const side = (kind: 'account' | 'member' | 'contact', sid: string) => kind === 'account' ? { kind, id: sid, name: acctName(sid), country: accounts.find(a => a.id === sid)!.country }
   : { kind, id: sid, name: kind === 'member' ? members.find(m => m.id === sid)!.display_name : contacts.find(c => c.id === sid)!.name, country: null };
 const mv = (group: string, from: ReturnType<typeof side>, to: ReturnType<typeof side>, amount: Money, received: Money | null = null, count = 1) => ({ group, from, to, amount, received, count, txn_ids: [] });
@@ -756,6 +791,7 @@ on('GET', '/insights/movements', (_m, _b, q) => {
   return { month, currency: 'SAR', groups: groups.map(([key, title, items]) => ({ key, title, items, total: sumC(items.map(x => x.amount), 'SAR') })) };
 });
 const byCur = (xs: Money[]) => Object.values(xs.reduce((o, x) => ({ ...o, [x.currency]: { minor: (o[x.currency]?.minor || 0) + x.minor, currency: x.currency } }), {} as Record<string, Money>));
+on('PUT', '/people/{kind}/{id}/dues', (m, b) => { if (b.count_in_dues) payNow.add(m[2]); else payNow.delete(m[2]); return { kind: m[1], id: m[2], count_in_dues: !!b.count_in_dues }; });
 on('GET', '/people/{kind}/{id}', m => {
   const person = people().find(p => p.kind === m[1] && p.id === m[2]); if (!person) throw new Err(404, 'not found');
   const col = m[1] === 'member' ? 'member_id' : 'contact_id';

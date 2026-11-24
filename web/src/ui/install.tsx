@@ -40,23 +40,26 @@ export function useInstall() {
   };
 }
 
-const KEY = 'install-banner-dismissed';
-/** One-time "add to Home Screen" card. Drop it at the top of a screen; it hides itself once dismissed or installed. */
+const NEVER = 'install-banner-dismissed', SEEN = 'install-banner-seen', WEEK = 7 * 864e5;
+const store = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* storage blocked: hidden for this visit */ } } };
+/** "Add to Home Screen" card: at most once a week, never when the app runs installed, and "Don't show again" hides it for good. */
 export function InstallBanner({ to = '/install' }: { to?: string }) {
   const { standalone, platform, canPrompt, prompt } = useInstall();
-  const [gone, setGone] = useState(() => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } });
+  const [gone, setGone] = useState(() => store.get(NEVER) === '1' || Date.now() - Number(store.get(SEEN) || 0) < WEEK);
+  useEffect(() => { if (!gone && !standalone) store.set(SEEN, String(Date.now())); }, [gone, standalone]); // shown now: next in a week
   if (gone || standalone || (platform === 'desktop' && !canPrompt)) return null;
-  const dismiss = () => { setGone(true); try { localStorage.setItem(KEY, '1'); } catch { /* storage blocked: hidden for this visit */ } };
+  const never = () => { setGone(true); store.set(NEVER, '1'); };
   return (
     <div className="glass install-banner" role="region" aria-label="Install Ledger">
       <img src="/apple-touch-icon.png" alt="" />
       <div className="body">
         <b>Put Ledger on your Home Screen</b>
-        <p className="caption">Opens full screen, like an app</p>
+        <p className="caption">Opens full screen, like an app · <button className="link-btn" onClick={never}>Don’t show again</button></p>
       </div>
-      {canPrompt ? <button className="btn small" onClick={async () => { if (await prompt()) dismiss(); }}>Install</button>
+      {canPrompt ? <button className="btn small" onClick={async () => { if (await prompt()) never(); }}>Install</button>
         : <Link className="btn small" to={to}>How</Link>}
-      <button className="x" onClick={dismiss} aria-label="Dismiss"><Icon name="close" size={14} /></button>
+      <button className="x" onClick={() => setGone(true)} aria-label="Not now (shows again in a week)"><Icon name="close" size={14} /></button>
     </div>
   );
 }

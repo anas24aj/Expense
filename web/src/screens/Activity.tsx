@@ -3,9 +3,9 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError, qs, useApi, useWrite } from '../api/client';
 import type { Account, Asset, Category, Money as M, Claim, Fund, HouseholdFull, Liability, MerchantGroup, Person, Purpose, Txn, TxnDetail } from '../api/types';
-import { dayLabel, fmt, monthLabel, shiftMonth, shortDate, sumByCurrency, thisMonth, today, toMinor } from '../lib/format';
+import { acctLabel, dayLabel, fmt, monthLabel, shiftMonth, shortDate, sumByCurrency, thisMonth, today, toMinor } from '../lib/format';
 import {
-  AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Monies, Page, PageSkeleton, Segmented, Sheet, Skeleton, Toggle, useToast,
+  AmountInput, Avatar, CategoryTile, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, MiniBars, Money, Monies, Page, PageSkeleton, Segmented, Sheet, Skeleton, Tile, Toggle, useToast,
 } from '../ui';
 
 export const PURPOSES: { value: Purpose; label: string }[] = [
@@ -16,14 +16,42 @@ export const PURPOSES: { value: Purpose; label: string }[] = [
 ];
 const purposeLabel = (p: string) => PURPOSES.find(x => x.value === p)?.label || p;
 
+/** The bank's own text under the clean vendor name, when it says more than the name. */
+const rawOf = (t: Txn) => (t.merchant_raw && t.merchant_raw.trim().toLowerCase() !== (t.merchant || '').trim().toLowerCase() ? t.merchant_raw.trim() : '');
 export function TxnRow({ t, onOpen }: { t: Txn; onOpen: (t: Txn) => void }) {
   const credit = t.direction === 'credit';
-  const sub = [t.account_name, t.purpose !== 'spend' ? purposeLabel(t.purpose) : t.category, t.person?.name && `· ${t.person.name}`].filter(Boolean).join(' · ').replace('· ·', '·');
+  const raw = rawOf(t);
+  if (t.purpose === 'transfer') {  // money moved between your own accounts or onto a card: not spending
+    return (
+      <ListRow className="moved" icon={<Tile icon="transfer" color="#8e8e93" />} title={t.merchant} sub={['Moved', t.account_name, raw].filter(Boolean).join(' · ')}
+        end={<span className="muted">⇄ {fmt(t.amount)}</span>} onClick={() => onOpen(t)} chevron={false} label={`Moved ${fmt(t.amount)}, ${t.merchant}`} />
+    );
+  }
+  const sub = [raw, t.account_name, t.purpose !== 'spend' ? purposeLabel(t.purpose) : t.category, t.person?.name && `· ${t.person.name}`].filter(Boolean).join(' · ').replace('· ·', '·');
   return (
     <ListRow icon={<CategoryTile category={t.category} purpose={t.purpose === 'spend' ? undefined : t.purpose} merchant={t.merchant} />} title={t.merchant} sub={sub}
       end={<span className={credit ? 'pos' : ''}>{credit ? '+' : ''}{fmt(t.amount)}</span>}
-      endSub={t.split_mine ? <>yours <Money m={t.split_mine} /></> : t.confidence < 0.7 ? <span className="badge orange">Check</span> : t.claim_id ? <span className="badge blue">Claim</span> : undefined}
+      endSub={t.instalment ? <span className="badge blue">{t.instalment.left} of {t.instalment.of} left</span> : t.split_mine ? <>yours <Money m={t.split_mine} /></> : t.confidence < 0.7 ? <span className="badge orange">Check</span> : t.claim_id ? <span className="badge blue">Claim</span> : undefined}
       onClick={() => onOpen(t)} chevron={false} label={`${t.merchant}, ${fmt(t.amount)}`} />
+  );
+}
+
+/** Spending per day of the month as a strip of bars (the month's main currency); tap a day to see only it. */
+function DayStrip({ month, days, picked, onPick }: { month: string; days: Record<string, M[]>; picked: string | null; onPick: (d: string | null) => void }) {
+  const totals = new Map<string, number>();
+  for (const xs of Object.values(days)) for (const m of xs) totals.set(m.currency, (totals.get(m.currency) || 0) + 1);  // the currency spent on most days
+  const cur = [...totals].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!cur) return null;
+  const [y, mo] = month.split('-').map(Number), n = new Date(y, mo, 0).getDate();
+  const list = Array.from({ length: n }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`).filter(d => d <= today());
+  const value = (d: string) => (days[d] || []).filter(m => m.currency === cur).reduce((a, m) => a + m.minor, 0) / 100;
+  const i = picked ? list.indexOf(picked) : -1;
+  return (
+    <div className="glass card stack-sm" aria-label="Spending by day">
+      <div className="between caption"><span>Spent each day · {cur}{totals.size > 1 ? ' only' : ''}</span>{picked && <button className="link-btn" onClick={() => onPick(null)}>Show every day</button>}</div>
+      <MiniBars items={list.map(d => ({ label: String(Number(d.slice(8))), value: value(d) }))} height={84} labelEvery={5} selected={i >= 0 ? i : null} highlight={list.length - 1}
+        format={v => fmt({ minor: Math.round(v * 100), currency: cur }, { compact: true })} onSelect={(_, k) => onPick(list[k] === picked ? null : list[k])} label="Spending each day, tap a day to filter" />
+    </div>
   );
 }
 
@@ -72,23 +100,24 @@ export default function ActivityPage() {
     return () => io.disconnect();
   }, [list.hasNextPage, list.isFetchingNextPage, list.fetchNextPage, list.data]);
 
+  const picked = params.get('day');
   const groups = useMemo(() => {
     const g = new Map<string, Txn[]>();
-    for (const p of list.data?.pages || []) for (const t of p.items) g.set(t.day, [...(g.get(t.day) || []), t]);
+    for (const p of list.data?.pages || []) for (const t of p.items) if (!picked || t.day === picked) g.set(t.day, [...(g.get(t.day) || []), t]);
     return [...g.entries()];
-  }, [list.data]);
+  }, [list.data, picked]);
   const loaded = groups.reduce((n, [, xs]) => n + xs.length, 0);
   const count = first?.total ?? loaded;
   const year = thisMonth().slice(0, 4);
 
   const options: Record<FilterKey, { label: string; items: { value: string; label: string }[] }> = {
-    account_id: { label: 'Account', items: (accounts.data?.items || []).map(a => ({ value: a.id, label: `${a.institution} · ${a.name}` })) },
+    account_id: { label: 'Account', items: (accounts.data?.items || []).map(a => ({ value: a.id, label: acctLabel(a) })) },
     category: { label: 'Category', items: (cats.data?.items || []).filter(c => c.kind !== 'excluded').map(c => ({ value: c.name, label: c.name })) },
     purpose: { label: 'Purpose', items: PURPOSES },
     member_id: { label: 'Member', items: (hh.data?.members || []).map(m => ({ value: m.id, label: m.display_name })) },
   };
   const chipLabel = (k: FilterKey) => (f[k] ? options[k].items.find(i => i.value === f[k])?.label || f[k] : options[k].label);
-  const setMonth = (m: string) => set({ month: m === thisMonth() ? undefined : m });
+  const setMonth = (m: string) => set({ month: m === thisMonth() ? undefined : m, day: undefined });
 
   return (
     <Page title="Activity" trail={<>
@@ -119,6 +148,7 @@ export default function ActivityPage() {
         ))}
       </div>
 
+      {!q && first?.days && <DayStrip month={month} days={first.days} picked={picked} onPick={d => set({ day: d || undefined })} />}
       {list.isLoading ? <div className="glass list" style={{ padding: 16 }}><div className="stack">{[0, 1, 2, 3, 4].map(i => <Skeleton key={i} h={40} />)}</div></div>
         : list.error ? <ErrorCard error={list.error} retry={list.refetch} />
         : !groups.length ? (q || review || Object.values(f).some(Boolean) ? <EmptyState icon="search" title="No matches" text="Try clearing the search or filters." />
@@ -318,7 +348,7 @@ function AccountPicker({ t, onPick }: { t: Txn; onPick: (id: string | null) => v
   return (
     <List>
       {q.data.items.map(a => <ListRow key={a.id} icon={<Icon name={a.kind === 'credit_card' || a.kind === 'debit_card' ? 'card' : a.kind === 'wallet' ? 'wallet' : 'bank'} size={22} />}
-        title={`${a.institution || a.name}${a.last4 ? ' ··' + a.last4 : ''}`} sub={`${a.name} · ${a.currency}`}
+        title={acctLabel(a)} sub={`${a.name} · ${a.currency}`}
         end={a.id === t.account_id ? <Icon name="check" size={22} className="pos" /> : undefined} onClick={() => a.id !== t.account_id && onPick(a.id)} chevron={false} />)}
       <ListRow icon={<Icon name="coin" size={22} />} title="Cash" sub="No bank account" end={!t.account_id ? <Icon name="check" size={22} className="pos" /> : undefined} onClick={() => t.account_id && onPick(null)} chevron={false} />
     </List>

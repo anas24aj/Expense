@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/client';
-import type { Account, Asset, Liability, Money as M, NetWorth, Payoff } from '../api/types';
-import { fmt, monthLabel, sumByCurrency, today } from '../lib/format';
-import { ErrorCard, Icon, List, ListRow, Meter, Money, Monies, Page, PageSkeleton, Section, Tile } from '../ui';
+import type { Account, Asset, Coverage, Liability, Money as M, NetWorth, Payoff } from '../api/types';
+import { acctLabel, fmt, monthLabel, sumByCurrency, today } from '../lib/format';
+import { ErrorCard, Icon, List, ListRow, Meter, Money, Monies, OwnOweBar, Page, PageSkeleton, Section, Tile } from '../ui';
+import { GapsAlert } from './Accounts';
 import { FLAG } from './Home';
 import { DebtFreeLine } from './Month';
 
@@ -31,6 +32,7 @@ export default function WealthPage() {
   const liabs = useApi<{ items: Liability[] }>('/liabilities');
   const accounts = useApi<{ items: Account[] }>('/accounts');
   const payoff = useApi<Payoff>('/insights/payoff').data;
+  const gaps = (useApi<{ items: Coverage[] }>('/accounts/coverage').data?.items || []).filter(c => c.status !== 'ok').length;
   if (nw.isLoading || assets.isLoading || liabs.isLoading || accounts.isLoading) return <Page title="Wealth"><PageSkeleton /></Page>;
   const err = nw.error || assets.error || liabs.error || accounts.error;
   if (err) return <Page title="Wealth"><ErrorCard error={err} retry={() => { nw.refetch(); assets.refetch(); liabs.refetch(); accounts.refetch(); }} /></Page>;
@@ -42,6 +44,7 @@ export default function WealthPage() {
   return (
     <Page title="Wealth" subtitle="Assets & liabilities">
       <div className="grid-desktop stack">
+        {gaps > 0 && <GapsAlert n={gaps} />}
         <section className="glass hero span-2" aria-label="Net worth">
           <div className="hero-label">Net worth</div>
           <div className={`hero-amount ${n.net.minor < 0 ? 'neg' : ''}`}>{fmt(n.net)}</div>
@@ -54,7 +57,7 @@ export default function WealthPage() {
               <Link key={c.code} to={`/accounts#${c.code}`} className="split-col" style={{ color: 'inherit' }}>
                 <span className="caption">{FLAG[c.code][0]} {FLAG[c.code][1]}</span>
                 <b className={`num ${c.net.minor < 0 ? 'neg' : ''}`}><Money m={c.net} compact /></b>
-                <span className="footnote">own <Money m={c.assets} compact /> · owe <Money m={c.liabilities} compact /></span>
+                <OwnOweBar own={c.assets.minor} owe={c.liabilities.minor} ownLabel={<Money m={c.assets} compact />} oweLabel={<Money m={c.liabilities} compact />} />
               </Link>
             ))}
           </div>
@@ -62,7 +65,7 @@ export default function WealthPage() {
 
         {payoff && payoff.debts.length > 0 && (
           <Link to="/payoff" className="glass card span-2 between" style={{ color: 'inherit' }}>
-            <span className="row-flex"><Tile icon="target" color="#ff453a" /><span><b>Debt-free plan</b><br /><span className="caption"><DebtFreeLine p={payoff} /></span></span></span>
+            <span className="row-flex"><Tile icon="target" color="#ff453a" /><span><b>Debt-free plan</b><br /><span className="caption"><DebtFreeLine p={payoff} /> · interest <span className="neg"><Money m={payoff.interest_now.total} compact />/mo</span></span></span></span>
             <Icon name="chevR" size={14} />
           </Link>
         )}
@@ -116,9 +119,9 @@ export default function WealthPage() {
         })}
         <Section title="Credit cards" action={<span className="caption num neg"><Monies items={total(cards.filter(a => a.balance && a.balance.minor < 0).map(a => ({ ...a.balance!, minor: -a.balance!.minor })))} /></span>}>
           <List>{cards.map(a => (
-            <ListRow key={a.id} to={`/accounts/${a.id}`} icon={<Tile icon="card" color="#ff453a" />} title={`${a.institution}${a.last4 ? ' ··' + a.last4 : ''}`}
-              sub={!a.balance ? 'No balance yet' : a.statement_due && a.statement_due_on ? <>Statement <Money m={a.statement_due} /> due {a.statement_due_on}</> : a.used_pct !== null ? `${a.used_pct}% of limit used` : a.name}
-              end={a.balance ? <span className={a.balance.minor < 0 ? 'neg' : ''}><Money m={{ ...a.balance, minor: Math.max(0, -a.balance.minor) }} /></span> : <span className="muted">—</span>} />
+            <ListRow key={a.id} to={`/accounts/${a.id}`} icon={<Tile icon="card" color="#ff453a" />} title={acctLabel(a)}
+              sub={!a.balance ? a.name : a.statement_due && a.statement_due_on ? <>Statement <Money m={a.statement_due} /> due {a.statement_due_on}</> : a.used_pct !== null ? `${a.used_pct}% of limit used` : a.name}
+              end={a.balance ? <span className={a.balance.minor < 0 ? 'neg' : ''}><Money m={{ ...a.balance, minor: Math.max(0, -a.balance.minor) }} /></span> : <span className="muted" style={{ fontWeight: 400 }}>No balance yet</span>} />
           ))}</List>
         </Section>
       </div>

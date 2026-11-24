@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
 import type { Account, Commitment, DetectedCommitment, HouseholdFull, Money as M, MonthPlan, Person } from '../api/types';
-import { dueLabel, fmt, monthLabel, shortDate, sumByCurrency, today, toMinor } from '../lib/format';
+import { acctLabel, dueLabel, fmt, monthLabel, shortDate, sumByCurrency, today, toMinor } from '../lib/format';
 import { AmountInput, Avatar, Chip, ErrorCard, Field, Icon, List, ListRow, Money, Page, PageSkeleton, Section, Segmented, Sheet, StatusBadge, Tile, useToast } from '../ui';
 import { KIND_ICON } from './Home';
 import { PersonAvatar } from './People';
@@ -36,7 +36,7 @@ export default function RecurringPage() {
   const deep = new URLSearchParams(useLocation().search).get('commitment');
   useEffect(() => { if (deep && q.data) setOpen(q.data.items.find(c => c.id === deep) || null); }, [deep, q.data]);
   const memberName = (id: string | null) => hh?.members.find(m => m.id === id)?.display_name;
-  const acctName = (id: string | null) => { const a = accounts.find(x => x.id === id); return a ? `${a.institution}${a.last4 ? ' ··' + a.last4 : ''}` : null; };
+  const acctName = (id: string | null) => { const a = accounts.find(x => x.id === id); return a ? acctLabel(a) : null; };
   const all = q.data?.items || [];
   const sugg = detect.data?.items || [];
   const byCountry = (code: string) => sumByCurrency(all.filter(c => country(c) === code).map(c => perMonth(c, mine(c))));
@@ -193,7 +193,7 @@ function CommitmentSheet({ open, onClose, edit }: { open: boolean; onClose: () =
             {family.map(p => <Chip key={p.id} on={forWho === p.id} onClick={() => setForWho(p.id)}>{p.name}</Chip>)}</div></div>}
         {accounts.length > 0 && <div className="stack-sm"><b style={{ margin: '0 4px' }}>Paid from</b>
           <div className="chips" style={{ flexWrap: 'wrap' }}><Chip on={!account} onClick={() => setAccount(null)}>Not set</Chip>
-            {accounts.map(a => <Chip key={a.id} on={account === a.id} onClick={() => setAccount(a.id)}>{a.institution}{a.last4 ? ' ··' + a.last4 : ''}</Chip>)}</div></div>}
+            {accounts.map(a => <Chip key={a.id} on={account === a.id} onClick={() => setAccount(a.id)}>{acctLabel(a)}</Chip>)}</div></div>}
         <div className="stack-sm">
           <div className="between" style={{ margin: '0 4px' }}><b>Shared with</b>{sharers.length > 0 && <span className="caption">yours {fmt({ minor: total - others, currency })}</span>}</div>
           {sharers.length > 0 && <Segmented label="Split" value={split} onChange={setSplit} options={[{ value: 'equal', label: 'Equal split' }, { value: 'pct', label: 'By %' }]} />}

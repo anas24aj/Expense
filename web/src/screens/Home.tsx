@@ -2,7 +2,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useApi } from '../api/client';
 import type { Account, Commitment, Home, HouseholdFull, Items, MonthPlan, NetWorth, Payoff, Settings, Statement, Trip } from '../api/types';
 import { dueLabel, fmt, monthLabel, today } from '../lib/format';
-import { ErrorCard, Icon, InstallBanner, List, ListRow, Money, PageSkeleton, Page, Section, StatusBadge, Tile } from '../ui';
+import { ErrorCard, Icon, InstallBanner, List, ListRow, MiniBars, Money, PageSkeleton, Page, Section, Sparkline, StatusBadge, Tile } from '../ui';
 import { DebtFreeLine } from './Month';
 
 export const KIND_ICON: Record<string, [string, string]> = {
@@ -73,11 +73,18 @@ function GetStarted({ steps }: { steps: Step[] }) {
 function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h: Home; n: NetWorth; setup: Step[] | null; payday: number | null; trip?: Trip; hasAccounts: boolean; payoff?: Payoff; plan?: MonthPlan }) {
   const m = h.month;
   const top = m.by_category.slice(0, 3), topMax = Math.max(1, ...top.map(c => c.amount.minor));
-  const urgent = h.alerts.filter(a => a.level !== 'info');
+  const urgent = h.alerts.filter(a => a.level !== 'info' && !a.top);
+  const top6 = (m.trend || []).slice(-6), avg = top6.length ? top6.reduce((a, t) => a + t.spent.minor, 0) / top6.length / 100 : 0;
+  const money = (v: number) => fmt({ minor: Math.round(v * 100), currency: m.currency }, { compact: true });
   if (setup && !hasAccounts && !m.spent.minor && !m.income.minor) return <div className="stack"><GetStarted steps={setup} /></div>;
   const countries = n.countries.filter(c => c.code !== 'OTHER' || c.assets.minor || c.liabilities.minor);
   return (
     <div className="grid-desktop stack">
+      {h.alerts.filter(a => a.top).map((a, i) => (  // cash in the accounts won't cover the next 30 days
+        <Link key={i} to={a.link || '/plan'} className="glass alert-top span-2" role="alert" style={{ color: 'inherit' }}>
+          <Icon name="warn" /><span style={{ flex: 1 }}><b>{FLAG[a.country || 'OTHER']?.[0]} Not enough in the accounts</b><br /><span className="caption">{a.text}</span></span>
+        </Link>
+      ))}
       <div className="span-2"><InstallBanner /></div>
       {setup && <div className="span-2"><GetStarted steps={setup} /></div>}
 
@@ -88,6 +95,10 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
           <div className="stat"><span className="k">You own</span><span className="v"><Money m={n.assets} /></span></div>
           <div className="stat"><span className="k">You owe</span><span className="v neg"><Money m={n.liabilities} /></span></div>
         </div>
+        {n.history && n.history.length > 1 && <div style={{ marginTop: 10 }}>
+          <Sparkline values={n.history.map(x => x.net.minor / 100)} format={money} label="Net worth at each month end" />
+          <span className="footnote">Last {n.history.length} month ends · {fmt(n.history[0].net, { compact: true })} → {fmt(n.history[n.history.length - 1].net, { compact: true })}</span>
+        </div>}
       </Link>
 
 
@@ -97,6 +108,9 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
           <div><span className="caption">Spent </span><b className="num" style={{ font: '700 30px var(--font-display)', letterSpacing: '-.02em' }}>{fmt(m.spent)}</b></div>
           {m.last_month && <span className="caption">{monthLabel(m.last_month.month)} <Money m={m.last_month.spent} compact /></span>}
         </div>
+        {top6.length > 1 && <div style={{ marginTop: 8 }}>
+          <MiniBars items={top6.map(t => ({ label: monthLabel(t.month), value: t.spent.minor / 100 }))} avg={avg} height={96} format={money} label="Spending, last 6 months" />
+        </div>}
         <div className="stack-sm" style={{ marginTop: 10 }}>
           {top.map(c => (
             <div key={c.category}><div className="between caption"><span>{c.category}</span><Money m={c.amount} /></div>
@@ -127,7 +141,8 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
             <Link key={pm.month} to={i ? `/plan?month=${pm.month}` : '/plan'} className="split-col" style={{ color: 'inherit' }}>
               <span className="caption"><b>{i ? 'Next month' : 'This month'}</b> · {monthLabel(pm.month)}</span>
               <span className="caption">In <span className="pos"><Money m={pm.income} compact /></span></span>
-              <span className="caption">Out <Money m={pm.out} compact /> <span className="footnote">bills, EMIs, cards</span></span>
+              <span className="caption">Due <Money m={pm.out} compact /> <span className="footnote">bills, EMIs, card statements</span></span>
+              {!i && pm.revolving && pm.revolving.minor > 0 ? <span className="footnote neg">+ revolving debt <Money m={pm.revolving} compact /> (costs interest)</span> : null}
               <b className={`num ${pm.short ? 'neg' : 'pos'}`} style={{ fontSize: 20 }}>{pm.short ? <>Short <Money m={pm.short} compact /></> : <>+<Money m={pm.surplus} compact /></>}</b>
             </Link>
           ))}
@@ -139,7 +154,7 @@ function HomeBody({ h, n, setup, payday, trip, hasAccounts, payoff, plan }: { h:
           <span className="card-title" style={{ margin: 0 }}>Debt-free plan</span>
           <div style={{ font: '700 30px var(--font-display)', letterSpacing: '-.02em', marginTop: 6 }} className={`num ${payoff.cards.months === null ? 'neg' : ''}`}>
             {payoff.cards.months === null ? 'Cards growing' : payoff.cards.months ? `${payoff.cards.months} mo` : 'Cards clear'}</div>
-          <p className="caption"><DebtFreeLine p={payoff} /> · interest <span className="neg"><Money m={payoff.interest_now.total} compact />/mo</span></p>
+          <p className="caption"><DebtFreeLine p={payoff} /> · interest <span className="neg"><Money m={payoff.interest_now.total} compact />/mo</span>{payoff.debts.some(d => d.rate_assumed) ? ' (part assumed)' : ''}</p>
         </Link>
       )}
 

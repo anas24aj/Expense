@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError, qs, useApi } from '../api/client';
 import type { MonthInsight, Payoff, Txn } from '../api/types';
 import { fmt, monthLabel, shiftMonth, thisMonth } from '../lib/format';
-import { BarRow, CHART_COLORS, Donut, EmptyState, ErrorCard, Icon, List, ListRow, MiniBars, Money, Page, PageSkeleton, Section, Toggle } from '../ui';
+import { BarRow, CHART_COLORS, Chip, Donut, EmptyState, ErrorCard, Icon, List, ListRow, MiniBars, Money, Page, PageSkeleton, Section, StackedArea, Toggle } from '../ui';
 import type { ChartItem } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 
@@ -95,6 +95,13 @@ function MonthBody({ m, ym }: { m: MonthInsight; ym: string }) {
         </Section>
       )}
 
+      {m.interest_month && m.interest_month.minor > 0 && (
+        <Link to="/payoff" className="glass card between span-2" style={{ color: 'inherit' }}>
+          <span><b>Debts cost <span className="neg"><Money m={m.interest_month} /></span> a month in interest</b><br />
+            <span className="caption">Cards: what they charged, 3-month average · loans: their schedule</span></span><Icon name="chevR" size={14} />
+        </Link>
+      )}
+
       <Section title="Not spending">
         <List>
           <ListRow icon={<Icon name="transfer" />} title="Transfers, card bills, EMIs, lending" to={`/money?month=${ym}`}
@@ -131,10 +138,10 @@ export function CategoryMonthPage() {
 }
 
 /* ---------- debt payoff: how many months to recover ---------- */
-function usePayoff(spend: number, prepay: boolean) {
+function usePayoff(spend: number, prepay: boolean, extra?: number) {
   return useQuery<Payoff, ApiError>({
-    queryKey: ['/insights/payoff', { spend_minor: spend, prepay }],
-    queryFn: () => api<Payoff>('/insights/payoff' + qs({ spend_minor: spend || undefined, prepay: prepay ? 1 : undefined })),
+    queryKey: ['/insights/payoff', { spend_minor: spend, prepay, extra_minor: extra }],
+    queryFn: () => api<Payoff>('/insights/payoff' + qs({ spend_minor: spend || undefined, prepay: prepay ? 1 : undefined, extra_minor: extra })),
     placeholderData: keepPreviousData,
   });
 }
@@ -145,8 +152,9 @@ export function PayoffPage() {
   const [slide, setSlide] = useState(0);
   const [spend, setSpend] = useState(0);
   useEffect(() => { const t = setTimeout(() => setSpend(slide), 250); return () => clearTimeout(t); }, [slide]);
-  const q = usePayoff(spend, prepay);
-  const base = usePayoff(0, prepay).data;
+  const [extra, setExtra] = useState(1000_00);
+  const q = usePayoff(spend, prepay, extra);
+  const base = usePayoff(0, prepay, extra).data;
   const p = q.data;
   return (
     <Page title="Debt-free plan" back="/">
@@ -193,6 +201,8 @@ export function PayoffPage() {
             <Toggle label="Prepay loans after the cards" checked={prepay} onChange={setPrepay} sub="Off: once the cards are clear, loans just keep their EMIs" />
           </Section>
 
+          {base && <DebtArea p={base} extra={extra} setExtra={setExtra} />}
+
           <Section title="Month by month">
             <div className="glass card stack-sm">
               {/* what is still owed: monthly for a short plan, once a year for a long one */}
@@ -215,6 +225,31 @@ export function PayoffPage() {
         </div>
       )}
     </Page>
+  );
+}
+
+/** Each debt falling to zero at the current pace (stacked), against the total when paying extra each month (dashed). */
+function DebtArea({ p, extra, setExtra }: { p: Payoff; extra: number; setExtra: (v: number) => void }) {
+  const fast = p.with_extra?.timeline || [];
+  const n = Math.min(Math.max(p.timeline.length, fast.length), 60), step = Math.max(1, Math.ceil(n / 24));
+  const idx = Array.from({ length: Math.ceil(n / step) + 1 }, (_, k) => Math.min(n, k * step));
+  const start = Object.fromEntries(p.debts.map(d => [d.id, d.balance.minor]));
+  const at = (i: number) => (i === 0 ? start : p.timeline[i - 1]?.by || {});
+  const money = (v: number) => fmt({ minor: Math.round(v * 100), currency: p.currency }, { compact: true });
+  const top = [...p.debts].sort((a, b) => b.balance.minor - a.balance.minor);
+  return (
+    <Section title={`Each debt to zero${n >= 60 ? ', next 5 years' : ''}`}>
+      <div className="glass card stack-sm">
+        <StackedArea labels={idx.map(i => { const ym = shiftMonth(thisMonth(), i); return `${monthLabel(ym)}${n > 12 ? ` ’${ym.slice(2, 4)}` : ''}`; })}
+          labelEvery={Math.ceil(idx.length / 6)} format={money} label="What is owed on each debt, month by month"
+          series={top.map(d => ({ label: d.name, values: idx.map(i => (i > p.timeline.length ? 0 : (at(i)[d.id] ?? 0)) / 100) }))}
+          compare={fast.length ? { label: `Paying ${fmt(p.extra || { minor: extra, currency: p.currency }, { compact: true })} extra`, values: idx.map(i => i === 0 ? top.reduce((a, d) => a + d.balance.minor, 0) / 100 : (fast[i - 1]?.total.minor ?? 0) / 100) } : undefined} />
+        <div className="chips" role="radiogroup" aria-label="Extra a month">{[500_00, 1000_00, 2000_00, 5000_00].map(v => (
+          <Chip key={v} on={extra === v} onClick={() => setExtra(v)}>+{fmt({ minor: v, currency: p.currency }, { compact: true })}/mo</Chip>))}</div>
+        <p className="caption">At the current pace: debt-free {p.debt_free.month ? monthLabel(p.debt_free.month, true) : 'not at this pace'}.
+          {p.with_extra ? <> Paying {fmt(p.extra || { minor: extra, currency: p.currency }, { compact: true })} more a month: <b className="pos">{p.with_extra.debt_free ? monthLabel(p.with_extra.debt_free, true) : 'still not clear'}</b>, interest <Money m={p.with_extra.interest} /> instead of <Money m={p.interest_total} />.</> : null}</p>
+      </div>
+    </Section>
   );
 }
 

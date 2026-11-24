@@ -6,7 +6,7 @@ import { fmt, monthLabel } from '../lib/format';
 import { Icon } from './Icon';
 
 export { Icon, Tile, CategoryTile, Avatar, brandOf, logoOf, BrandTile } from './Icon';
-export { Donut, BarRow, MiniBars, CHART_COLORS } from './Chart';
+export { Donut, BarRow, MiniBars, StackedBars, Waterfall, StackedArea, Sparkline, OwnOweBar, CHART_COLORS } from './Chart';
 export type { ChartItem } from './Chart';
 export { InstallBanner, useInstall, isStandalone } from './install';
 
@@ -118,8 +118,8 @@ export function Section({ title, action, children }: { title: string; action?: R
 }
 
 /* ---------- list rows ---------- */
-type RowProps = { icon?: ReactNode; title: ReactNode; sub?: ReactNode; end?: ReactNode; endSub?: ReactNode; to?: string; onClick?: () => void; chevron?: boolean; label?: string };
-export function ListRow({ icon, title, sub, end, endSub, to, onClick, chevron, label }: RowProps) {
+type RowProps = { icon?: ReactNode; title: ReactNode; sub?: ReactNode; end?: ReactNode; endSub?: ReactNode; to?: string; onClick?: () => void; chevron?: boolean; label?: string; className?: string };
+export function ListRow({ icon, title, sub, end, endSub, to, onClick, chevron, label, className = '' }: RowProps) {
   const inner = (
     <>
       {icon}
@@ -128,7 +128,7 @@ export function ListRow({ icon, title, sub, end, endSub, to, onClick, chevron, l
       {(chevron ?? !!(to || onClick)) && <Icon name="chevR" className="chev" />}
     </>
   );
-  const cls = `list-row ${icon ? '' : 'no-icon'}`;
+  const cls = `list-row ${icon ? '' : 'no-icon'} ${className}`;
   if (to) return <Link className={cls} to={to} aria-label={label}>{inner}</Link>;
   if (onClick) return <button type="button" className={cls} onClick={onClick} aria-label={label}>{inner}</button>;
   return <div className={cls}>{inner}</div>;

@@ -27,6 +27,7 @@ const TABS = [
   { to: '/plan', label: 'Plan', icon: 'plan', also: ['/payoff'] },
   { to: '/wealth', label: 'Wealth', icon: 'chart', also: ['/accounts', '/assets', '/money'] },
 ];
+const SIDE_EXTRA = [{ to: '/people', label: 'People', icon: 'people' }, { to: '/trips', label: 'Trips', icon: 'plane' }];
 const tabOf = (path: string) => Math.max(0, TABS.findIndex((t, i) => (i === 0 ? path === '/' : [t.to, ...t.also].some(p => path.startsWith(p)))));
 
 function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
@@ -72,9 +73,11 @@ function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
       <a href="#main" className="sr-only">Skip to content</a>
       <nav className="sidebar" aria-label="Main">
         <div className="brand"><img src="/icon.svg" alt="" />Ledger</div>
-        {TABS.map((t, i) => (
-          <NavLink key={t.to} to={to(i)} end={t.to === '/'} aria-current={i === active ? 'page' : undefined}><Icon name={t.icon} />{t.label}</NavLink>
+        {TABS.map((t, i) => (  // the sidebar is a menu: each entry opens its own screen, not the tab's last page
+          <NavLink key={t.to} to={t.to} end={t.to === '/'} aria-current={i === active && !SIDE_EXTRA.some(x => pathname.startsWith(x.to)) ? 'page' : undefined}><Icon name={t.icon} />{t.label}</NavLink>
         ))}
+        <div className="sidebar-sep" />
+        {SIDE_EXTRA.map(x => <NavLink key={x.to} to={x.to} aria-current={pathname.startsWith(x.to) ? 'page' : undefined}><Icon name={x.icon} />{x.label}</NavLink>)}
         <div className="grow" />
         <div className="hh">{me.household.name}<br /><span className="footnote">{me.user.email}</span></div>
       </nav>

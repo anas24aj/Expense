@@ -1,82 +1,111 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { api, useApi, useWrite } from '../api/client';
-import type { Account, Advice, Commitment, Fund, HouseholdFull, Liability, Lookahead, MonthPlan, Money as MoneyT, PlanLine, PlanMonth, Pot, WhatIf } from '../api/types';
-import { fmt, monthLabel, sumByCurrency, today, toMinor } from '../lib/format';
+import type { Account, Advice, Commitment, Fund, HouseholdFull, Liability, MonthPlan, Money as MoneyT, PlanLine, PlanMonth, Pot, WhatIf } from '../api/types';
+import { acctLabel, fmt, monthLabel, sumByCurrency, today, toMinor } from '../lib/format';
 import {
-  AmountInput, Avatar, BarChart, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast,
+  AmountInput, Avatar, Chip, ErrorCard, Field, Icon, List, ListRow, Meter, MiniBars, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, Toggle, useToast, Waterfall,
 } from '../ui';
 import { PersonAvatar } from './People';
 
 
+type Sec = 'this' | 'next' | 'year' | 'funds';
+const SECS: { value: Sec; label: string }[] = [{ value: 'this', label: 'This month' }, { value: 'next', label: 'Next month' }, { value: 'year', label: 'Year' }, { value: 'funds', label: 'Set-asides' }];
+const HASH_SEC: Record<string, Sec> = { '#debts': 'year', '#lookahead': 'year', '#funds': 'funds', '#month': 'this' };
+
+/** Plan in four parts: this month and next (salary minus what is due → left over or short), the year (12 months of
+ * the same gap, loans and cards, "can I afford it") and the set-asides (funds and where spare money goes). */
 export default function PlanPage() {
-  const look = useApi<Lookahead>('/insights/lookahead', { months: 12 });
   const commits = useApi<{ items: Commitment[] }>('/commitments');
   const { hash } = useLocation();
+  const [params, setParams] = useSearchParams();
+  const sec: Sec = (params.get('s') as Sec) || HASH_SEC[hash] || (params.get('month') ? 'next' : 'this');
   useEffect(() => {
-    if (hash && look.data && commits.data) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [hash, look.data, commits.data]);
+    if (hash) setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 400);
+  }, [hash]);
   return (
     <Page title="Plan">
       <div className="grid-desktop stack">
-        <div className="span-2"><MonthPlanner /></div>
-        <List className="span-2">
-          <ListRow to="/recurring" icon={<Tile icon="repeat" color="#af52de" />} title="Recurring payments" sub="Rent, bills, subscriptions, EMIs, family: all feed this plan"
-            end={commits.data ? sumByCurrency(commits.data.items.filter(c => c.cycle_months).map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / c.cycle_months) }))).map(m => fmt(m, { compact: true })).join(' + ') + '/mo' : undefined} />
-          <ListRow to="/payoff" icon={<Tile icon="target" color="#ff453a" />} title="Debt-free plan" sub="Months to clear the cards, then the loans" />
-        </List>
-        <Debts />
-        <Funds />
-        <Section title="Next 12 months">
-          <div id="lookahead" style={{ scrollMarginTop: 80 }} />
-          {look.isLoading ? <PageSkeleton /> : look.error ? <ErrorCard error={look.error} retry={look.refetch} /> : <LookaheadCard l={look.data!} />}
-        </Section>
-        <Afford />
-        <AdviceCard />
+        <div className="span-2"><Segmented label="Plan section" value={sec} onChange={v => setParams(v === 'this' ? {} : { s: v }, { replace: true })} options={SECS} /></div>
+        {(sec === 'this' || sec === 'next') && <>
+          <div className="span-2"><MonthPlanner index={sec === 'next' ? 1 : 0} /></div>
+          <List className="span-2">
+            <ListRow to="/recurring" icon={<Tile icon="repeat" color="#af52de" />} title="Recurring payments" sub="Rent, bills, subscriptions, EMIs, family: all feed this plan"
+              end={commits.data ? sumByCurrency(commits.data.items.filter(c => c.cycle_months).map(c => ({ ...c.amount, minor: Math.round(c.amount.minor / c.cycle_months) }))).map(m => fmt(m, { compact: true })).join(' + ') + '/mo' : undefined} />
+            <ListRow to="/payoff" icon={<Tile icon="target" color="#ff453a" />} title="Debt-free plan" sub="Months to clear the cards, then the loans" />
+          </List>
+        </>}
+        {sec === 'year' && <>
+          <div className="span-2"><YearPlan /></div>
+          <Debts />
+          <Afford />
+        </>}
+        {sec === 'funds' && <>
+          <Funds />
+          <AdviceCard />
+        </>}
       </div>
     </Page>
   );
 }
 
-const LINE_GROUPS: [PlanLine['kind'], string][] = [['commitment', 'Bills & commitments'], ['emi', 'Loan EMIs'], ['card', 'Credit card bills'], ['person', 'Owed to people'], ['fund', 'Set aside']];
+const LINE_GROUPS: [PlanLine['kind'], string][] = [['commitment', 'Bills & commitments'], ['emi', 'Loan EMIs'], ['card', 'Card statements'], ['person', 'Owed to people'],
+  ['revolving', 'Revolving debt · costs interest, not due'], ['fund', 'Set aside · from what is left']];
 const when = (d: string | null) => (d ? new Date(d + 'T00:00:00').toLocaleDateString('en', { day: 'numeric', month: 'short' }) : '');
+const WATER: [PlanLine['kind'], string, string][] = [['emi', 'EMIs', '#5e5ce6'], ['card', 'Cards', '#ff9f0a'], ['commitment', 'Recurring', '#bf5af2'], ['person', 'People', '#40c8e0']];
+
+/** Salary down to the gap: each kind of due takes its part. */
+export function PlanWaterfall({ m }: { m: PlanMonth }) {
+  const money = (v: number) => fmt({ minor: Math.round(v * 100), currency: m.out.currency }, { compact: true });
+  const part = (k: PlanLine['kind']) => m.lines.filter(l => l.kind === k && l.counted).reduce((a, l) => a + l.base.minor, 0) / 100;
+  return <Waterfall start={{ label: 'Salary', value: m.income.minor / 100 }} format={money} label={`${monthLabel(m.month, true)}: salary to what is left`}
+    steps={WATER.map(([k, label, color]) => ({ label, value: part(k), color })).filter(x => x.value)} />;
+}
+
+function PlanLines({ m }: { m: PlanMonth }) {
+  return (<>
+    <div className="between plan-line"><span><b>Salary</b></span><b className="num pos">+{fmt(m.income)}</b></div>
+    {LINE_GROUPS.map(([kind, label]) => {
+      const xs = m.lines.filter(l => l.kind === kind);
+      if (!xs.length) return null;
+      const counted = xs.filter(l => l.counted).reduce((a, l) => a + l.base.minor, 0), all = xs.reduce((a, l) => a + l.base.minor, 0);
+      const late = xs.filter(l => l.overdue).length;
+      return (
+        <details key={kind} className="plan-group" open={kind !== 'fund' && kind !== 'revolving'}>
+          <summary className="between plan-line"><span>{label} <span className="caption">· {xs.length}</span>{late ? <span className="badge red" style={{ marginLeft: 6 }}>{late} overdue</span> : null}</span>
+            {counted ? <span className="num neg">−{fmt({ minor: counted, currency: m.out.currency })}</span> : <span className="num muted">{fmt({ minor: all, currency: m.out.currency })}</span>}</summary>
+          <List>{xs.map((l, i) => (
+            <Link key={i} to={l.link} className="list-row no-icon" style={{ minHeight: 48, color: l.paid || !l.counted ? 'var(--text-2)' : undefined }}>
+              <div className="body"><div className="title">{l.paid ? <s>{l.name}</s> : l.name}{l.overdue && <span className="badge red" style={{ marginLeft: 6 }}>Overdue</span>}</div>
+                <div className="sub" style={{ color: 'var(--text-2)' }}>{[l.paid ? 'paid' : l.day ? `${l.overdue ? 'was due' : 'due'} ${when(l.day)}` : '', l.account_name && l.counted ? `from ${l.account_name}` : '', l.counted || l.paid || l.note ? '' : 'from its fund'].filter(Boolean).join(' · ')}</div>
+                {l.note && <div className={`sub wrap ${l.overdue || l.kind === 'revolving' ? 'neg' : l.counted ? 'warn' : 'muted'}`}>{l.note}</div>}</div>
+              <div className="end"><span className="amt"><Money m={l.amount} /></span></div>
+            </Link>
+          ))}</List>
+        </details>
+      );
+    })}
+  </>);
+}
 
 /** This month or next: salary minus everything due → left over or short; then who pays what, from which account, and what to send home. */
-function MonthPlanner() {
+function MonthPlanner({ index }: { index: number }) {
   const q = useApi<MonthPlan>('/insights/plan');
   const accounts = useApi<{ items: Account[] }>('/accounts');
-  const [params, setParams] = useSearchParams();
   if (q.isLoading) return <PageSkeleton />;
   if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
-  const months = q.data!.months;
-  const pick = params.get('month');
-  const m: PlanMonth = months.find(x => x.month === pick) || months[0];
-  const name = (id: string | null) => { const a = accounts.data?.items.find(x => x.id === id); return a ? `${a.institution}${a.last4 ? ' ··' + a.last4 : ''}` : ''; };
+  const m: PlanMonth = q.data!.months[index] || q.data!.months[0];
+  const name = (id: string | null) => { const a = accounts.data?.items.find(x => x.id === id); return a ? acctLabel(a) : ''; };
   const short = !!m.short;
   return (
     <section className="stack" aria-label="Month plan" id="month">
-      <Segmented label="Month" value={m.month} onChange={v => setParams(v === months[0].month ? {} : { month: v }, { replace: true })}
-        options={months.map((x, i) => ({ value: x.month, label: `${i ? 'Next' : 'This'} month · ${monthLabel(x.month)}` }))} />
       <div className="glass card stack-sm">
-        <div className="between plan-line"><span><b>Salary</b></span><b className="num pos">+{fmt(m.income)}</b></div>
-        {LINE_GROUPS.map(([kind, label]) => {
-          const xs = m.lines.filter(l => l.kind === kind);
-          if (!xs.length) return null;
-          const total = xs.filter(l => l.counted).reduce((a, l) => a + l.base.minor, 0);
-          return (
-            <details key={kind} className="plan-group" open={kind !== 'fund'}>
-              <summary className="between plan-line"><span>{label} <span className="caption">· {xs.length}</span></span><span className="num neg">−{fmt({ minor: total, currency: m.out.currency })}</span></summary>
-              <List>{xs.map((l, i) => (
-                <Link key={i} to={l.link} className="list-row no-icon" style={{ minHeight: 48, color: l.paid ? 'var(--text-2)' : undefined }}>
-                  <div className="body"><div className="title">{l.paid ? <s>{l.name}</s> : l.name}</div>
-                    <div className="sub" style={{ color: 'var(--text-2)' }}>{[l.paid ? 'paid' : l.day ? `due ${when(l.day)}` : '', l.account_name ? `from ${l.account_name}` : '', l.counted || l.paid ? '' : 'from its fund'].filter(Boolean).join(' · ')}</div>
-                    {l.note && <div className="sub wrap warn">{l.note}</div>}</div>
-                  <div className="end"><span className="amt"><Money m={l.amount} /></span></div>
-                </Link>
-              ))}</List>
-            </details>
-          );
-        })}
+        <div className="between"><b>{monthLabel(m.month, true)}</b><b className={`num ${short ? 'neg' : 'pos'}`}>{short ? <>Short by <Money m={m.short} /></> : <>Left over <Money m={m.surplus} /></>}</b></div>
+        <PlanWaterfall m={m} />
+        <p className="footnote">Salary minus what is due this month: recurring payments, EMIs, card statements by their due date and people you chose to pay now.</p>
+      </div>
+      <div className="glass card stack-sm">
+        <PlanLines m={m} />
         <div className={`between plan-total ${short ? 'neg' : 'pos'}`}><b>{short ? 'Short by' : 'Left over'}</b><b className="num">{fmt(short ? m.short : m.surplus)}</b></div>
       </div>
 
@@ -100,10 +129,37 @@ function MonthPlanner() {
           <div className={`list-row plan-step ${short ? 'bad' : 'good'}`}>
             <span className="step-n"><Icon name={short ? 'warn' : 'check'} size={16} /></span>
             <div className="body"><div className="title">{short ? <>Short by <Money m={m.short} /></> : <>Keep <Money m={m.surplus} /> free</>}</div>
-              <div className="sub wrap">{short ? 'Move a fund’s set-aside, delay a big buy, or pay the card in part.' : 'After every bill, EMI and card above. Card spending this month shows up as next month’s card bill.'}</div></div>
+              <div className="sub wrap">{short ? 'Move a fund’s set-aside, delay a big buy, or pay the card in part.' : 'After every bill, EMI and card statement above. Card spending this month shows up as next month’s statement.'}</div></div>
           </div>
         </List>
+        <p className="footnote">Cards are paid from the account that paid them last; set another one on the card’s page.</p>
       </Section>
+    </section>
+  );
+}
+
+/** Twelve months of the same gap (salary minus dues), red below zero; tap a month for its items. */
+function YearPlan() {
+  const q = useApi<MonthPlan>('/insights/plan', { months: 12 });
+  const [open, setOpen] = useState<PlanMonth | null>(null);
+  if (q.isLoading) return <PageSkeleton />;
+  if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
+  const ms = q.data!.months, cur = q.data!.currency;
+  const money = (v: number) => fmt({ minor: Math.round(v * 100), currency: cur }, { compact: true });
+  const shortN = ms.filter(m => m.short).length;
+  return (
+    <section className="glass card stack-sm" aria-label="The next 12 months" id="lookahead">
+      <div className="between"><b>Next 12 months</b><span className={`caption ${shortN ? 'neg' : 'pos'}`}>{shortN ? `${shortN} short` : 'Every month covered'}</span></div>
+      <MiniBars items={ms.map(m => ({ label: monthLabel(m.month).slice(0, 1), value: m.surplus.minor / 100, color: 'var(--green-fill)' }))} format={money} highlight={0}
+        onSelect={(_, i) => setOpen(ms[i])} label="Left over or short each month, tap a month" />
+      <p className="footnote">Left over (green) or short (red) after the dues. Tap a month to see what is due.</p>
+      <Sheet open={!!open} onClose={() => setOpen(null)} title={open ? monthLabel(open.month, true) : ''} detent="large">
+        {open && <div className="stack">
+          <PlanWaterfall m={open} />
+          <div className="glass card stack-sm"><PlanLines m={open} />
+            <div className={`between plan-total ${open.short ? 'neg' : 'pos'}`}><b>{open.short ? 'Short by' : 'Left over'}</b><b className="num">{fmt(open.short || open.surplus)}</b></div></div>
+        </div>}
+      </Sheet>
     </section>
   );
 }
@@ -144,34 +200,6 @@ function Afford() {
         </div>
       )}
     </section>
-  );
-}
-
-function LookaheadCard({ l }: { l: Lookahead }) {
-  const [table, setTable] = useState(false);
-  const empty = l.months.every(m => !m.income.minor && !m.free.minor);
-  return (
-    <div className="glass card stack-sm">
-      <div className="between"><span className="caption">Free money per month</span>{!empty && <button className="link-btn" onClick={() => setTable(!table)} aria-expanded={table}>{table ? 'Chart' : 'Table'}</button>}</div>
-      {empty ? <p className="caption">Set your salary in <Link to="/more/settings">Settings</Link> and add your commitments to see what’s free in each of the next 12 months.</p>
-      : table ? (
-        <div className="table-wrap">
-          <table className="look">
-            <thead><tr><th>Month</th><th>In</th><th>Due</th><th>Funds</th><th>Living</th><th>Free</th></tr></thead>
-            <tbody>
-              {l.months.map(m => (
-                <tr key={m.month} title={m.warnings.join(', ')}>
-                  <td>{monthLabel(m.month)} {m.warnings.length > 0 && <Icon name="warn" size={12} className="warn" />}</td>
-                  <td>{fmt(m.income, { compact: true })}</td><td>{fmt(m.commitments, { compact: true })}</td><td>{fmt(m.funds, { compact: true })}</td>
-                  <td>{fmt(m.everyday, { compact: true })}</td><td className={m.free.minor < 0 ? 'neg' : 'pos'}><b>{fmt(m.free, { compact: true })}</b></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : <BarChart data={l.months.map(m => ({ month: m.month, value: m.free.minor / 100 }))} highlight={0} />}
-      {l.months.filter(m => m.warnings.length).slice(0, 3).map(m => <p key={m.month} className="caption"><Icon name="info" size={13} /> <b>{monthLabel(m.month, true)}</b> — {m.warnings[0]}</p>)}
-    </div>
   );
 }
 
@@ -495,8 +523,17 @@ function LoanSheet({ loan, onClose }: { loan: Liability | 'new' | null; onClose:
 
 function AdviceCard() {
   const q = useApi<Advice>('/insights/advice');
+  const [more, setMore] = useState(false);
   if (!q.data) return null;
   const a = q.data;
+  const free = a.steps.some(s => s.amount && s.amount.minor > 0);
+  if (!free && !more) return (
+    <Section title="Where to put money">
+      <button type="button" className="glass card between" style={{ width: '100%', textAlign: 'left', color: 'inherit' }} onClick={() => setMore(true)} aria-expanded={false}>
+        <span className="caption">Nothing is free to put anywhere this month. Steps show once money is left after the dues.</span><Icon name="chevR" size={14} />
+      </button>
+    </Section>
+  );
   return (
     <Section title="Where to put money">
       <div className="glass card stack">

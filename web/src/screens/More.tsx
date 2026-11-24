@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query';
 import { api, useApi, useWrite } from '../api/client';
 import type { Account, Asset, DeviceCreated, Device, HouseholdFull, Liability, Me, Milestone, Money as MoneyT, SalaryEntry, Settings, Statement, Txn } from '../api/types';
-import { fmt, major, monthLabel, shortDate, thisMonth, toMinor, today } from '../lib/format';
+import { acctLabel, fmt, major, monthLabel, shortDate, thisMonth, toMinor, today } from '../lib/format';
 import {
   AmountInput, Avatar, BarChart, BrandTile, brandOf, CategoryTile, logoOf, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, ProgressRing, Section, Segmented, Sheet, Tile, useToast,
 } from '../ui';
@@ -85,7 +85,9 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
   const hh = useApi<HouseholdFull>('/households/current');
   const [f, setF] = useState(() => ({ name: a.name, institution: a.institution, last4: a.last4 || '', country: countryOf(a), owner: a.owner_member_id || '',
     limit: a.credit_limit ? String(major(a.credit_limit)) : '', statement_day: a.statement_day ? String(a.statement_day) : '', due_day: a.due_day ? String(a.due_day) : '',
-    stmt_due: a.statement_due ? String(major(a.statement_due)) : '', min_due: a.min_due ? String(major(a.min_due)) : '', due_on: a.statement_due_on || '' }));
+    stmt_due: a.statement_due ? String(major(a.statement_due)) : '', min_due: a.min_due ? String(major(a.min_due)) : '', due_on: a.statement_due_on || '',
+    rewards: a.rewards || '', annual_fee: a.annual_fee ? String(major(a.annual_fee)) : '', forex: a.forex_markup_bp != null ? String(a.forex_markup_bp / 100) : '',
+    free_days: a.interest_free_days != null ? String(a.interest_free_days) : '' }));
   const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
   const save = useWrite<Record<string, unknown>>('PATCH', `/accounts/${a.id}`);
   const nav = useNavigate();
@@ -96,7 +98,8 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
       await save.mutateAsync({ name: f.name, institution: f.institution, last4: f.last4, country: f.country, owner_member_id: f.owner || null,
         statement_day: dayOf(f.statement_day), due_day: dayOf(f.due_day), ...(card ? { credit_limit_minor: toMinor(Number(f.limit) || 0, a.currency),
           statement_due_minor: f.stmt_due ? toMinor(Number(f.stmt_due), a.currency) : null, min_due_minor: f.min_due ? toMinor(Number(f.min_due), a.currency) : null,
-          statement_due_on: f.due_on || null } : {}) });
+          statement_due_on: f.due_on || null, rewards: f.rewards.trim() || null, annual_fee_minor: f.annual_fee ? toMinor(Number(f.annual_fee), a.currency) : null,
+          forex_markup_bp: f.forex ? Math.round(Number(f.forex) * 100) : null, interest_free_days: f.free_days ? Math.min(120, Number(f.free_days)) : null } : {}) });
       toast('Saved'); onClose();
     } catch { /* shown below */ }
   };
@@ -121,6 +124,12 @@ export function EditAccountSheet({ a, open, onClose }: { a: Account; open: boole
           <Field label="Minimum due"><input className="input" inputMode="decimal" value={f.min_due} onChange={e => set('min_due')(e.target.value.replace(/[^\d.]/g, ''))} placeholder="—" /></Field>
         </div>}
         {card && <Field label="Statement due by"><input className="input" type="date" value={f.due_on} onChange={e => set('due_on')(e.target.value)} /></Field>}
+        {card && <Field label="Rewards"><input className="input" value={f.rewards} onChange={e => set('rewards')(e.target.value)} placeholder="1% cashback, 2 points per 100…" maxLength={120} /></Field>}
+        {card && <div className="grid-3">
+          <Field label={`Annual fee (${a.currency})`}><input className="input" inputMode="decimal" value={f.annual_fee} onChange={e => set('annual_fee')(e.target.value.replace(/[^\d.]/g, ''))} placeholder="unknown" /></Field>
+          <Field label="Forex markup %"><input className="input" inputMode="decimal" value={f.forex} onChange={e => set('forex')(e.target.value.replace(/[^\d.]/g, ''))} placeholder="unknown" /></Field>
+          <Field label="Interest-free days"><input className="input" inputMode="numeric" maxLength={3} value={f.free_days} onChange={e => set('free_days')(e.target.value.replace(/\D/g, ''))} placeholder="unknown" /></Field>
+        </div>}
         <Field label="Owner">
           <select className="input" value={f.owner} onChange={e => set('owner')(e.target.value)}>
             <option value="">Nobody in particular</option>
@@ -795,7 +804,7 @@ export function ImportPage() {
         <Field label="Account">
           <select className="input" value={account} onChange={e => setAccount(e.target.value)}>
             <option value="">Choose…</option>
-            {(accounts.data?.items || []).filter(a => a.kind !== 'loan').map(a => <option key={a.id} value={a.id}>{a.institution} · {a.name}{a.last4 ? ` ··${a.last4}` : ''}</option>)}
+            {(accounts.data?.items || []).filter(a => a.kind !== 'loan').map(a => <option key={a.id} value={a.id}>{acctLabel(a)}</option>)}
           </select>
         </Field>
         <Field label="PDF password (if any)"><input className="input" type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} placeholder="Often your customer ID or DOB" /></Field>

@@ -4,7 +4,7 @@ import { useApi, useWrite } from '../api/client';
 import type { Contact, HouseholdFull, Member, Money as M, Person, PersonLedger, SharedSpend, Txn } from '../api/types';
 import { fmt, shortDate, sumByCurrency } from '../lib/format';
 import {
-  Avatar, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, useToast,
+  Avatar, Chip, EmptyState, ErrorCard, Field, Icon, List, ListRow, Meter, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, Toggle, useToast,
 } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { photoDataUrl } from './files';
@@ -63,6 +63,7 @@ export function PersonPage() {
   const [editing, setEditing] = useState(false);
   const split = useWrite<{ id: string; shares: Record<string, unknown>[] }>('POST', b => `/transactions/${b.id}/split`);
   const settle = useWrite('POST', '/settle');
+  const dues = useWrite<{ count_in_dues: boolean }>('PUT', `/people/${kind}/${id}/dues`);
   const toast = useToast();
   const d = q.data, p = d?.person;
   const col = kind === 'member' ? 'member_id' : 'contact_id';
@@ -90,6 +91,10 @@ export function PersonPage() {
                 }}><Icon name="check" size={18} />Settle up</button>
               </div>
             ))}
+            {p.you_owe.length > 0 && <div style={{ width: '100%', maxWidth: 360, textAlign: 'left' }}>
+              <List><Toggle label="Pay back this month" checked={!!p.count_in_dues} onChange={async v => { await dues.mutateAsync({ count_in_dues: v }); toast(v ? `Counted in this month’s dues` : 'No rush: left out of this month’s dues'); }}
+                sub={p.count_in_dues ? 'Counted in this month’s plan' : 'No due date, so no rush: left out of this month’s plan'} /></List>
+            </div>}
             {p.support_plan && <div style={{ width: '100%' }} className="stack-sm">
               <div className="between"><span className="caption">Support this month</span><span className="num"><Money m={p.support_month} /> of <Money m={p.support_plan} /></span></div>
               <Meter pct={((p.support_month?.minor || 0) / Math.max(1, p.support_plan.minor)) * 100} color="var(--green-fill)" />

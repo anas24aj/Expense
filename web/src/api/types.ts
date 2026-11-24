@@ -14,6 +14,7 @@ export interface HouseholdFull { household: Household; members: Member[]; contac
 export interface Person {
   kind: 'member' | 'contact'; id: string; name: string; relation: string | null; role: string | null; on_app: boolean;
   owes_you: Money[]; you_owe: Money[]; support_month: Money | null; support_plan: Money | null; rent_due?: Money | null; photo?: string | null;
+  count_in_dues?: boolean; // what you owe them counts in this month's dues (off: no rush)
 }
 export interface Device { id: string; name: string; platform: 'iphone' | 'android' | 'other'; member_id: string; created_at: string; last_seen: string | null }
 export interface DeviceCreated { device: Device; key: string; sms_url: string; setup: string; shortcut_url: string | null }
@@ -24,6 +25,7 @@ export interface Account {
   owner_member_id: string | null; visibility: 'household' | 'private'; balance: Money | null; balance_at: string | null;
   credit_limit: Money | null; used_pct: number | null; due_day: number | null; statement_day: number | null; rate_bp: number | null; archived: boolean;
   statement_due?: Money | null; min_due?: Money | null; statement_due_on?: string | null; // a card's last statement, as the bank states it
+  rewards?: string | null; annual_fee?: Money | null; forex_markup_bp?: number | null; interest_free_days?: number | null; // card extras; null = unknown
 }
 
 export type Purpose = 'spend' | 'fee' | 'transfer' | 'income' | 'support' | 'lend' | 'repaid' | 'borrow' | 'repay'
@@ -33,6 +35,7 @@ export interface Txn {
   purpose: Purpose; confidence: number; account_id: string | null; account_name: string | null; member_id: string | null; note: string | null;
   source: 'sms' | 'statement' | 'shortcut' | 'manual' | 'peer'; person: { kind: string; id: string; name: string } | null;
   split_mine: Money | null; claim_id: string | null; commitment_id: string | null; liability_id?: string | null; fund_id?: string | null;
+  merchant_raw?: string; instalment?: { n: number; of: number; left: number } | null; // a card instalment's "3 of 12"
 }
 export interface TxnDetail extends Txn { raw: { sender: string; body: string } | null; links: { id: string; kind: string; other_txn_id: string; role: 'from' | 'to'; set_by: string }[];
   splits: { id: string; member_id: string | null; contact_id: string | null; name: string; share: Money; settled: boolean }[]; claim: { id: string; name: string; status: string } | null;
@@ -125,16 +128,18 @@ export interface Payoff {
   delay: { cards: number | null; debt_free: number | null; interest: Money };
   interest_now: { cards: Money; loans: Money; total: Money }; interest_total: Money; card_interest: Money; card_interest_min_due: Money; interest_saved: Money;
   debts: { id: string; name: string; kind: 'card' | 'loan'; balance: Money; local: Money; rate_bp: number; rate_assumed: boolean; emi: Money; cleared: string | null; months: number | null }[];
-  timeline: { month: string; interest: Money; cards: Money; loans: Money; cleared: string[] }[];
+  timeline: { month: string; interest: Money; cards: Money; loans: Money; cleared: string[]; by?: Record<string, number> }[];
   assumptions: string[];
+  extra?: Money; with_extra?: { debt_free: string | null; months: number | null; interest: Money; timeline: { month: string; total: Money }[] };
 }
-export interface LookMonth { month: string; income: Money; commitments: Money; funds: Money; everyday: Money; free: Money; warnings: string[] }
+export interface LookMonth { month: string; income: Money; commitments: Money; funds: Money; everyday: Money; free: Money; warnings: string[];
+  dues?: Money; surplus?: Money; short?: Money | null } // dues/surplus/short: the planner's, the one "short by"
 export interface Lookahead { months: LookMonth[]; debt_free: { month: string | null; months: number | null }; interest_per_month: Money }
 export interface WhatIf { verdict: 'ok' | 'tight' | 'no'; why: string; month_free_after: Money; debt_free_before: DebtFree | string | null; debt_free_after: DebtFree | string | null; delay_months: number; extra_interest: Money;
   free_per_month?: Money; recover_months?: number | null }
 export type DebtFree = { month: string | null; months: number | null };
 export interface Advice { note?: string; emergency: { months_covered: number | null; target: Money }; steps: { title: string; why: string; amount: Money | null }[] }
-export interface Alert { level: 'info' | 'warn' | 'bad'; text: string; link: string | null }
+export interface Alert { level: 'info' | 'warn' | 'bad'; text: string; link: string | null; top?: boolean; overdue?: boolean; country?: string }
 export interface Home { month: MonthInsight; next_dues: Commitment[]; lookahead: Lookahead; review_count: number; alerts: Alert[] }
 export interface Statement { id: string; account_id: string; file_name: string; period_from: string; period_to: string; rows: number; imported_at: string }
 export interface Items<T> { items: T[] }
@@ -162,10 +167,10 @@ export interface ClaimImport { claim: Claim | null; matched: ClaimRow[]; unmatch
 // Overview (api/overview.py): net worth by country, the month planner, money movement, one person, review by merchant.
 export interface NetCountry { code: 'SA' | 'IN' | 'OTHER'; currency: Currency; cash: Money; property: Money; cards: Money; loans: Money; assets: Money; liabilities: Money; net: Money; net_base: Money }
 export interface NetWorth { currency: Currency; fx: { SAR_INR: number; at: string | null }; assets: Money; liabilities: Money; net: Money; countries: NetCountry[];
-  losses: { month: Money; year: Money; loan_interest_month: Money; items: Txn[] } }
-export interface PlanLine { kind: 'commitment' | 'emi' | 'card' | 'person' | 'fund'; name: string; amount: Money; base: Money; day: string | null; country: string;
-  account_id: string | null; account_name: string | null; paid: boolean; counted: boolean; link: string; note?: string | null }
-export interface PlanMonth { month: string; income: Money; out: Money; surplus: Money; short: Money | null; lines: PlanLine[];
+  losses: { month: Money; year: Money; loan_interest_month: Money; items: Txn[] }; history?: { month: string; net: Money }[] }
+export interface PlanLine { kind: 'commitment' | 'emi' | 'card' | 'revolving' | 'person' | 'fund'; name: string; amount: Money; base: Money; day: string | null; country: string;
+  account_id: string | null; account_name: string | null; paid: boolean; counted: boolean; link: string; note?: string | null; overdue?: boolean; ref?: string | null }
+export interface PlanMonth { month: string; income: Money; out: Money; surplus: Money; short: Money | null; lines: PlanLine[]; revolving?: Money;
   pay_from: { account_id: string; account_name: string; currency: Currency; total: Money; items: { name: string; amount: Money; day: string | null }[] }[];
   move_to_india: { amount: Money; inr: Money; by: string | null; from: string | null; to: string | null } | null; india: { due: Money; cash: Money } }
 export interface MonthPlan { currency: Currency; fx: { SAR_INR: number }; months: PlanMonth[] }
@@ -179,7 +184,9 @@ export interface PersonLedger { person: Person; shared: SharedSpend[]; sent: Txn
 export interface CardView {
   id: string; currency: Currency; owed: Money | null; limit: Money | null; used_pct: number | null; due_day: number | null; next_due: string | null;
   statement: { from: string; to: string; billed: Money; paid: Money; left: Money } | null;
-  months: { month: string; spent: Money; paid: Money; lost: Money }[]; rate_bp: number; rate_assumed: boolean; interest_month: Money | null;
+  months: { month: string; spent: Money; paid: Money; lost: Money; interest?: Money; fees?: Money }[]; rate_bp: number; rate_assumed: boolean; interest_month: Money | null;
   statement_due: Money | null; min_due: Money | null; statement_due_on: string | null;
+  interest_source?: 'charges' | 'rate' | 'assumed' | null; payer?: { id: string; name: string } | null;
+  rewards?: string | null; annual_fee?: Money | null; forex_markup_bp?: number | null; interest_free_days?: number | null;
 }
 export interface MerchantGroup { merchant: string; count: number; direction: 'debit' | 'credit'; totals: Money[]; last_day: string; category: string | null; account_name: string; txn_ids: string[] }

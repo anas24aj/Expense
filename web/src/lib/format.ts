@@ -29,6 +29,16 @@ const trim = (n: number) => (n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : 
 export const major = (m: Money) => m.minor / 10 ** (DIGITS[m.currency] ?? 2);
 export const toMinor = (v: number, currency: string) => Math.round(v * 10 ** (DIGITS[currency] ?? 2));
 
+/** 'Al Rajhi Bank ··0785', as api/ledger.py label() writes it: when the account's own name carries the bank's brand
+ * ('Federal OneCard' at Federal Bank) that name is used, so no word shows twice ("SBI Card ··8412", not "SBI Card card"). */
+export function acctLabel(a: { institution?: string | null; name?: string | null; last4?: string | null }) {
+  const bank = (a.institution || '').trim(), name = (a.name || '').trim();
+  const brand = bank.split(/\s+/)[0]?.toLowerCase() || '';
+  const base = name && (!bank || name.toLowerCase().split(/\s+/).includes(brand)) ? name : bank;
+  if (a.last4) return `${base} ··${a.last4}`;
+  return !name || base === name || base.toLowerCase().includes(name.toLowerCase()) ? base : `${base} · ${name}`;
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export const monthLabel = (ym: string, long = false) => {
   const [y, m] = ym.split('-').map(Number);
@@ -70,6 +80,9 @@ if (import.meta.env.DEV) {
   eq(fmt({ minor: 1234550, currency: 'SAR' }), 'SAR 12,346');
   eq(fmt({ minor: 10_000_000, currency: 'SAR' }, { compact: true }), 'SAR 100K');
   eq(fmt({ minor: -4550, currency: 'SAR' }), '−SAR 45.50');
+  eq(acctLabel({ institution: 'SBI Card', name: 'SBI Card', last4: '8412' }), 'SBI Card ··8412');
+  eq(acctLabel({ institution: 'Federal Bank', name: 'Federal OneCard', last4: '8235' }), 'Federal OneCard ··8235');
+  eq(acctLabel({ institution: 'HDFC Bank', name: 'Regalia card', last4: '5518' }), 'HDFC Bank ··5518');
 }
 
 /** Totals per currency, in first-seen order: SAR and INR are never added together. */

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useApi, useWrite } from '../api/client';
 import type { Claim, ClaimImport, Money as M, Trip, TripDetail, TripExpense, TripStatus } from '../api/types';
 import { fmt, shortDate, today } from '../lib/format';
-import { Chip, CategoryTile, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, Tile, useToast } from '../ui';
+import { BarRow, Chip, CategoryTile, EmptyState, ErrorCard, Field, Icon, List, ListRow, Money, Monies, Page, PageSkeleton, Section, Segmented, Sheet, StackedBars, Tile, useToast } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { readFile } from './files';
 
@@ -49,6 +49,23 @@ function TripRow({ t }: { t: Trip }) {
   );
 }
 
+/** Work trips side by side, in the base currency: what the company paid back, what is claimed and still owed, and
+ * your own cost (stacked, they add up to what was spent). */
+function WorkTripsChart({ trips }: { trips: Trip[] }) {
+  const tot = (t: Trip) => t.totals_base || t.totals, cur = tot(trips[0]).spent.currency;
+  const v = (m?: M) => (m ? m.minor / 100 : 0);
+  return (
+    <Section title={`Work trips · ${cur}`}>
+      <div className="glass card">
+        <StackedBars format={x => fmt({ minor: Math.round(x * 100), currency: cur }, { compact: true })} label="Each work trip: reimbursed, claimed and waiting, own cost"
+          parts={[{ label: 'Reimbursed', color: 'var(--green-fill)' }, { label: 'Claimed, waiting', color: 'var(--tint-fill)' }, { label: 'Own cost', color: 'var(--red-fill)' }]}
+          items={[...trips].reverse().map(t => { const x = tot(t), back = Math.min(v(x.reimbursed), v(x.claimed));
+            return { label: t.city, values: [back, Math.max(0, v(x.claimed) - back), v(x.burden)] }; })} />
+      </div>
+    </Section>
+  );
+}
+
 /** Trips: work and personal, each with what it cost; the company's claims at the bottom. */
 export function TripsPage() {
   const q = useApi<{ items: Trip[] }>('/trips');
@@ -59,10 +76,11 @@ export function TripsPage() {
       trail={<button className="icon-btn" onClick={() => setAdding(true)} aria-label="New trip"><Icon name="plus" /></button>}>
       {q.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : !all.length
         ? <EmptyState icon="plane" title="No trips yet" text="Add one before you fly — expenses file themselves." action={<button className="btn small" onClick={() => setAdding(true)}>New trip</button>} />
-        : (['business', 'personal'] as const).map(k => {
+        : <>{all.some(t => t.kind === 'business' && t.count) && <WorkTripsChart trips={all.filter(t => t.kind === 'business' && t.count).slice(0, 6)} />}
+        {(['business', 'personal'] as const).map(k => {
           const items = all.filter(t => t.kind === k);
           return items.length ? <Section key={k} title={k === 'business' ? 'Work trips' : 'Personal trips'}><List>{items.map(t => <TripRow key={t.id} t={t} />)}</List></Section> : null;
-        })}
+        })}</>}
       <Claims />
       <NewTripSheet open={adding} onClose={() => setAdding(false)} />
     </Page>
@@ -265,6 +283,16 @@ function Claims() {
         <div className="stat"><span className="k">Waiting from the company</span><span className="v" style={{ fontSize: 26 }}><Monies items={q.data!.pending} empty="Nothing" /></span></div>
         <button className="btn small secondary" onClick={() => setImporting(true)}><Icon name="upload" size={16} />Import Excel</button>
       </div>
+      {items.some(c => c.status !== 'paid' && c.status !== 'draft') && (
+        <Section title="Waiting for how long">
+          <div className="glass card">
+            <BarRow label="Days each claim has waited" format={v => `${v} d`} items={items.filter(c => c.status !== 'paid' && c.status !== 'draft').sort((a, b) => b.age_days - a.age_days)
+              .map(c => ({ label: c.name, value: c.age_days, hint: fmt({ ...c.expected, minor: c.expected.minor - c.received.minor }, { compact: true }),
+                color: c.age_days > 60 ? 'var(--red-fill)' : c.age_days > 30 ? 'var(--orange-fill)' : 'var(--green-fill)' }))} />
+            <p className="footnote">Over 30 days: follow up with the company.</p>
+          </div>
+        </Section>
+      )}
       <Section title="Claims">
         {items.length ? (
           <List>

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { useApi, useWrite } from '../api/client';
 import type { Account, Asset, CardView, Coverage, HouseholdFull, Liability, Member, NetWorth, Person, Txn, UsedBy } from '../api/types';
-import { fmt, monthLabel, shortDate } from '../lib/format';
-import { Avatar, BrandTile, MiniBars, brandOf, EmptyState, Field, logoOf, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, Tile } from '../ui';
+import { acctLabel, fmt, monthLabel, shortDate } from '../lib/format';
+import { Avatar, BrandTile, brandOf, EmptyState, Field, logoOf, OwnOweBar, ProgressRing, Sheet, ErrorCard, Icon, List, ListRow, Meter, Money, Page, PageSkeleton, Section, StackedBars, Tile } from '../ui';
 import { TxnRow, TxnSheet } from './Activity';
 import { FLAG } from './Home';
 import { AddAccountSheet, AddAssetSheet, ASSET_TILE, EditAccountSheet, KIND_LABEL, KIND_TILE, countryOf } from './More';
@@ -31,14 +31,28 @@ function AccountLine({ a }: { a: Account }) {
     <Link to={`/accounts/${a.id}`} className="list-row">
       <AccountTile a={a} />
       <div className="body">
-        <div className="title">{a.institution || a.name}{a.last4 && <span className="caption"> ··{a.last4}</span>}</div>
-        <div className="sub">{card ? (!a.balance ? 'No balance yet' : owed(a) ? <>Owed now{due ? ` · due ${due}` : ' · due date not set'}</> : 'Nothing owed') : a.name !== a.institution ? a.name : KIND_LABEL[a.kind]?.replace(/s$/, '')}</div>
+        <div className="title">{acctLabel(a)}</div>
+        <div className="sub">{card ? (!a.balance ? KIND_LABEL[a.kind]?.replace(/s$/, '') : owed(a) ? <>Owed now{due ? ` · due ${due}` : ' · due date not set'}</> : 'Nothing owed') : a.name !== a.institution ? a.name : KIND_LABEL[a.kind]?.replace(/s$/, '')}</div>
       </div>
       <div className="end">
-        <span className={`amt ${card && owed(a) ? 'neg' : a.balance && a.balance.minor < 0 ? 'neg' : ''}`}>{card ? <Money m={a.balance ? { ...a.balance, minor: owed(a) } : null} /> : <Money m={a.balance} />}</span>
+        {!a.balance ? <span className="amt muted" style={{ fontWeight: 400, fontSize: 14 }}>No balance yet</span>
+          : <span className={`amt ${card && owed(a) ? 'neg' : a.balance.minor < 0 ? 'neg' : ''}`}>{card ? <Money m={{ ...a.balance, minor: owed(a) }} /> : <Money m={a.balance} />}</span>}
         {card && a.credit_limit ? <span className="footnote">of <Money m={a.credit_limit} compact /></span> : a.balance_at ? <span className="footnote">{shortDate(a.balance_at.slice(0, 10))}</span> : null}
       </div>
       <Icon name="chevR" className="chev" />
+    </Link>
+  );
+}
+
+/** Under 1 unit of its currency and nothing on it for 90 days: kept behind "Show small balances". */
+export const isSmall = (a: Account) => !!a.balance && Math.abs(a.balance.minor) < 100 && (!a.balance_at || Date.now() - new Date(a.balance_at).getTime() > 90 * 864e5);
+
+/** "N accounts with gaps": a visible alert at the top of Accounts and Wealth while any account has missing months. */
+export function GapsAlert({ n }: { n: number }) {
+  return (
+    <Link to="/accounts/coverage" className="glass alert-top span-2" role="alert" style={{ color: 'inherit', boxShadow: 'inset 0 0 0 1.5px var(--orange-fill)' }}>
+      <Icon name="warn" className="warn" /><span style={{ flex: 1 }}><b>{n} account{n > 1 ? 's' : ''} with gaps</b><br />
+        <span className="caption">Missing months or gone quiet: totals there may be off. Import those statements.</span></span><Icon name="chevR" size={14} />
     </Link>
   );
 }
@@ -77,6 +91,9 @@ export function AccountsPage() {
   const tracked = new Set((liabs.data?.items || []).map(l => l.account_id).filter(Boolean));
   const needs = (cov.data?.items || []).filter(c => c.status !== 'ok').length;
   const codes = ['IN', 'SA', ...(items.some(a => cc(a) === 'OTHER') ? ['OTHER'] : [])];
+  const [showSmall, setShowSmall] = useState(false);
+  const small = new Set(items.filter(isSmall).map(a => a.id));
+  const shown = showSmall ? items : items.filter(a => !small.has(a.id));
   return (
     <Page title="Accounts" back="/" trail={<button className="icon-btn" onClick={() => setAdding('SA')} aria-label="Add account"><Icon name="plus" /></button>}>
       {q.isLoading || nw.isLoading ? <PageSkeleton /> : q.error ? <ErrorCard error={q.error} retry={q.refetch} /> : (
@@ -88,8 +105,9 @@ export function AccountsPage() {
               <div className="stat"><span className="k">Owe</span><span className="v neg"><Money m={nw.data.liabilities} compact /></span></div>
             </div>
           )}
+          {needs > 0 && <GapsAlert n={needs} />}
           {codes.map(code => {
-            const here = items.filter(a => cc(a) === code);
+            const here = shown.filter(a => cc(a) === code);
             const tot = nw.data?.countries.find(c => c.code === code);
             const loans = (liabs.data?.items || []).filter(l => !l.closed && l.kind !== 'credit_card' && !(l.kind === 'bnpl' && l.account_id) && (ACOUNTRY[l.currency] || 'OTHER') === code && l.outstanding.minor > 0);
             const owned = (assets.data?.items || []).filter(a => (ACOUNTRY[a.currency] || 'OTHER') === code && a.status !== 'sold' && a.status !== 'written_off');
@@ -102,6 +120,8 @@ export function AccountsPage() {
                   {tot && <div className="end"><span className={`num ${tot.net.minor < 0 ? 'neg' : ''}`} style={{ fontWeight: 700, fontSize: 20 }}><Money m={tot.net} /></span>
                     <span className="caption">own <Money m={tot.assets} compact /> · owe <Money m={tot.liabilities} compact /></span></div>}
                 </div>
+                {tot && (tot.assets.minor > 0 || tot.liabilities.minor > 0) && <OwnOweBar own={tot.assets.minor} owe={tot.liabilities.minor}
+                  ownLabel={<Money m={tot.assets} compact />} oweLabel={<Money m={tot.liabilities} compact />} />}
                 <Section title="Bank accounts & wallets">
                   <OwnerLists items={here.filter(a => HOLD.includes(a.kind))} members={members} me={me}
                     empty={<button className="glass empty-row" onClick={() => setAdding(code)}><Icon name="plus" size={18} />Add a {name} bank account</button>} />
@@ -131,6 +151,8 @@ export function AccountsPage() {
               </section>
             );
           })}
+          {small.size > 0 && <button className="btn secondary block" onClick={() => setShowSmall(!showSmall)}>
+            {showSmall ? 'Hide small balances' : `Show small balances (${small.size})`}</button>}
           <Link to="/accounts/coverage" className="glass pill-cta">
             <Tile icon={needs ? 'warn' : 'check'} color={needs ? '#ff9f0a' : '#30d158'} />
             <span style={{ flex: 1 }}><b>Up to date?</b><br /><span className="caption">{cov.data ? (needs ? `${needs} account${needs > 1 ? 's' : ''} with gaps or gone quiet` : 'Every account covered, no gaps') : 'Checking statements and SMS…'}</span></span>
@@ -232,14 +254,15 @@ export function AccountPage() {
   const owner = ownerM?.display_name;
   const card = !!a && CARD.includes(a.kind);
     return (
-    <Page title={a ? `${a.institution}${a.last4 ? ' ··' + a.last4 : ''}` : 'Account'} back="/accounts"
+    <Page title={a ? acctLabel(a) : 'Account'} back="/accounts"
       trail={a && <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>}>
       {accounts.isLoading ? <PageSkeleton /> : !a ? <EmptyState icon="bank" title="Account not found" /> : (
         <div className="grid-desktop stack">
           <section className="glass hero span-2">
             <div className="row-flex"><AccountTile a={a} /><div><b>{a.name}</b><p className="caption">{KIND_LABEL[a.kind]?.replace(/s$/, '')} · {a.country} · {a.currency}{owner ? ` · ${owner}` : ''}{a.visibility === 'private' ? ' · private' : ''}</p></div></div>
             {card && <div className="hero-label" style={{ marginTop: 12 }}>Owed now</div>}
-            <div className={`hero-amount ${a.balance && a.balance.minor < 0 ? 'neg' : ''}`} style={{ fontSize: 40 }}>{card && a.balance ? fmt({ ...a.balance, minor: owed(a) }) : fmt(a.balance)}</div>
+            {a.balance ? <div className={`hero-amount ${a.balance.minor < 0 ? 'neg' : ''}`} style={{ fontSize: 40 }}>{card ? fmt({ ...a.balance, minor: owed(a) }) : fmt(a.balance)}</div>
+              : <div className="hero-amount muted" style={{ fontSize: 28 }}>No balance yet</div>}
             <p className="caption">{card && a.statement_due_on ? <b>Due {shortDate(a.statement_due_on)} · </b> : card && a.due_day ? <b>Due {nextDue(a.due_day)} · </b> : null}{a.balance_at ? `Balance as of ${shortDate(a.balance_at.slice(0, 10))}` : 'No balance seen yet — it appears from the next SMS or statement'}</p>
             {ownerM && ownerM.id !== me && <p className="row-flex caption" style={{ marginTop: 8, gap: 8 }}><Avatar name={ownerM.display_name} photo={ownerM.photo} size={24} />{ownerM.display_name}’s account</p>}
             {a.credit_limit && a.used_pct !== null && (
@@ -249,7 +272,7 @@ export function AccountPage() {
               </div>
             )}
           </section>
-          {a.kind === 'credit_card' && <CardDetails id={a.id} />}
+          {a.kind === 'credit_card' && <CardDetails id={a.id} onEdit={() => setEditing(true)} />}
           <Section title="Statement coverage" action={<Link to="/accounts/coverage">All accounts</Link>}>
             <div className="glass card">{c ? <CoverageCard c={c} /> : <div className="skel" style={{ height: 40 }} />}</div>
           </Section>
@@ -276,15 +299,24 @@ export function AccountPage() {
 }
 
 const unknown = <span className="muted">unknown</span>;
-/** A card's statement, due date, utilisation, six months of spending and what interest and fees took. Unknown is said, not hidden. */
-function CardDetails({ id }: { id: string }) {
+const SOURCE: Record<string, string> = { charges: 'what it charged, 3-month average', rate: 'its rate on the balance', assumed: 'assumed rate on the balance' };
+/** A card's statement, due date, limit used (ring), six months of spending, interest, fees and payments, and what it costs
+ * and gives (rewards, annual fee, forex markup, interest-free days). Unknown is said, not hidden. */
+function CardDetails({ id, onEdit }: { id: string; onEdit: () => void }) {
   const q = useApi<CardView>(`/insights/card/${id}`);
   if (q.isLoading) return <PageSkeleton />;
   if (q.error) return <ErrorCard error={q.error} retry={q.refetch} />;
   const c = q.data!, lostTotal = c.months.reduce((a, m) => a + m.lost.minor, 0);
+  const money = (v: number) => fmt({ minor: Math.round(v * 100), currency: c.currency }, { compact: true });
   return (
     <>
       <Section title="This card">
+        <div className="glass card row-flex" style={{ gap: 16 }}>
+          <ProgressRing pct={c.used_pct ?? 0} size={92} stroke={10} color={(c.used_pct ?? 0) > 70 ? 'var(--red-fill)' : (c.used_pct ?? 0) > 30 ? 'var(--orange-fill)' : 'var(--green-fill)'}
+            label={c.used_pct === null ? <span className="caption">no limit</span> : <b>{c.used_pct}%</b>} />
+          <div><b>Limit used</b><p className="caption">{c.limit && c.used_pct !== null ? <><Money m={c.owed} /> of <Money m={c.limit} /></> : 'Set the credit limit under Edit'}</p>
+            {c.payer && <p className="caption">Paid from {c.payer.name}</p>}</div>
+        </div>
         <dl className="kv glass card">
           <dt>Owed now</dt><dd className={c.owed?.minor ? 'neg' : ''}>{c.owed ? <Money m={c.owed} /> : unknown}</dd>
           <dt>Billed last cycle</dt><dd>{c.statement ? <>{shortDate(c.statement.to)}: <Money m={c.statement.billed} /></> : unknown}</dd>
@@ -292,18 +324,26 @@ function CardDetails({ id }: { id: string }) {
           <dt>Statement due</dt><dd>{c.statement_due ? <Money m={c.statement_due} /> : unknown}</dd>
           <dt>Minimum due</dt><dd>{c.min_due ? <Money m={c.min_due} /> : unknown}</dd>
           <dt>Due by</dt><dd>{c.next_due ? shortDate(c.next_due) : unknown}</dd>
-          <dt>Limit used</dt><dd>{c.limit && c.used_pct !== null ? <>{c.used_pct}% of <Money m={c.limit} /></> : unknown}</dd>
-          <dt>Interest rate</dt><dd>{(c.rate_bp / 100).toFixed(0)}% a year{c.rate_assumed ? ' (assumed)' : ''}</dd>
-          <dt>Interest if unpaid</dt><dd className="neg">{c.interest_month ? <><Money m={c.interest_month} />/mo</> : unknown}</dd>
+          <dt>Interest rate</dt><dd>{(c.rate_bp / 100).toFixed(0)}% a year{c.rate_assumed ? ' (assumed)' : c.interest_source === 'charges' && !c.rate_bp ? '' : ''}</dd>
+          <dt>Interest a month</dt><dd className="neg">{c.interest_month ? <><Money m={c.interest_month} />/mo{c.interest_source ? <span className="caption"> · {SOURCE[c.interest_source]}</span> : null}</> : unknown}</dd>
         </dl>
         {c.min_due && <p className="footnote warn">Paying only the minimum leaves the rest charging interest every month. Pay the statement total.</p>}
         {(!c.statement || !c.statement_due) && <p className="footnote">Fill the statement day, the statement total and minimum due under Edit to see them here.</p>}
       </Section>
-      <Section title="Spent on this card, 6 months">
+      <Section title="What it costs and gives" action={<button onClick={onEdit}>Edit</button>}>
+        <dl className="kv glass card">
+          <dt>Rewards</dt><dd>{c.rewards || unknown}</dd>
+          <dt>Annual fee</dt><dd>{c.annual_fee ? <Money m={c.annual_fee} /> : unknown}</dd>
+          <dt>Forex markup</dt><dd>{c.forex_markup_bp != null ? `${(c.forex_markup_bp / 100).toFixed(2)}%` : unknown}</dd>
+          <dt>Interest-free days</dt><dd>{c.interest_free_days != null ? `up to ${c.interest_free_days} days` : unknown}</dd>
+        </dl>
+      </Section>
+      <Section title="Last 6 months">
         <div className="glass card stack-sm">
-          <MiniBars items={c.months.map(m => ({ label: monthLabel(m.month), value: m.spent.minor / 100 }))} format={v => fmt({ minor: Math.round(v * 100), currency: c.currency }, { compact: true })} label="Card spending by month" />
-          {lostTotal > 0 && <><span className="caption">Lost to interest &amp; fees</span>
-            <MiniBars items={c.months.map(m => ({ label: monthLabel(m.month), value: m.lost.minor / 100, color: 'var(--red-fill)' }))} height={80} format={v => fmt({ minor: Math.round(v * 100), currency: c.currency }, { compact: true })} label="Interest and fees by month" /></>}
+          <StackedBars format={money} label="Card by month: spend, interest and fees stacked, payments beside"
+            parts={[{ label: 'Spend', color: 'var(--tint-fill)' }, { label: 'Interest', color: 'var(--red-fill)' }, { label: 'Fees', color: 'var(--orange-fill)' }]}
+            side={{ label: 'Payments', color: 'var(--green-fill)' }}
+            items={c.months.map(m => ({ label: monthLabel(m.month), values: [m.spent.minor / 100, (m.interest?.minor ?? m.lost.minor) / 100, (m.fees?.minor ?? 0) / 100], side: m.paid.minor / 100 }))} />
           <div className="table-wrap"><table className="look">
             <thead><tr><th>Month</th><th>Spent</th><th>Paid</th><th>Lost</th></tr></thead>
             <tbody>{c.months.map(m => <tr key={m.month}><td>{monthLabel(m.month)}</td><td>{fmt(m.spent, { compact: true })}</td><td>{fmt(m.paid, { compact: true })}</td>
